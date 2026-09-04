@@ -25,21 +25,25 @@ const HOME = os.homedir()
  * special-case upstream) vs `%LOCALAPPDATA%\hermes` on native Windows. On
  * Windows an older `%USERPROFILE%\.hermes` layout still counts when it holds
  * the store; WSL2 follows the Linux layout.
+ *
+ * Pure and injectable so the matrix can be unit-tested without a Mac or
+ * Windows box: platform/env/home/exists default to the live process values,
+ * so the no-arg call IS the production probe.
  */
-function hermesHome() {
-  if (process.env.HERMES_HOME) return process.env.HERMES_HOME
-  if (process.platform !== 'win32') return path.join(HOME, '.hermes')
+export function resolveHermesHome({ platform = process.platform, env = process.env, home = HOME, exists = fs.existsSync } = {}) {
+  if (env.HERMES_HOME) return env.HERMES_HOME
+  if (platform !== 'win32') return path.join(home, '.hermes')
   const modern = path.join(
-    process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'),
+    env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'),
     'hermes'
   )
-  const legacy = path.join(HOME, '.hermes')
-  if (!fs.existsSync(path.join(modern, 'state.db')) && fs.existsSync(path.join(legacy, 'state.db'))) {
+  const legacy = path.join(home, '.hermes')
+  if (!exists(path.join(modern, 'state.db')) && exists(path.join(legacy, 'state.db'))) {
     return legacy
   }
   return modern
 }
-const HERMES_HOME = hermesHome()
+const HERMES_HOME = resolveHermesHome()
 const MAIN_DB = path.join(HERMES_HOME, 'state.db')
 const PROFILES_DIR = path.join(HERMES_HOME, 'profiles')
 
