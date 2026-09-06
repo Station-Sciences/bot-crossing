@@ -20,18 +20,26 @@ import { HARNESSES, detectedHarnesses, harnessById } from './harnesses/index.mjs
  * move every plot on everybody's map to fix something most people never hit.
  */
 function disambiguateProjects(threads) {
+  // Windows hands the same checkout back as `c:\…` from one transcript and `C:\…` from another,
+  // because the CLI's project-directory encoding keeps whatever case the drive letter was given.
+  // Those are one path, not two — and counted as two they make an unambiguous name look
+  // ambiguous, which is what renames a plot on a machine that has no collision at all.
+  const canonical = (p) => (/^[A-Za-z]:[\\/]/.test(p) ? p[0].toLowerCase() + p.slice(1) : p)
+
   const pathsByName = new Map()
   for (const t of threads) {
     if (!t.project) continue
     if (!pathsByName.has(t.project)) pathsByName.set(t.project, new Set())
-    pathsByName.get(t.project).add(t.projectPath || '')
+    pathsByName.get(t.project).add(canonical(t.projectPath || ''))
   }
 
   const renames = new Map()
   for (const [name, paths] of pathsByName) {
     if (paths.size < 2) continue
     const list = [...paths]
-    const segments = list.map((p) => p.split('/').filter(Boolean))
+    // Both separators: a Windows path splits on none of them otherwise, leaving one "segment"
+    // that is the whole absolute path — which then becomes the plot's name.
+    const segments = list.map((p) => p.split(/[\\/]/).filter(Boolean))
     const deepest = Math.max(...segments.map((s) => s.length))
 
     // Take one more trailing segment until every path in the group reads differently. Paths
@@ -50,7 +58,7 @@ function disambiguateProjects(threads) {
 
   if (!renames.size) return threads
   return threads.map((t) => {
-    const next = renames.get(`${t.project || ''}\u0000${t.projectPath || ''}`)
+    const next = renames.get(`${t.project || ''}\u0000${canonical(t.projectPath || '')}`)
     return next && next !== t.project ? { ...t, project: next } : t
   })
 }
