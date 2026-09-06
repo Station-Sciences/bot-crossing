@@ -229,6 +229,17 @@ export class Hud {
       this._toggle('Show FPS', 'showFps')
     )
     body.appendChild(view)
+
+    // The way back from an archive. Hidden until there is something in it.
+    const archived = group('Archived threads')
+    this.archivedRow = this._row('Archived threads', 'Click one to bring its astronaut back.')
+    this.archivedList = document.createElement('div')
+    this.archivedList.className = 'restore'
+    this.archivedRow.appendChild(this.archivedList)
+    archived.appendChild(this.archivedRow)
+    this.archivedGroup = archived
+    archived.hidden = true
+    body.appendChild(archived)
   }
 
   _row(label, hint) {
@@ -357,6 +368,38 @@ export class Hud {
   syncSettings() {
     for (const c of this.controls) c.sync()
     this.$('.fps').classList.toggle('on', Boolean(this.settings.get('showFps')))
+  }
+
+  /**
+   * What you archived, newest first, each row a click away from coming back.
+   *
+   * Capped at what the panel can hold: with a few hundred archived threads a full list is a
+   * scroll nobody reads, and the ones you want back are the ones you just put away.
+   */
+  setArchived({ total = 0, rows = [] } = {}) {
+    const signature = `${total}|${rows.map((r) => r.id).join(',')}`
+    if (this._last.archived === signature) return
+    this._last.archived = signature
+    this.archivedGroup.hidden = rows.length === 0
+    this.archivedList.innerHTML = ''
+    for (const row of rows) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'restore-row'
+      b.title = `Bring ${row.title} back onto the map`
+      b.innerHTML =
+        `<span class="t">${escapeHtml(row.title)}</span>` +
+        `<span class="r">${escapeHtml(row.project || '')}</span>` +
+        `<span class="a">${ago(row.lastActivityAt)}</span>`
+      b.addEventListener('click', () => this.actions.restoreThread?.(row.id))
+      this.archivedList.appendChild(b)
+    }
+    if (total > rows.length) {
+      const more = document.createElement('div')
+      more.className = 'restore-more'
+      more.textContent = `${total - rows.length} more archived, oldest first off the list`
+      this.archivedList.appendChild(more)
+    }
   }
 
   setStats(stats) {

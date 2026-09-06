@@ -245,7 +245,10 @@ function toThread(t) {
   return {
     ...rest,
     canOpen: Boolean((desktopSessionId && DESKTOP_ID.test(desktopSessionId)) || (cliSessionId && UUID.test(cliSessionId))),
-    canArchive: desktopSessionIds.length > 0,
+    // Every thread can be retired, including one the desktop app has never heard of: a
+    // terminal-only session has no record to flag, so archiving it is recorded in the colony
+    // alone — which is the whole reason the colony keeps a list of its own.
+    canArchive: true,
     ref: { desktopSessionId, desktopSessionIds, cliSessionId },
   }
 }
@@ -340,10 +343,31 @@ async function scanThreads() {
     })
   }
 
-  const threads = [...byId.values()]
+  const now = Date.now()
+  /**
+   * Drop the app's empty bookkeeping records.
+   *
+   * Resuming a thread makes the desktop app write a second record for the same conversation,
+   * and one of the two carries the title and the transcript link while the other carries
+   * nothing. When the empty one has no `cliSessionId` there is no key to merge the pair on,
+   * so it survives as a thread of its own: an untitled entry with no transcript behind it.
+   * Archiving the real thread does not touch it — the ids in `ref` are the ones the real
+   * record named — so an archived conversation appears to come back as a nameless twin.
+   *
+   * A record with no transcript, no title and no live process is not a conversation. The age
+   * check is what keeps a genuinely new session — opened seconds ago, nothing written yet —
+   * from being swept up with them.
+   */
+  const NEW_SESSION_MS = 10 * 60 * 1000
+  const threads = [...byId.values()].filter(
+    (t) =>
+      t.hasTranscript ||
+      t.titled ||
+      t.hasLiveProcess ||
+      now - (t.lastActivityAt || t.createdAt || 0) < NEW_SESSION_MS
+  )
   // Unread = the thread moved on after you last looked at it; never opened counts as unread.
   // Terminal-only threads have no focus history at all, so "unread" is unknowable — not true.
-  const now = Date.now()
   for (const thread of threads) {
     thread.unread = thread.desktopSessionIds.length > 0 && thread.lastActivityAt > thread.lastFocusedAt
     thread.running = thread.hasLiveProcess && now - thread.lastActivityAt < ACTIVE_WINDOW_MS

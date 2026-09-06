@@ -132,6 +132,13 @@ async function resolveFolder(folder) {
  * poll. `archivePending` is true while the flag is on disk but the running app has not read
  * it yet — that astronaut is walking to the ship but has not boarded.
  */
+/**
+ * How much later than the archive itself a write has to be before it counts as the thread
+ * coming back. Archiving a live thread makes the harness touch its own records, so a couple
+ * of seconds of slack keeps that from reading as activity and undoing the archive instantly.
+ */
+const REVIVE_GRACE_MS = 5000
+
 async function reconcileArchived(threads) {
   const state = await readState()
   if (!state.archived.length) return threads
@@ -143,13 +150,43 @@ async function reconcileArchived(threads) {
     startedAt.set(id, await harnessAppStartedAt(id))
   }
 
+  /**
+   * An archive is remembered by the thread id the page saw, but that id is only the
+   * *canonical* one: a thread keyed by a desktop record today can be keyed by its transcript
+   * tomorrow, once the CLI writes one. Matching on the ids inside `ref` as well means an
+   * archive survives that hand-over instead of the thread quietly reappearing under its new
+   * name.
+   */
+  const isArchived = (thread) => {
+    if (wanted.has(thread.id)) return true
+    const ref = thread.ref || {}
+    if (ref.cliSessionId && wanted.has(ref.cliSessionId)) return true
+    return (ref.desktopSessionIds || []).some((id) => wanted.has(id))
+  }
+
   return Promise.all(
     threads.map(async (thread) => {
-      if (!wanted.has(thread.id)) return thread
+      if (!isArchived(thread)) return thread
       if (!thread.archived && thread.canArchive) {
         await setThreadArchived(thread.harness, thread.ref, true).catch(() => {})
       }
-      const at = state.archivedAt[thread.id] ?? 0
+      const ids = [thread.id, thread.ref?.cliSessionId, ...(thread.ref?.desktopSessionIds || [])]
+      const at = Math.max(0, ...ids.map((id) => (id && state.archivedAt[id]) || 0))
+      /**
+       * A thread that has been worked on since you archived it is not archived any more.
+       *
+       * Archiving says "I am done with this". Going back to the session says the opposite,
+       * and it is the more recent of the two — so the flag comes off rather than the colony
+       * arguing with the harness about a thread you are visibly using. The page owns the
+       * list, so it is told through `unarchivedByActivity` rather than written to here.
+       */
+      if (at && thread.lastActivityAt > at + REVIVE_GRACE_MS) {
+        if (thread.archived && thread.canArchive) {
+          await setThreadArchived(thread.harness, thread.ref, false).catch(() => {})
+        }
+        return { ...thread, archived: false, unarchivedByActivity: true }
+      }
+
       const appStart = startedAt.get(thread.harness) || 0
       return { ...thread, archived: true, archivePending: !(appStart && appStart > at) }
     })
@@ -290,8 +327,11 @@ export async function apiMiddleware(req, res, next) {
       const { id, harness, ref, archived } = await readJsonBody(req)
       if (!id) return send(res, 400, { ok: false, error: 'Missing thread id' })
 
-      // Only the harness's own records are touched here — the page records the intent.
-      if (!ref || !harness) {
+      // Only the harness's own records are touched here — the page records the intent. A
+      // thread the harness has no record for is archived in the colony alone, which is a
+      // success rather than a failure: the astronaut goes home either way.
+      const records = ref?.desktopSessionIds?.length || 0
+      if (!ref || !harness || !records) {
         return send(res, 200, {
           ok: true,
           archived: Boolean(archived),

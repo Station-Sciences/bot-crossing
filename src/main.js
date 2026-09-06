@@ -194,6 +194,31 @@ const actions = {
     }
   },
 
+  /**
+   * Un-archive a thread. Archiving wrote to the colony's list *and* to the harness's own
+   * record, and nothing anywhere could undo either — an `A` pressed by accident took a live
+   * thread off the map for good.
+   */
+  restoreThread: async (id) => {
+    const thread = threads.find((t) => t.id === id)
+    state.archived = state.archived.filter((x) => x !== id)
+    const { [id]: _dropped, ...rest } = state.archivedAt || {}
+    state.archivedAt = rest
+    queueSave()
+    // The harness's own flag is best-effort, exactly as it is when archiving: the colony's
+    // list is the authority, and a thread the app has no record for is fine either way.
+    if (thread) {
+      try {
+        await archiveThread(thread, false)
+      } catch {
+        /* the colony has already let it go; the app's flag catches up or does not */
+      }
+    }
+    applyThreads(threads)
+    hud.toast(thread ? `${shortTitle(thread)} is back` : 'Restored')
+    poll()
+  },
+
   archiveThread: async () => {
     const thread = threads.find((t) => t.id === selectedId)
     if (!thread) return
@@ -538,8 +563,35 @@ window.addEventListener('keydown', (e) => {
 
 // ── data ──────────────────────────────────────────────────────────────────────────────
 
+/**
+ * A thread's title, trimmed to something a one-line row can hold. Skill threads open with the
+ * skill's own preamble, so an untrimmed title is a paragraph.
+ */
+function shortTitle(thread) {
+  const title = (thread.title || 'Untitled thread').replace(/\s+/g, ' ').trim()
+  return title.length > 52 ? `${title.slice(0, 51)}…` : title
+}
+
 function applyThreads(list) {
   threads = list
+
+  /**
+   * Anything worked on since you archived it comes off the list — the scanner spots that and
+   * says so, and the page is the one writer of the file, so the forgetting happens here.
+   */
+  const revived = list.filter((t) => t.unarchivedByActivity && state.archived.includes(t.id))
+  if (revived.length) {
+    const back = new Set(revived.map((t) => t.id))
+    state.archived = state.archived.filter((id) => !back.has(id))
+    state.archivedAt = Object.fromEntries(Object.entries(state.archivedAt || {}).filter(([id]) => !back.has(id)))
+    queueSave()
+    hud.toast(
+      revived.length === 1
+        ? `${shortTitle(revived[0])} is active again — back on the map`
+        : `${revived.length} threads are active again — back on the map`
+    )
+  }
+
   const archivedSet = new Set(state.archived)
   const stats = colony.setThreads(list, archivedSet)
   hud.setStats(stats)
@@ -559,6 +611,19 @@ function applyThreads(list) {
     if (still) hud.setSelection(still, list.find((t) => t.id === selectedId) || still.thread)
     else select(null, {})
   }
+  // What you archived, newest first — the only route back onto the map.
+  const archivedList = list
+    .filter((t) => archivedSet.has(t.id))
+    .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
+  hud.setArchived({
+    total: archivedList.length,
+    rows: archivedList.slice(0, 12).map((t) => ({
+      id: t.id,
+      title: shortTitle(t),
+      project: t.project,
+      lastActivityAt: t.lastActivityAt,
+    })),
+  })
   // Which also repaints the legend, so the open zone's chip is lit by the same pass.
   syncProject()
 
