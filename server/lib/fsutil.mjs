@@ -21,6 +21,24 @@ export async function readHead(file, bytes) {
   }
 }
 
+/**
+ * The last `bytes` of a file, with a leading partial line dropped. The mirror of `readHead`,
+ * for the questions only the end of a transcript can answer — whose turn it is.
+ */
+export async function readTail(file, bytes) {
+  const fh = await fsp.open(file, 'r')
+  try {
+    const { size } = await fh.stat()
+    const want = Math.min(bytes, size)
+    const buf = Buffer.allocUnsafe(want)
+    const { bytesRead } = await fh.read(buf, 0, want, size - want)
+    const text = buf.subarray(0, bytesRead).toString('utf8')
+    return want === size ? text : text.slice(text.indexOf('\n') + 1)
+  } finally {
+    await fh.close()
+  }
+}
+
 /** Parse a JSONL blob, skipping the partial or malformed lines a live file always has. */
 export function jsonLines(text) {
   const out = []

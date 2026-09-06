@@ -15,7 +15,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { exists, jsonLines, listDirs, listFiles, num, readHead } from '../lib/fsutil.mjs'
+import { exists, jsonLines, listDirs, listFiles, num, readHead, readTail } from '../lib/fsutil.mjs'
 
 const execFileAsync = promisify(execFile)
 const HOME = os.homedir()
@@ -143,6 +143,45 @@ async function scanTranscripts() {
   return byId
 }
 
+/** How much of a transcript's end it takes to see whose turn it is. One record is plenty. */
+const TAIL_BYTES = 64 * 1024
+
+/**
+ * Whether a transcript ends with the turn handed back to you.
+ *
+ * A live process is not the same thing as work in progress. The CLI holds its process open
+ * while it sits at the prompt, so "the pid exists and the file moved recently" marks a thread
+ * that finished four minutes ago and asked you a question as *working* — an astronaut
+ * hammering away at a thread whose whole point is that it is waiting.
+ *
+ * The transcript says which it is. A last assistant message that called a tool is mid-turn;
+ * one that called nothing has handed the turn back and the reply is yours to make. Note that
+ * `stop_reason` alone will not do — it is `end_turn` on a main thread's last message and
+ * empty on some others — so what the message *called* is the half worth testing.
+ *
+ * Reads the tail rather than the whole file, and only for threads that could plausibly be
+ * running, so it costs one small read each.
+ */
+async function awaitingReply(file) {
+  let records
+  try {
+    records = jsonLines(await readTail(file, TAIL_BYTES))
+  } catch {
+    return false
+  }
+  for (let i = records.length - 1; i >= 0; i--) {
+    const r = records[i]
+    // A user turn, a tool result or an attachment all mean the model is expected to speak
+    // next — whatever the process is doing, it is not waiting on anyone.
+    if (r.type === 'user') return false
+    if (r.type !== 'assistant') continue
+    const content = r.message?.content
+    const calling = Array.isArray(content) && content.some((c) => c?.type === 'tool_use')
+    return !calling && r.message?.stop_reason !== 'tool_use'
+  }
+  return false
+}
+
 /** Transcript metadata is expensive to parse, so keep it until the file changes. */
 const metaCache = new Map()
 async function transcriptMeta(entry) {
@@ -241,7 +280,17 @@ function mergeThread(existing, next) {
  * id looks like.
  */
 function toThread(t) {
-  const { desktopSessionId, desktopSessionIds, cliSessionId, bridgeSessionId, titled, hasLiveProcess, ...rest } = t
+  const {
+    desktopSessionId,
+    desktopSessionIds,
+    cliSessionId,
+    bridgeSessionId,
+    titled,
+    hasLiveProcess,
+    transcriptFile,
+    recordActivityAt,
+    ...rest
+  } = t
   return {
     ...rest,
     canOpen: Boolean((desktopSessionId && DESKTOP_ID.test(desktopSessionId)) || (cliSessionId && UUID.test(cliSessionId))),
@@ -289,7 +338,20 @@ async function scanThreads() {
       model: s.model || '',
       effort: s.effort || '',
       createdAt: num(s.createdAt) || meta?.startedAt || 0,
-      lastActivityAt: num(s.lastActivityAt) || num(s.lastFocusedAt) || num(s.createdAt) || 0,
+      // The desktop record's own timestamp lags: the app writes it when the thread is
+      // focused, so a session running in a terminal — or in a window you are not looking at
+      // — reads as hours old while its transcript is being written to right now. Whichever
+      // of the two is later is the truth about when the thread last did anything.
+      lastActivityAt: Math.max(
+        num(s.lastActivityAt) || num(s.lastFocusedAt) || num(s.createdAt) || 0,
+        entry?.mtime || 0
+      ),
+      // The record's own timestamp, kept apart from the one above. "Unread" is a comparison
+      // against when you last *looked*, and both sides of it have to come from the app's own
+      // bookkeeping: measure the transcript's mtime against `lastFocusedAt` instead and every
+      // thread whose file was touched after you last opened it — a resumed CLI session, a
+      // background write — reads as unread, which puts a `?` over half the colony.
+      recordActivityAt: num(s.lastActivityAt) || num(s.lastFocusedAt) || num(s.createdAt) || 0,
       lastFocusedAt: num(s.lastFocusedAt),
       hasLiveProcess: live.has(cliSessionId),
       hasError: Boolean(s.error),
@@ -299,6 +361,7 @@ async function scanThreads() {
       archived: s.isArchived === true || s.isArchived === 'True',
       hasTranscript: Boolean(entry),
       sizeBytes: entry?.size || 0,
+      transcriptFile: entry?.file || '',
       source: 'desktop',
     })
   }
@@ -336,6 +399,7 @@ async function scanThreads() {
       archived: false,
       hasTranscript: true,
       sizeBytes: entry.size,
+      transcriptFile: entry.file,
       source: 'cli',
     })
   }
@@ -345,8 +409,16 @@ async function scanThreads() {
   // Terminal-only threads have no focus history at all, so "unread" is unknowable — not true.
   const now = Date.now()
   for (const thread of threads) {
-    thread.unread = thread.desktopSessionIds.length > 0 && thread.lastActivityAt > thread.lastFocusedAt
-    thread.running = thread.hasLiveProcess && now - thread.lastActivityAt < ACTIVE_WINDOW_MS
+    const seenAt = thread.recordActivityAt ?? thread.lastActivityAt
+    thread.unread = thread.desktopSessionIds.length > 0 && seenAt > thread.lastFocusedAt
+    const fresh = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
+    // Only threads that could plausibly be working pay for the tail read.
+    const waiting =
+      thread.hasLiveProcess && fresh && thread.transcriptFile ? await awaitingReply(thread.transcriptFile) : false
+    thread.running = thread.hasLiveProcess && fresh && !waiting
+    // A thread that handed the turn back wants you, whether or not the desktop app has ever
+    // seen it — which is the only way a terminal-only thread can ask for anything at all.
+    if (waiting) thread.unread = true
   }
   return threads.map(toThread)
 }

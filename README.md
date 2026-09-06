@@ -117,9 +117,9 @@ thread can only ever be doing one thing. First match wins:
 | Signal | What the astronaut does | Badge |
 | --- | --- | --- |
 | Errored | Slumps, red eyes, fault light stutters | `!` |
-| Running now | Hammers away at its building, sparks fly | `⚒` |
+| Running now | Hammers away at its building, sparks fly — a live process *mid-turn*, not merely open | `⚒` |
 | PR merged | Jumps, confetti, heart eyes | `✓` |
-| Unread | **Stops and waits on you** | `?` |
+| Handed the turn back | **Stops and waits on you** — unread, or its transcript ends on a finished turn | `?` |
 | Nothing for 3 days | Sits down and sleeps, `z` bubbles | — |
 | Anything else | Potters around its plot | — |
 

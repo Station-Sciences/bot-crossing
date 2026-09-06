@@ -95,8 +95,8 @@ what earns a repo its own zone, and `lastActivityAt` is what sorts the whole map
 | `createdAt` | number | Epoch ms |
 | `lastActivityAt` | number | Epoch ms. Sorts the colony and drives the "asleep for 3 days" behaviour |
 | `lastFocusedAt` | number | Epoch ms, `0` if unknowable |
-| `running` | boolean | Working **right now** — the astronaut hammers away |
-| `unread` | boolean | Moved on since you last looked — the astronaut stops and holds a `?` |
+| `running` | boolean | Working **right now** — the astronaut hammers away. A live process is not enough: a session sitting at its prompt is not running, so check that the thread is mid-turn |
+| `unread` | boolean | Wants you — moved on since you last looked, or handed the turn back and is waiting on a reply. The astronaut stops and holds a `?` |
 | `hasError` | boolean | Errored — the astronaut slumps, red eyes |
 | `starred` / `routine` / `prState` | | Optional extras; `prState: 'merged'` triggers the confetti |
 | `archived` | boolean | Archived in the harness's own records |
