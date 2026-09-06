@@ -68,14 +68,14 @@ You need a real harness installed with real threads for anything interesting to 
 because the built files are checked in and the raw packs are not. You only need it if you are
 changing the art pipeline, and the README explains where to re-download the packs.
 
-There is no test suite and no linter. That is not a standard I am asking you to meet — it is
-just the state of things, and I would rather tell you than have you guess.
+`npm test` runs the focused Codex adapter and archive reconciliation tests using Node's
+built-in runner (Node 22.13+). There is no linter or full-colony test suite.
 
 ## What makes a PR easy to say yes to
 
 - **One thing at a time.** A harness adapter, or a bug fix, or a refactor — not all three.
-- **Say what you verified and how.** There are no tests to lean on, so your description is the
-  evidence. "Ran it against 40 real Codex sessions, screenshots attached" is worth more than a
+- **Say what you verified and how.** Include both relevant tests and live verification.
+  "Ran it against 40 real Codex sessions, screenshots attached" is worth more than a
   clean diff.
 - **Match the surrounding code.** No semicolons, single quotes, 2-space indent, 110ish columns.
   Comments in this codebase explain *why* — particularly why an obvious approach was rejected.

@@ -7,7 +7,7 @@ a plot for their repo, and build something. When one needs you it stops and hold
 its head; click it and the thread opens back in whichever harness it came from.
 
 It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
-account, and the only thing it ever writes back is a single archive flag.
+account, and the only action that changes harness data is archive/unarchive.
 
 > **Status:** published as-is. I built this for myself and cannot promise to maintain it —
 > issues and PRs are welcome but may go unanswered, and forking is an entirely reasonable
@@ -39,7 +39,7 @@ somebody writing that adapter.
 | Harness | Status |
 | --- | --- |
 | **[Claude Code](https://claude.com/claude-code)** (Anthropic) | ✅ **Supported** — desktop app and CLI, including worktrees, live-process detection and archiving |
-| [Codex CLI](https://developers.openai.com/codex/cli) (OpenAI) | ⬜ Not yet — transcripts found at `~/.codex/sessions/`, [notes here](server/harnesses/README.md#starting-points) |
+| **[Codex](https://developers.openai.com/codex/cli)** (OpenAI) | ✅ **Supported** — local desktop and CLI tasks, worktrees, unread state, activity inference and archiving |
 | [OpenCode](https://opencode.ai) | ⬜ Not yet |
 | [Antigravity CLI](https://antigravity.google) (Google) | ⬜ Not yet — the successor to Gemini CLI, which Google stopped serving individual accounts on 18 June 2026 |
 | [Cursor](https://cursor.com) (`cursor-agent`) | ⬜ Not yet |
@@ -51,6 +51,33 @@ somebody writing that adapter.
 
 Every harness that is installed shows up at once — the colony is the union of all of them, and
 an astronaut carries the name of the harness it belongs to.
+
+### Codex setup
+
+Use **Node 22.13+** (Node 24 recommended) for its built-in SQLite reader. The adapter opens
+the newest numbered `state_*.sqlite` in `CODEX_HOME` (default `~/.codex`) read-only, and reads
+desktop unread/project hints separately. Internal reviewers and spawned child sessions are
+excluded. Scanning never runs the Codex CLI and does not change Codex's files.
+
+Open and New conversation require the Codex desktop app. They use `codex://threads/<id>`
+and `codex://threads/new?path=<encoded-folder>` respectively. In a mixed-provider project,
+select a Codex astronaut before choosing New conversation to use Codex's composer.
+
+Archiving requires a standalone Codex CLI with `archive` and `unarchive` commands. Install
+it on `PATH`, or set `BOT_CROSSING_CODEX_BIN` to its executable path before starting the
+server. Executables inside application bundles are rejected. CLI errors appear in the UI;
+a failed archive does not hide the task locally. A successful archive stops being pending
+when the next database scan confirms it; no desktop restart is needed.
+
+Codex's working animation is an **inference**, based on bounded transcript tails and a
+30-minute activity ceiling. Completion and cancellation stop it; missing or stale evidence
+does not count as running. Building growth uses actual transcript bytes and represents
+accumulated activity, **not percentage complete**. Transcripts are cached and their state is
+discarded when a file is truncated or replaced. Older schemas can leave some metadata blank.
+
+The adapter builds on [PR #5](https://github.com/jarrenrocks/bot-crossing/pull/5), pinned at
+`c6ccb1fe55d9e6e835efa1ef2fa04ffbb2a2fcf7`. Run `npm test` for its focused fixture suite and
+`npm run build` for the production build.
 
 ### Adding one
 
@@ -71,7 +98,7 @@ than have you work around it.
 | --- | --- |
 | One hex zone | One repo. Bigger repos claim more tiles — one per seven threads, grown as a contiguous blob from the middle outward. A zone stays where it is: see below |
 | One astronaut + one building | One session |
-| How finished a building looks | How large its transcript is, on a log scale |
+| How finished a building looks | Transcript bytes on a log scale: accumulated activity, not percentage complete |
 | Scaffolding | Somebody is at that site right now |
 | Walking out of the ship | A thread that just appeared |
 | Walking back into the ship | You archived it |
@@ -191,10 +218,9 @@ flipping to its left rather than sliding under the sidebar, and never leaving th
 It is moved with a transform rather than with `left`/`top`, the one geometric change a
 browser makes without touching layout, so following a walking astronaut costs nothing.
 
-- **Open** hands the thread back to Claude Code and the desktop app comes forward.
-- **Archive** sets `isArchived` on Claude Code's own session record — the thread lands in
-  Claude Code's Archived list, not just here — and the astronaut walks back up the ramp and
-  boards the ship.
+- **Open** hands the thread back to its harness and the desktop app comes forward.
+- **Archive** updates the harness's own archive state — Claude's `isArchived` field or
+  Codex's standalone CLI command — and the astronaut walks back up the ramp and boards the ship.
 
 Only one button in the panel is ever the accent colour: whichever action is the immediate
 one. `Esc` steps outward a notch at a time — the thread first, then its zone.
@@ -205,7 +231,7 @@ transcript: it *imports* the transcript, which creates a second untitled session
 the `.jsonl`, so it is only ever used when there is nothing to navigate to.
 
 Archiving carries a deliberate one-writer discipline: the browser owns
-`data/colony.json` and PUTs it whole, `/api/archive` only touches Claude Code's records. If
+`data/colony.json` and PUTs it whole, `/api/archive` only updates the harness's records. If
 both wrote it, a save from a page holding older state would silently drop every archive made
 since that page loaded. Claude Code also rewrites its session records from memory and can
 stomp the flag, so the colony re-asserts it on every scan — an archive that gets stomped comes
@@ -596,7 +622,7 @@ What it touches on disk, in full:
 | | |
 | --- | --- |
 | Reads | Your harness's own session records and transcripts |
-| Writes | `data/colony.json`, and **one** `isArchived` field per archived thread |
+| Writes | `data/colony.json`, Claude's `isArchived` field, or Codex archive/unarchive through its standalone CLI |
 | Sends | Nothing. No network calls, no telemetry, no account |
 
 `data/colony.json` holds the names and paths of the repos you work in, so it is gitignored —
@@ -609,6 +635,7 @@ server/
   harnesses/   one adapter per agent harness — README.md is the contract
     index.mjs    the registry: add your harness to the list here
     claude-code.mjs
+    codex.mjs
   lib/         filesystem helpers the adapters share
   scan.mjs     harness-agnostic: asks every detected harness, merges, sorts
   api.mjs      /api/threads, /api/harnesses, /api/state, /api/open, /api/archive,

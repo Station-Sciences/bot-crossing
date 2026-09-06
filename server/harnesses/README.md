@@ -22,6 +22,8 @@ export default {
   newSession,                    // (dir) => { ok, url } | { ok: false, error }
   setArchived,                   // (ref, archived) => Promise<{ ok, error? }>
   appStartedAt,                  // optional: () => Promise<number>
+  archiveSync: 'database',        // optional: default 'restart' preserves Claude's behaviour
+  diagnostic,                    // optional: () => Promise<string>, empty string means healthy
 }
 ```
 
@@ -66,6 +68,17 @@ Be conservative about what you write. The Claude Code adapter touches exactly on
 through a temp file and renames over the original, and re-reads the record first to check it
 is the session it thinks it is. Someone's real work is in these files.
 
+### `archiveSync` / `diagnostic()` — optional
+
+Use `archiveSync: 'database'` when `scanThreads()` reports authoritative archive state.
+The next scan confirms completion without waiting for an app restart or re-running an
+archive command. For this mode, action failures return an error rather than locally hiding
+the thread. Omit it to preserve the existing restart-based reconciliation.
+
+`diagnostic()` returns a user-facing setup error or `''`. `/api/harnesses` exposes it and
+`/api/threads` includes it in `warnings`, which the HUD displays. Detection can remain true
+when a data store exists but its runtime is unsupported; other harnesses keep scanning.
+
 ### `appStartedAt()` — optional
 
 Epoch milliseconds of when the harness's long-lived app last launched, or `0`.
@@ -96,11 +109,12 @@ what earns a repo its own zone, and `lastActivityAt` is what sorts the whole map
 | `lastActivityAt` | number | Epoch ms. Sorts the colony and drives the "asleep for 3 days" behaviour |
 | `lastFocusedAt` | number | Epoch ms, `0` if unknowable |
 | `running` | boolean | Working **right now** — the astronaut hammers away |
+| `activityNote` | string | Optional explanation of inferred activity, shown on the card tooltip |
 | `unread` | boolean | Moved on since you last looked — the astronaut stops and holds a `?` |
 | `hasError` | boolean | Errored — the astronaut slumps, red eyes |
 | `starred` / `routine` / `prState` | | Optional extras; `prState: 'merged'` triggers the confetti |
 | `archived` | boolean | Archived in the harness's own records |
-| `sizeBytes` | number | Transcript size. **This is how finished a building looks**, on a log scale |
+| `sizeBytes` | number | Actual transcript bytes, not token counts. Building growth is activity volume, not task completion |
 | `source` | string | Free-form, for your own bookkeeping (the Claude adapter uses `desktop` / `cli`) |
 | `canOpen` / `canArchive` | boolean | Whether this thread supports those actions. The UI greys the buttons out |
 | `ref` | object | **Opaque.** Whatever *you* need to find this thread again |
@@ -137,9 +151,10 @@ Verified on a real machine:
   (`%APPDATA%\Claude\claude-code-sessions\…` on Windows); CLI transcripts in
   `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`; live processes in
   `~/.claude/sessions/*.json`. Implemented in `claude-code.mjs`.
-- **Codex CLI** — transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-<iso>-<uuid>.jsonl`,
-  with records shaped `{ timestamp, type, payload }`, and what looks like an index at
-  `~/.codex/session_index.jsonl`. Not implemented yet.
+- **Codex** — newest numbered `state_*.sqlite` under `CODEX_HOME` (default `~/.codex`),
+  `.codex-global-state.json` for desktop hints/unread state, and bounded tails of the indexed
+  rollout files. Implemented in `codex.mjs`; requires Node 22.13+. Archive actions use a
+  standalone CLI from `PATH` or `BOT_CROSSING_CODEX_BIN`, never an app-bundle executable.
 
 For anything else, the fastest way in is usually to start a throwaway session in that harness
 and watch which files change:
@@ -150,8 +165,8 @@ find ~ -maxdepth 4 -newermt '-2 minutes' -type f 2>/dev/null | grep -iv Library/
 
 ## Checking your work
 
-There is no test suite to run yet. What the Claude Code adapter was verified against, and what
-a new one should clear too:
+Run `npm test` on Node 22.13+ for Codex fixtures and archive reconciliation coverage.
+What the Claude Code adapter was verified against, and what a new one should clear too:
 
 1. `node --check server/harnesses/my-harness.mjs`
 2. With the app running, `GET /api/harnesses` lists every registered harness and whether

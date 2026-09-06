@@ -283,6 +283,8 @@ function harnessLabel(id) {
  * a new thread in whichever one it is mostly used from.
  */
 function harnessForProject(name) {
+  const selected = threads.find((t) => t.id === selectedId && t.project === name)
+  if (selected?.harness) return selected.harness
   const counts = new Map()
   for (const thread of colony.threads.values()) {
     if (thread.project !== name || !thread.harness) continue
@@ -574,12 +576,16 @@ function applyThreads(list) {
 }
 
 let polling = false
+let scannerWarnings = ''
 async function poll() {
   if (polling) return
   polling = true
   try {
     const res = await fetchThreads()
     applyThreads(res.threads || [])
+    const warnings = (res.warnings || []).join('\n')
+    if (warnings && warnings !== scannerWarnings) hud.toast(warnings, 'err')
+    scannerWarnings = warnings
     hud.removeBoot()
   } catch (err) {
     hud.toast(err.message || 'Could not reach the thread scanner', 'err')

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
   defaultHarness,
   harnessAppStartedAt,
+  harnessArchiveSync,
   harnessStatus,
   newSession as harnessNewSession,
   openThread as harnessOpenThread,
@@ -146,6 +147,10 @@ async function reconcileArchived(threads) {
   return Promise.all(
     threads.map(async (thread) => {
       if (!wanted.has(thread.id)) return thread
+      if (harnessArchiveSync(thread.harness) === 'database') {
+        // Only a user action invokes this harness's CLI. Polling merely confirms its result.
+        return { ...thread, archived: true, archivePending: !thread.archived }
+      }
       if (!thread.archived && thread.canArchive) {
         await setThreadArchived(thread.harness, thread.ref, true).catch(() => {})
       }
@@ -250,7 +255,8 @@ export async function apiMiddleware(req, res, next) {
   try {
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const threads = await reconcileArchived(await scanThreads())
-      return send(res, 200, { threads, scannedAt: Date.now() })
+      const warnings = (await harnessStatus()).filter((h) => h.error).map((h) => h.error)
+      return send(res, 200, { threads, scannedAt: Date.now(), warnings })
     }
 
     if (url.pathname === '/api/harnesses' && req.method === 'GET') {
@@ -300,6 +306,7 @@ export async function apiMiddleware(req, res, next) {
         })
       }
       const result = await setThreadArchived(harness, ref, archived)
+      if (!result.ok && harnessArchiveSync(harness) === 'database') return send(res, 400, result)
       return send(res, 200, { ...result, ok: true, archived: Boolean(archived), harnessRecord: result.ok })
     }
 

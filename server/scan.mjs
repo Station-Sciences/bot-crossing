@@ -82,8 +82,14 @@ export async function scanThreads() {
 /** What the HUD shows in the harness list: who is installed, and what they can do. */
 export async function harnessStatus() {
   const detected = new Set((await detectedHarnesses()).map((h) => h.id))
-  return HARNESSES.map((h) => ({ id: h.id, name: h.name, detected: detected.has(h.id) }))
+  return Promise.all(HARNESSES.map(async (h) => ({
+    id: h.id, name: h.name, detected: detected.has(h.id),
+    error: h.diagnostic ? await h.diagnostic() : '',
+  })))
 }
+
+/** Database-backed adapters confirm archiving on the next read, without an app restart. */
+export const harnessArchiveSync = (id) => harnessById(id)?.archiveSync || 'restart'
 
 /** The harness to use when a caller has not said — the first one present on this machine. */
 export async function defaultHarness() {

@@ -32,6 +32,7 @@
     "linux"
   ],
   "scripts": {
+    "test": "node --test test/codex.test.mjs",
     "dev": "npm run assets --silent && vite",
     "build": "npm run assets --silent && vite build",
     "start": "vite build && node server/serve.mjs",
