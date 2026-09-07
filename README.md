@@ -42,7 +42,7 @@ somebody writing that adapter.
 | [Codex CLI](https://developers.openai.com/codex/cli) (OpenAI) | ⬜ Not yet — transcripts found at `~/.codex/sessions/`, [notes here](server/harnesses/README.md#starting-points) |
 | [OpenCode](https://opencode.ai) | ⬜ Not yet |
 | [Antigravity CLI](https://antigravity.google) (Google) | ⬜ Not yet — the successor to Gemini CLI, which Google stopped serving individual accounts on 18 June 2026 |
-| [Cursor](https://cursor.com) (`cursor-agent`) | ⬜ Not yet |
+| [Cursor](https://cursor.com) (`cursor-agent`) | ✅ **Supported** — the CLI's own sessions. Cursor writes no live-process file, so "running" is inferred from having been written in the last few minutes, and it keeps no archived state, so archiving is recorded on the colony's side only. The IDE's chats are not read: they live in a SQLite database the editor holds open and which runs to tens of gigabytes on a well-used machine |
 | [Amp](https://ampcode.com) (Sourcegraph) | ⬜ Not yet |
 | [Aider](https://aider.chat) | ⬜ Not yet |
 | [Goose](https://block.github.io/goose/) (Block) | ⬜ Not yet |

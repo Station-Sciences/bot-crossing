@@ -69,3 +69,15 @@ export const num = (v) => {
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
 }
+
+/**
+ * Best-effort reverse of the encoding both Claude Code and Cursor use for a project folder's
+ * name: `-Users-you-Some-Dir` on macOS and Linux, `C--Users-you-Some-Dir` on Windows, where
+ * the drive's colon became a dash too. Shared, because the second adapter to need it
+ * re-implemented it without the drive letter and resolved nothing at all on Windows.
+ */
+export function decodeProjectDir(name) {
+  const drive = /^([A-Za-z])--(.*)$/.exec(name)
+  if (drive) return `${drive[1]}:\\${drive[2].replace(/-/g, '\\')}`
+  return name.startsWith('-') ? '/' + name.slice(1).replace(/-/g, '/') : name
+}

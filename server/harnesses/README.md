@@ -48,9 +48,13 @@ broken adapter costs you its own threads and nothing else. Prefer that over retu
 
 ### `openThread(ref)` / `newSession(dir)`
 
-Return `{ ok: true, url }` and the server hands that URL to the OS opener. `openThread` gets
-the `ref` from the thread it belongs to; `newSession` gets an absolute directory that the
-server has already checked still exists.
+Return `{ ok: true, url }` and the server hands that URL to the OS opener — or
+`{ ok: true, command: [bin, ...args] }` and the server runs that instead, detached. The
+second exists for a harness whose URL scheme opens the app but not the place: Cursor's
+`cursor://file/<dir>` brings the app up and then opens nothing, while `cursor <dir>` on its
+command line opens the folder as a workspace. `openThread` gets the `ref` from the thread it
+belongs to; `newSession` gets an absolute directory that the server has already checked
+still exists.
 
 If your harness has no deep link, return `{ ok: false, error: '…' }` and say why — the UI
 shows the message rather than pretending the click worked.

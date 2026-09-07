@@ -107,7 +107,25 @@ function launch(target) {
   const opener = OPENERS[process.platform]
   if (!opener) return
   const [cmd, ...args] = opener
-  const child = spawn(cmd, [...args, target], { stdio: 'ignore', detached: true })
+  run(cmd, [...args, target])
+}
+
+/**
+ * What an adapter asked for: a URL for the OS opener, or a command to run as-is. The second
+ * exists because a URL scheme is only as good as the app's handler for it — Cursor's opens
+ * the app and not the folder, while its command line does exactly the right thing.
+ */
+function launchResult(result) {
+  if (Array.isArray(result.command) && result.command.length) {
+    const [cmd, ...args] = result.command
+    run(cmd, args)
+  } else if (result.url) {
+    launch(result.url)
+  }
+}
+
+function run(cmd, args) {
+  const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
   child.on('error', () => {})
   child.unref()
 }
@@ -268,7 +286,7 @@ export async function apiMiddleware(req, res, next) {
     if (url.pathname === '/api/open' && req.method === 'POST') {
       const { harness, ref } = await readJsonBody(req)
       const result = harnessOpenThread(harness, ref)
-      if (result.ok) launch(result.url)
+      if (result.ok) launchResult(result)
       return send(res, result.ok ? 200 : 400, result)
     }
 
@@ -282,7 +300,7 @@ export async function apiMiddleware(req, res, next) {
         return send(res, 200, { ok: true })
       }
       const result = harnessNewSession(harness || (await defaultHarness()), dir)
-      if (result.ok) launch(result.url)
+      if (result.ok) launchResult(result)
       return send(res, result.ok ? 200 : 400, result)
     }
 

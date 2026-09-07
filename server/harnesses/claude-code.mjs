@@ -15,7 +15,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { exists, jsonLines, listDirs, listFiles, num, readHead } from '../lib/fsutil.mjs'
+import { decodeProjectDir, exists, jsonLines, listDirs, listFiles, num, readHead } from '../lib/fsutil.mjs'
 
 const execFileAsync = promisify(execFile)
 const HOME = os.homedir()
@@ -113,16 +113,6 @@ function projectOf(cwd, originCwd) {
   const { root, worktree } = splitWorktree(cwd || '')
   const projectPath = originCwd || root || cwd || ''
   return { projectPath, project: path.basename(projectPath) || projectPath || 'unknown', worktree }
-}
-
-/**
- * Best-effort reverse of the encoding used for project folder names: `-Users-you-Some-Dir`
- * on macOS, `C--Users-you-Some-Dir` on Windows, where the drive's colon became a dash too.
- */
-function decodeProjectDir(name) {
-  const drive = /^([A-Za-z])--(.*)$/.exec(name)
-  if (drive) return `${drive[1]}:\\${drive[2].replace(/-/g, '\\')}`
-  return name.startsWith('-') ? '/' + name.slice(1).replace(/-/g, '/') : name
 }
 
 /** Index every CLI transcript on disk, keyed by session id. */
