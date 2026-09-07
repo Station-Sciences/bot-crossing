@@ -403,19 +403,29 @@ function newSession(dir) {
 }
 
 /** Where Cursor's command line usually lives, most reliable first. */
-const CURSOR_CLI = [
-  '/usr/local/bin/cursor',
-  '/Applications/Cursor.app/Contents/Resources/app/bin/cursor',
-  '/usr/bin/cursor',
-  '/snap/bin/cursor',
-  // No Windows entry on purpose. The launcher there is `cursor.cmd`, and a `.cmd` cannot
-  // be spawned without a shell on any Node this project supports (CVE-2024-27980 made
-  // that a synchronous EINVAL). Windows falls through to the URL, which opens the app.
-]
+/**
+ * The `cursor` command, from PATH or nowhere. Cursor installs it when asked — on a Mac, a
+ * symlink into its own bundle — and that makes it the user's command to run. What this never
+ * does is look inside `Cursor.app` for it: Bot Crossing does not run anything out of another
+ * application's bundle, and only ever touches files in the user's own home.
+ *
+ * No Windows lookup on purpose. The launcher there is `cursor.cmd`, and a `.cmd` cannot be
+ * spawned without a shell on any Node this project supports (CVE-2024-27980 made that a
+ * synchronous EINVAL). Windows falls through to the URL, which at least brings the app up.
+ */
+function cursorOnPath() {
+  if (process.platform === 'win32') return ''
+  for (const dir of (process.env.PATH || '').split(path.delimiter)) {
+    const candidate = dir && path.join(dir, 'cursor')
+    if (candidate && existsSync(candidate)) return candidate
+  }
+  return ''
+}
 
 export function openFolder(dir) {
-  const cli = CURSOR_CLI.find((p) => existsSync(p))
+  const cli = cursorOnPath()
   if (cli) return { ok: true, command: [cli, dir] }
+  // The OS opener with the app named: LaunchServices does the finding, not this file.
   if (process.platform === 'darwin') return { ok: true, command: ['open', '-a', 'Cursor', dir] }
   return { ok: true, url: fileUrl(dir) }
 }
