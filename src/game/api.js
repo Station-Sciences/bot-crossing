@@ -29,7 +29,8 @@ export const saveState = (state) =>
  * thread again, and the browser only ever passes it straight back. Nothing in the UI knows
  * what a Claude Code session id, or a Codex rollout id, actually looks like.
  */
-export const openThread = (thread) => post('/api/open', { harness: thread.harness, ref: thread.ref })
+export const openThread = (thread) =>
+  post('/api/open', { harness: thread.harness, ref: thread.ref, cwd: thread.cwd })
 
 export const archiveThread = (thread, archived) =>
   post('/api/archive', { id: thread.id, harness: thread.harness, ref: thread.ref, archived })

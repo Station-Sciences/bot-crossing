@@ -57,26 +57,59 @@ async function readState() {
 }
 
 /**
- * One writer: the browser owns this file and PUTs it whole. `/api/archive` deliberately
- * does not touch it — if it did, the next save from a page holding older state would
- * silently drop every archive made since that page loaded.
+ * Split ownership. The page PUTs layout/seen/opened/settings whole, but the archive list
+ * belongs to the server: `/api/archive` writes it straight into this file, and a PUT keeps
+ * whatever is on disk. Otherwise a page holding older state (or a second tab, or a script
+ * hitting `/api/archive` directly) would silently drop every archive made since it loaded.
+ * Writes are chained so two requests never race on the temp file.
  */
-async function writeState(next) {
-  const state = {
-    version: STATE_VERSION,
-    archived: asArray(next.archived),
-    archivedAt: asObject(next.archivedAt),
-    opened: asArray(next.opened),
-    plots: asObject(next.plots),
-    seen: asObject(next.seen),
-    settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
-    updatedAt: Date.now(),
-  }
+let stateWriteChain = Promise.resolve()
+
+function withStateLock(fn) {
+  const run = stateWriteChain.then(fn, fn)
+  stateWriteChain = run.then(() => undefined, () => undefined)
+  return run
+}
+
+async function persistState(state) {
   await fsp.mkdir(DATA_DIR, { recursive: true })
   const tmp = STATE_FILE + '.tmp'
   await fsp.writeFile(tmp, JSON.stringify(state, null, 2))
   await fsp.rename(tmp, STATE_FILE)
   return state
+}
+
+function writeState(next) {
+  return withStateLock(async () => {
+    const current = await readState()
+    return persistState({
+      version: STATE_VERSION,
+      archived: current.archived,
+      archivedAt: current.archivedAt,
+      opened: asArray(next.opened),
+      plots: asObject(next.plots),
+      seen: asObject(next.seen),
+      settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
+      updatedAt: Date.now(),
+    })
+  })
+}
+
+/** Add or remove one thread id from the on-disk archive list. */
+function setColonyArchived(id, archived) {
+  return withStateLock(async () => {
+    const current = await readState()
+    const archivedAt = { ...current.archivedAt }
+    let list
+    if (archived) {
+      list = [...new Set([...current.archived, id])]
+      archivedAt[id] = archivedAt[id] || Date.now()
+    } else {
+      list = current.archived.filter((x) => x !== id)
+      delete archivedAt[id]
+    }
+    return persistState({ ...current, archived: list, archivedAt, updatedAt: Date.now() })
+  })
 }
 
 /**
@@ -110,6 +143,42 @@ function launch(target) {
   const child = spawn(cmd, [...args, target], { stdio: 'ignore', detached: true })
   child.on('error', () => {})
   child.unref()
+}
+
+/**
+ * Opt-in: `BOT_CROSSING_OPEN=cli` makes Open / New conversation spawn a terminal running the
+ * `claude` CLI in the thread's folder instead of handing a `claude://` link to the desktop
+ * app. Arguments go to spawn as a list — never a shell string — and the session id is
+ * pattern-checked by the caller, so nothing from the page can inject into the command.
+ */
+const OPEN_IN_CLI = process.env.BOT_CROSSING_OPEN === 'cli'
+const CLI_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function spawnDetached(cmd, args, dir, onError) {
+  const child = spawn(cmd, args, { cwd: dir, stdio: 'ignore', detached: true })
+  child.on('error', onError || (() => {}))
+  child.unref()
+}
+
+function launchCli(dir, claudeArgs) {
+  const cmdLine = ['claude', ...claudeArgs]
+  let cmd
+  let args
+  if (process.platform === 'win32') {
+    // Windows Terminal when installed; a plain console window otherwise.
+    spawnDetached('wt', ['-d', dir, ...cmdLine], dir, () =>
+      spawnDetached('cmd', ['/c', 'start', '""', '/D', dir, 'cmd', '/k', ...cmdLine], dir),
+    )
+    return
+  } else if (process.platform === 'darwin') {
+    const script = `cd ${JSON.stringify(dir)} && ${cmdLine.map((a) => JSON.stringify(a)).join(' ')}`
+    cmd = 'osascript'
+    args = ['-e', `tell application "Terminal" to do script ${JSON.stringify(script)}`, '-e', 'tell application "Terminal" to activate']
+  } else {
+    cmd = 'x-terminal-emulator'
+    args = ['-e', ...cmdLine]
+  }
+  spawnDetached(cmd, args, dir)
 }
 
 /**
@@ -266,7 +335,16 @@ export async function apiMiddleware(req, res, next) {
     }
 
     if (url.pathname === '/api/open' && req.method === 'POST') {
-      const { harness, ref } = await readJsonBody(req)
+      const { harness, ref, cwd } = await readJsonBody(req)
+      if (OPEN_IN_CLI) {
+        const sessionId = ref && ref.cliSessionId
+        const dir = await resolveFolder(cwd)
+        if (sessionId && CLI_SESSION_ID.test(sessionId) && dir) {
+          launchCli(dir, ['--resume', sessionId])
+          return send(res, 200, { ok: true, cli: true })
+        }
+        // No CLI session or a folder that is gone: fall back to the desktop deep link.
+      }
       const result = harnessOpenThread(harness, ref)
       if (result.ok) launch(result.url)
       return send(res, result.ok ? 200 : 400, result)
@@ -281,6 +359,10 @@ export async function apiMiddleware(req, res, next) {
         launch(dir)
         return send(res, 200, { ok: true })
       }
+      if (OPEN_IN_CLI) {
+        launchCli(dir, [])
+        return send(res, 200, { ok: true, cli: true })
+      }
       const result = harnessNewSession(harness || (await defaultHarness()), dir)
       if (result.ok) launch(result.url)
       return send(res, result.ok ? 200 : 400, result)
@@ -290,7 +372,9 @@ export async function apiMiddleware(req, res, next) {
       const { id, harness, ref, archived } = await readJsonBody(req)
       if (!id) return send(res, 400, { ok: false, error: 'Missing thread id' })
 
-      // Only the harness's own records are touched here — the page records the intent.
+      // The colony's own list is written here, so it survives a stale page saving over it.
+      await setColonyArchived(id, Boolean(archived))
+
       if (!ref || !harness) {
         return send(res, 200, {
           ok: true,
