@@ -527,14 +527,13 @@ engine.canvas.addEventListener('pointerup', (e) => {
     select(agent.id, {})
     return
   }
-  // Nobody there: a zone's deck or its name plate opens that repo's sidebar instead, and
-  // bare ground puts everything down.
+  // Nobody there: whoever was selected is put down first, whatever else the click lands on
+  // — a deck of the same repo used to keep the card up. Then a zone's deck or its name plate
+  // opens that repo's sidebar, and bare ground closes that too.
+  if (selectedId) select(null, {})
   const plot = plotUnder(e, p)
   if (plot) selectProject(plot.name, {})
-  else {
-    select(null, {})
-    actions.closeProject()
-  }
+  else actions.closeProject()
 })
 
 engine.canvas.addEventListener('pointerleave', () => {
@@ -897,6 +896,9 @@ function soundWorld() {
       .slice(0, 6)
       .map((e) => e.p)
     soundWater.level = colony.planet.water.level
+    // Where the view is, so the surf beds can be quieter the further inland it sits.
+    soundWater.focusX = t.x
+    soundWater.focusZ = t.z
     water = soundWater
   }
   return { night: colony.sky.nightFactor ?? 0, sources: soundSources, water }

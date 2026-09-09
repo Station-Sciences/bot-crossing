@@ -38,6 +38,10 @@ const BED_FADE = 3
 const VOICE_TAU = 0.13
 /** How long a fading-out voice is kept before its nodes are dropped; ~1% by then. */
 const VOICE_STOP_DELAY = 0.6
+/** Surf beds: full within this far of the shoreline, down to a distant wash beyond the other. */
+const SHORE_NEAR = 14
+const SHORE_FAR = 75
+const SHORE_INLAND = 0.12
 /** Synth → sample hand-over inside a running bed, seconds. */
 const SWAP_FADE = 1.5
 /** Distance band, around the listener, that ring-placed events land in. */
@@ -88,6 +92,8 @@ export class Ambience {
     this._slotCount = 0
     /** Shore sources the engine makes for itself from the water points the integrator passes. */
     this._shore = []
+    /** The surf beds' share of their level, by how far inland the view is. */
+    this._shoreMix = 1
     /** Last frame's water, so a 'water' event can land on it. */
     this._water = null
     /** Reused argument objects for event placement — one for positional, one for 2D. */
@@ -222,7 +228,7 @@ export class Ambience {
     const night = clamp01(world.night ?? 0)
 
     this._updateListener(camera, now)
-    this._updateBeds(dt, now, night)
+    this._updateBeds(dt, now, night, world.water)
     this._updateEvents(dt, night)
     this._updatePool(dt, now, world)
 
@@ -587,7 +593,21 @@ export class Ambience {
   }
 
   _layerLevel(layer, night) {
-    return layer.base * (layer.day + (layer.night - layer.day) * night)
+    const shore = layer.spec.shore ? this._shoreMix : 1
+    return layer.base * (layer.day + (layer.night - layer.day) * night) * shore
+  }
+
+  /**
+   * How much of the sea to hear from where the view is: all of it at the water's edge,
+   * a distant wash well inland. The shoreline's nearest point is handed over each frame by
+   * the integrator along with where the view sits, so this is one distance.
+   */
+  _shoreMixFor(water) {
+    const p = water?.points?.[0]
+    if (!p || water.focusX === undefined) return 1
+    const d = Math.hypot(p.x - water.focusX, p.z - water.focusZ)
+    const t = Math.min(1, Math.max(0, (d - SHORE_NEAR) / (SHORE_FAR - SHORE_NEAR)))
+    return 1 - t * (1 - SHORE_INLAND)
   }
 
   _disposeGroup(group) {
@@ -604,8 +624,11 @@ export class Ambience {
     } catch {}
   }
 
-  _updateBeds(dt, now, night) {
-    const nightMoved = Math.abs(night - this._night) > 0.004
+  _updateBeds(dt, now, night, water) {
+    const shoreMix = this._shoreMixFor(water)
+    const shoreMoved = Math.abs(shoreMix - this._shoreMix) > 0.01
+    if (shoreMoved) this._shoreMix = shoreMix
+    const nightMoved = Math.abs(night - this._night) > 0.004 || shoreMoved
     if (nightMoved) this._night = night
 
     const group = this._beds

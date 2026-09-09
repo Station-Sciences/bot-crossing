@@ -859,6 +859,22 @@ function robotPhrase(syllables) {
   }
 }
 
+/**
+ * A little robot's beep-boop: round sine blips, each with a soft octave partial and a hair
+ * of pitch droop at the end, like a toy. The table is [Hz, seconds] per blip.
+ */
+function beepBoop(blips) {
+  return (ctx, dest, now, level) => {
+    let t = now
+    for (const [f, dur] of blips) {
+      chirp(ctx, dest, t, { f0: f, f1: f * 0.94, dur, gain: level * 0.42, attack: 0.006, decay: dur * 0.7 })
+      chirp(ctx, dest, t, { f0: f * 2, f1: f * 1.9, dur: dur * 0.6, gain: level * 0.09, attack: 0.004, decay: dur * 0.4 })
+      t += dur + 0.05
+    }
+    return t + 0.12
+  }
+}
+
 function oneShot(fn) {
   return (ctx, dest, o, noise) => {
     const v = new Voice(ctx, dest)
@@ -911,8 +927,8 @@ export const GENERATORS = {
   'coyote': oneShot(ONE_SHOTS.coyote),
   'drone-drop': oneShot(ONE_SHOTS.droneDrop),
   'select-1': oneShot(robotPhrase([[880, 1320, 0.09], [1320, 1180, 0.12]])),
-  'select-2': oneShot(robotPhrase([[660, 990, 0.1], [990, 990, 0.08], [1320, 1480, 0.1]])),
-  'select-3': oneShot(robotPhrase([[1100, 740, 0.14], [740, 880, 0.1]])),
+  'select-2': oneShot(beepBoop([[1318, 0.08], [659, 0.13]])), // beep, boop
+  'select-3': oneShot(beepBoop([[784, 0.07], [1046, 0.07], [1568, 0.11]])), // boo-dee-beep
   'select-4': oneShot(robotPhrase([[520, 780, 0.08], [780, 1040, 0.08], [1040, 1300, 0.12]])),
   'select-5': oneShot(robotPhrase([[980, 980, 0.07], [980, 980, 0.07], [1470, 1240, 0.14]])),
   'select-6': oneShot(robotPhrase([[1200, 900, 0.1], [600, 1000, 0.16]])),
