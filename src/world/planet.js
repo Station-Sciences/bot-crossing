@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { atlasTexture, hasPart, kitReady, kitUsesVertexColors, part } from './kit.js'
+import { withCurve } from '../core/curve.js'
 
 /**
  * The worlds you can put the colony on, and the terrain generator that draws them.
@@ -355,7 +356,7 @@ export const PLANETS = {
     shape: 'sky',
     scatter: 'flora',
     grass: { sway: 0.85 },
-    skyIsland: { rock: 0x6e6256, soil: 0x7a5a3c, vine: 0x4f8f3a, cloud: 0xffffff, cloudLevel: -30, depth: 44 },
+    skyIsland: { rock: 0x6e6256, soil: 0x7a5a3c, vine: 0x4f8f3a, cloud: 0xffffff, cloudLevel: -60, depth: 74 },
     companion: { name: 'Moon', color: 0xe8e4dc, size: 3.0, glow: 0xfff6e0 },
     dust: 0.15,
     weather: [
@@ -545,7 +546,7 @@ const SEA_DEPTH = 7
 /** The floating island: land to here, then the ground falls out of sight over this shelf. */
 export const SKY_RIM = 58
 const SKY_SHELF = 4
-const SKY_DROP = 34
+const SKY_DROP = 12
 
 /**
  * Terrain is one plane, displaced and vertex-coloured on the CPU at build time. Doing it
@@ -616,6 +617,22 @@ export function createTerrain(planet, detail, seed = 1337) {
     // is what sells "dust" rather than "plastic".
     envMapIntensity: 0.3,
   })
+  if (planet.shape === 'sky') {
+    // A floating island has no ground past its rim at all. The plane still has to exist —
+    // the height field is sampled off it and the rock underside is hung from it — so the
+    // fragments out there are simply thrown away, and the rock is what you see instead.
+    mat.onBeforeCompile = (shader) => {
+      withCurve(shader)
+      shader.uniforms.uSkyRim = { value: SKY_RIM + 3 }
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\n varying vec2 vSkyXZ;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\n vSkyXZ = transformed.xz;')
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\n varying vec2 vSkyXZ;\n uniform float uSkyRim;')
+        .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n if ( length( vSkyXZ ) > uSkyRim ) discard;')
+    }
+    mat.customProgramCacheKey = () => 'bc-terrain-sky'
+  }
   const mesh = new THREE.Mesh(geo, mat)
   mesh.receiveShadow = true
   mesh.name = 'terrain'

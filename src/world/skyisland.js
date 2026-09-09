@@ -35,9 +35,9 @@ import { fbm, mulberry } from './planet.js'
 
 /** What a quality tier gets. `rings` is [above the belly, below it]. */
 const QUALITY = {
-  low: { segments: 36, rings: [7, 4], vines: 80, puffs: 16, sea: 16 },
-  medium: { segments: 48, rings: [10, 6], vines: 140, puffs: 24, sea: 24 },
-  high: { segments: 64, rings: [13, 8], vines: 220, puffs: 32, sea: 32 },
+  low: { segments: 36, rings: [7, 4], vines: 140, puffs: 16, sea: 16 },
+  medium: { segments: 48, rings: [10, 6], vines: 260, puffs: 24, sea: 24 },
+  high: { segments: 64, rings: [13, 8], vines: 400, puffs: 32, sea: 32 },
 }
 
 /** How far past the rim the rock lip sits, and how much further the belly bulges. */
@@ -45,7 +45,7 @@ const LIP = 2
 const BELLY = 8
 /** The lip is this far under the local rim height; the belly's widest point this far above the cloud sea. */
 const LIP_DROP = 2
-const BELLY_ABOVE_SEA = 1
+const BELLY_ABOVE_SEA = 50
 /** The cloud sea is a 400-unit sheet — wider than the ground, so its fade hides the ground's corners. */
 const SEA_SIZE = 400
 
@@ -420,7 +420,8 @@ function plantVines({ mesh, count, rimRadius, cloudLevel, heightAt, rand, palett
     mesh.setMatrixAt(i, m)
 
     phase[i] = rand() * Math.PI * 2
-    const length = 2 + Math.pow(rand(), 1.4) * 7
+    // Long enough to read as something hanging, from the far side of the island.
+    const length = 4 + Math.pow(rand(), 1.3) * 14
     shape[i * 3] = length
     shape[i * 3 + 1] = 0.7 + rand() * 0.8
     shape[i * 3 + 2] = !fromLip && rand() < 0.45 ? 1 : 0
