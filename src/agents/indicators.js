@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { OVERLAY_LAYER } from '../core/engine.js'
 import { withCurve } from '../core/curve.js'
 import {
   mdiHelpCircle,
@@ -88,6 +89,9 @@ export class Indicators {
 
     this.material = this._material()
     this.mesh = new THREE.InstancedMesh(geo, this.material, capacity)
+    // Drawn by the engine's overlay pass, after bloom: a badge is chrome, and chrome that
+    // blooms is chrome you cannot read.
+    this.mesh.layers.set(OVERLAY_LAYER)
     this.mesh.count = 0
     this.mesh.frustumCulled = false
     this.mesh.renderOrder = 10

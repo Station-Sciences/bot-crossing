@@ -649,6 +649,11 @@ export class Astronauts {
   _sendHome(agent) {
     if (agent.state === 'leaving' || agent.state === 'gone') return
     agent.state = 'leaving'
+    // The status goes too. A sleeper's status is what sits it down: the clip picker reads
+    // it whenever the body is not moving, so a dormant astronaut sent home would stand up,
+    // take a step, and sit straight back down on the deck — still with its eyes shut.
+    agent.status = 'leaving'
+    agent.clipKey = null
     agent.stateAge = 0
     agent.loop = null
     agent.faceFrame = FACE.wink

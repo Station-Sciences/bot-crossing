@@ -333,8 +333,6 @@ function toThread(t) {
   return {
     ...rest,
     canOpen: isDesktopId(desktopSessionId) || isCliId(cliSessionId),
-    // A second way in, for when the first quietly does nothing: re-import the CLI transcript.
-    canResume: isDesktopId(desktopSessionId) && isCliId(cliSessionId),
     // The cwd rides along because resuming from a terminal has to happen in the folder the
     // session ran in — the worktree, not the repo root.
     ref: { desktopSessionId, desktopSessionIds, cliSessionId, cwd: t.cwd || '' },
@@ -502,12 +500,9 @@ const cliBinary = () => findExecutable('claude', CLI_DIRS)
  * the app has never seen. Ids are pattern-checked before they reach the opener.
  */
 async function openThread(ref) {
-  const { desktopSessionId, cliSessionId, cwd, resume } = ref || {}
+  const { desktopSessionId, cliSessionId, cwd } = ref || {}
   let url = ''
-  // `resume` is the page asking for the transcript import outright: the navigate link does
-  // nothing for a session the desktop app has forgotten, which an old one may well be, and
-  // the import — a second untitled session, as the README says — is then the only door in.
-  if (isDesktopId(desktopSessionId) && !(resume && isCliId(cliSessionId))) url = `claude://claude.ai/epitaxy/${desktopSessionId}`
+  if (isDesktopId(desktopSessionId)) url = `claude://claude.ai/epitaxy/${desktopSessionId}`
   else if (isCliId(cliSessionId)) url = `claude://resume?session=${cliSessionId}`
 
   let command

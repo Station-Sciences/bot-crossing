@@ -63,6 +63,16 @@ const TABLE = {
   /** A soft servo click and a thud — something small just landed. */
   'drone-drop': { kind: 'event', gain: 0.7 },
   /**
+   * "Yes?" — what an astronaut says when you click it. Six of them, picked at random, so a
+   * crowd does not answer in one voice. Little robot phrases: two or three chirps.
+   */
+  'select-1': { kind: 'event', gain: 0.55 },
+  'select-2': { kind: 'event', gain: 0.55 },
+  'select-3': { kind: 'event', gain: 0.55 },
+  'select-4': { kind: 'event', gain: 0.55 },
+  'select-5': { kind: 'event', gain: 0.55 },
+  'select-6': { kind: 'event', gain: 0.55 },
+  /**
    * "Somebody needs you." The only sound that is allowed to interrupt, so it is the one
    * that must never grate: two soft marimba notes a fifth apart, and nothing else.
    */

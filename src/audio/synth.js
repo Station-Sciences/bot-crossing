@@ -844,6 +844,21 @@ function bird(kind) {
 }
 
 /** Wrap a scheduling function into a Voice that knows when it will be over. */
+/**
+ * A robot's word: a run of short square-ish chirps, each gliding from one pitch to the next
+ * with a hair of space between them. The tables are [from Hz, to Hz, seconds] per syllable.
+ */
+function robotPhrase(syllables) {
+  return (ctx, dest, now, level) => {
+    let t = now
+    for (const [f0, f1, dur] of syllables) {
+      chirp(ctx, dest, t, { f0, f1, dur, gain: level * 0.5, attack: 0.008, decay: dur * 0.9 })
+      t += dur + 0.035
+    }
+    return t + 0.15
+  }
+}
+
 function oneShot(fn) {
   return (ctx, dest, o, noise) => {
     const v = new Voice(ctx, dest)
@@ -895,6 +910,12 @@ export const GENERATORS = {
   'ice-crack': oneShot(ONE_SHOTS.iceCrack),
   'coyote': oneShot(ONE_SHOTS.coyote),
   'drone-drop': oneShot(ONE_SHOTS.droneDrop),
+  'select-1': oneShot(robotPhrase([[880, 1320, 0.09], [1320, 1180, 0.12]])),
+  'select-2': oneShot(robotPhrase([[660, 990, 0.1], [990, 990, 0.08], [1320, 1480, 0.1]])),
+  'select-3': oneShot(robotPhrase([[1100, 740, 0.14], [740, 880, 0.1]])),
+  'select-4': oneShot(robotPhrase([[520, 780, 0.08], [780, 1040, 0.08], [1040, 1300, 0.12]])),
+  'select-5': oneShot(robotPhrase([[980, 980, 0.07], [980, 980, 0.07], [1470, 1240, 0.14]])),
+  'select-6': oneShot(robotPhrase([[1200, 900, 0.1], [600, 1000, 0.16]])),
   'chime-attention': oneShot(ONE_SHOTS.chime),
 
   // Positional loops

@@ -1020,6 +1020,9 @@ const DRONE_COLORS = [0xf2efe8, 0xf0a05a, 0x6fc4d8]
 const DRONE_SPEED = 5
 const CRUISE_CLEARANCE = 6
 /** Where a parked drone hovers: just high enough that the slung crate clears the apron. */
+/** How many dropped crates can be lying about at once, and how long each stays. */
+const PARCEL_CAP = 24
+const PARCEL_LIFE = 7
 const PARK_HEIGHT = 0.85
 const PARK_RING = 4.2
 /** Rotor speed in radians per second at full throttle; idle is a slow tick-over. */
@@ -1061,6 +1064,21 @@ class Fleet {
     this.mesh = crowdMesh(geo, this.mats, this.count, 'drones', true)
     paint(this.mesh, this.count, DRONE_COLORS, this.rand, 0.04)
     group.add(this.mesh)
+
+    // The crates once let go of. A drone's own crate is folded into its hull the moment it
+    // is "delivered"; what actually lands on the deck is one of these — a small box with
+    // its own fall, a couple of bounces, and a quiet fade once it has settled.
+    this.parcels = []
+    this.parcelMesh = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.3, 0.3, 0.3),
+      new THREE.MeshStandardMaterial({ color: 0xc9a26a, roughness: 0.8, metalness: 0.05 }),
+      PARCEL_CAP
+    )
+    this.parcelMesh.count = 0
+    this.parcelMesh.castShadow = true
+    this.parcelMesh.frustumCulled = false
+    this.parcelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    group.add(this.parcelMesh)
 
     this.pad = { x: 0, y: 0, z: 0 }
     this.door = { x: 0, y: 0, z: 0 }
@@ -1122,6 +1140,84 @@ class Fleet {
       }
     }
     this._placed = true
+  }
+
+  /** Let the crate go from under the hull. It lands on whatever is below and stays a while. */
+  _release(d) {
+    if (this.parcels.length >= PARCEL_CAP) this.parcels.shift()
+    // The deck it hovers over is higher than the terrain under it; the crate lands on the deck.
+    const floor = Math.max(this.env.heightAt(d.x, d.z), typeof d.ty === 'number' ? d.ty : -Infinity)
+    this.parcels.push({
+      x: d.x + (this.rand() - 0.5) * 0.2,
+      y: d.y - 0.75,
+      z: d.z + (this.rand() - 0.5) * 0.2,
+      vx: (this.rand() - 0.5) * 0.4,
+      vy: 0,
+      vz: (this.rand() - 0.5) * 0.4,
+      floor: floor + 0.15,
+      spin: (this.rand() - 0.5) * 6,
+      yaw: this.rand() * Math.PI * 2,
+      tilt: 0,
+      bounces: 0,
+      life: 0,
+      landed: false,
+    })
+  }
+
+  /**
+   * Gravity, a bounce or two, a skid, then a fade. `hooks.sound` gets the thud on the first
+   * landing, which is the moment the drop actually *happens* rather than the moment the
+   * drone let go.
+   */
+  _updateParcels(dt, hooks) {
+    const list = this.parcels
+    let n = 0
+    for (let i = list.length - 1; i >= 0; i--) {
+      const p = list[i]
+      p.life += dt
+      if (!p.landed || p.bounces < 3) {
+        p.vy -= 9.8 * dt
+        p.x += p.vx * dt
+        p.y += p.vy * dt
+        p.z += p.vz * dt
+        p.yaw += p.spin * dt
+        p.tilt += p.spin * 0.6 * dt
+        if (p.y <= p.floor && p.vy < 0) {
+          p.y = p.floor
+          p.bounces++
+          p.vy = -p.vy * 0.38
+          p.vx *= 0.55
+          p.vz *= 0.55
+          p.spin *= 0.4
+          if (!p.landed) {
+            p.landed = true
+            hooks?.sound?.('drone-drop', p.x, p.y, p.z)
+          }
+          if (p.bounces >= 3 || p.vy < 0.4) {
+            p.bounces = 3
+            p.vy = 0
+            p.vx = 0
+            p.vz = 0
+            p.spin = 0
+            p.tilt = 0
+            p.y = p.floor
+          }
+        }
+      }
+      // Gone after a while: shrinks away rather than blinking out.
+      const fade = THREE.MathUtils.clamp((PARCEL_LIFE - p.life) / 1.2, 0, 1)
+      if (fade <= 0) {
+        list.splice(i, 1)
+        continue
+      }
+      _dummy.position.set(p.x, p.y, p.z)
+      _dummy.rotation.set(p.tilt, p.yaw, 0)
+      _dummy.scale.setScalar(fade)
+      _dummy.updateMatrix()
+      this.parcelMesh.setMatrixAt(n++, _dummy.matrix)
+    }
+    this.parcelMesh.count = n
+    this.parcelMesh.instanceMatrix.needsUpdate = true
   }
 
   _cruiseY(x, z) {
@@ -1210,7 +1306,7 @@ class Fleet {
           if (!d.dropped && t > 0.55) {
             d.dropped = true
             d.carry = 0
-            hooks?.sound?.('drone-drop', d.x, d.y, d.z)
+            this._release(d)
           }
           if (d.timer <= 0) d.state = 'return'
           break
@@ -1286,9 +1382,13 @@ class Fleet {
     this.mesh.instanceMatrix.needsUpdate = true
     this.rotor.needsUpdate = true
     this.carry.needsUpdate = true
+    this._updateParcels(dt, hooks)
   }
 
   dispose() {
+    this.parcelMesh.removeFromParent()
+    this.parcelMesh.geometry.dispose()
+    this.parcelMesh.material.dispose()
     this.mesh.removeFromParent()
     this.mesh.geometry.dispose()
     this.mats.material.dispose()

@@ -4,6 +4,7 @@ import { DECK_TEXTURE_SCALE, KERB_UV, deckSurface, kerbSurface } from './surface
 import { atlasTexture, hasPart, part } from './kit.js'
 import { mulberry } from './planet.js'
 import { withCurve } from '../core/curve.js'
+import { OVERLAY_LAYER } from '../core/engine.js'
 
 /**
  * Project plots — the fenced-off sections of the map, one per repo.
@@ -794,6 +795,8 @@ export function createLabel(text, accent, pixelRatio = 4) {
   mesh.renderOrder = 8
   mesh.frustumCulled = false
   mesh.visible = false
+  // After bloom, with the badges — see the engine's overlay pass.
+  mesh.layers.set(OVERLAY_LAYER)
   mesh.userData.dispose = () => {
     texture.dispose()
     geo.dispose()

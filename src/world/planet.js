@@ -14,7 +14,7 @@ import { atlasTexture, hasPart, kitReady, kitUsesVertexColors, part } from './ki
  * always carried.
  *
  *   water    { level, shallow, deep, foam, ... }   a sea, lakes, or lava — see water.js
- *   shape    'plain' | 'island' | 'coast' | 'dunes'
+ *   shape    'plain' | 'island' | 'coast' | 'dunes' | 'sky'   (sky: a floating island, nothing below)
  *   shore    { color, band }    the sand: how far *above* the waterline, in height, it reaches
  *   weather  [{ kind, rate }]   what drifts through the air — see particles.js
  *   clouds   { amount, color, speed }   cumulus on the sky dome
@@ -333,6 +333,50 @@ export const PLANETS = {
     grade: { saturation: 0.95, warmth: -0.05 },
   },
 
+  sky: {
+    id: 'sky',
+    name: 'Aerie',
+    blurb: 'A floating island. Roots and vines over the edge, clouds all the way down.',
+    ground: { low: 0x4f9450, high: 0x93cc64, tint: 0xbfe08a },
+    rock: 0x8c8478,
+    horizon: 0xd8ecf8,
+    sky: { top: 0x3a86dc, bottom: 0xdcecf8 },
+    fog: { color: 0xc8e0f2, near: 120, far: 300 },
+    sun: { color: 0xfff4e0, intensity: 2.5, night: 0.14 },
+    ambient: { sky: 0xa8d4f4, ground: 0x6a8a58, intensity: 1.05 },
+    atmosphere: 1,
+    craters: 0,
+    roughness: 0.7,
+    shape: 'sky',
+    scatter: 'flora',
+    skyIsland: { rock: 0x6e6256, soil: 0x7a5a3c, vine: 0x4f8f3a, cloud: 0xffffff, cloudLevel: -30, depth: 44 },
+    companion: { name: 'Moon', color: 0xe8e4dc, size: 3.0, glow: 0xfff6e0 },
+    dust: 0.15,
+    weather: [
+      { kind: 'pollen', rate: 0.3 },
+      { kind: 'fireflies', rate: 0.6 },
+    ],
+    clouds: { amount: 0.7, color: 0xffffff, speed: 1.3 },
+    fauna: {
+      birds: { kind: 'swallow', count: 14, altitude: [4, 12], colors: [0x3a3a4a, 0x2a2a3a], size: 0.9 },
+      butterflies: { count: 10, colors: [0xffd45a, 0xffffff, 0x9ad0ff] },
+      drones: DRONES,
+    },
+    audio: {
+      beds: [
+        { sound: 'wind-high', gain: 0.45 },
+        { sound: 'wind-soft', gain: 0.4 },
+        { sound: 'meadow-birds', gain: 0.4, night: 0 },
+        { sound: 'crickets', gain: 0, night: 0.4 },
+      ],
+      events: [
+        { sound: 'wind-gust', every: [8, 24], gain: 0.55, where: 'ring' },
+        { sound: 'songbird', every: [9, 25], gain: 0.5, when: 'day', where: 'ring' },
+      ],
+    },
+    grade: { saturation: 1.15, warmth: 0.02 },
+  },
+
   volcanic: {
     id: 'volcanic',
     name: 'Cinder',
@@ -474,7 +518,7 @@ export const PLANETS = {
 }
 
 /** Display order for the picker: home first, then outward, then the pretty ones. */
-export const PLANET_ORDER = ['moon', 'mars', 'terra', 'beach', 'ocean', 'jungle', 'desert', 'tundra', 'autumn', 'sakura', 'volcanic']
+export const PLANET_ORDER = ['moon', 'mars', 'terra', 'beach', 'ocean', 'jungle', 'desert', 'tundra', 'autumn', 'sakura', 'volcanic', 'sky']
 
 export const GROUND_SIZE = 340
 /** Everything inside this radius is the buildable colony, and is kept nearly flat. */
@@ -490,6 +534,10 @@ const ISLAND_RADIUS = 60
 const ISLAND_SHELF = 36
 /** How far under the sea the bed settles, on either shape. Deep enough to read as sea. */
 const SEA_DEPTH = 7
+/** The floating island: land to here, then the ground falls out of sight over this shelf. */
+export const SKY_RIM = 58
+const SKY_SHELF = 16
+const SKY_DROP = 70
 
 /**
  * Terrain is one plane, displaced and vertex-coloured on the CPU at build time. Doing it
@@ -599,6 +647,15 @@ function sampleHeight(x, z, field, planet) {
     // The waterline wanders, or the beach is a ruler.
     const wobble = fbm(noise, x * 0.02 + 7, z * 0.02 + 3, 2) * 9
     sea = THREE.MathUtils.smoothstep(along + wobble, COAST_OFFSET - 4, COAST_OFFSET + 32)
+  }
+  if (planet.shape === 'sky') {
+    // Nothing under the rim: the ground is dropped so far it is never seen from above, and
+    // what shows instead is the island's own underside, built separately.
+    const fall = THREE.MathUtils.smoothstep(dist, SKY_RIM, SKY_RIM + SKY_SHELF)
+    y = y * (1 - fall) - SKY_DROP * fall
+    // Nothing else applies out there: no hills, no craters.
+    if (fall >= 1) return y
+    hills *= 1 - fall
   }
   if (planet.shape === 'dunes') {
     // Long ridges running one way, bent by noise so they read as wind-blown rather than
@@ -908,6 +965,7 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
     const x = Math.cos(a) * d
     const z = Math.sin(a) * d
     if (keepClear.some((p) => Math.hypot(x - p.x, z - p.z) < p.r)) continue
+    if (planet.shape === 'sky' && d > SKY_RIM - 1.5) continue
 
     const which = pickKind()
     const kind = kinds[which]

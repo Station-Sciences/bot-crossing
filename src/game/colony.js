@@ -199,11 +199,17 @@ export class Colony {
 
     this._dustTint.set(this.planet.ground.high)
 
-    this.fauna.setPlanet(this.planet, {
-      heightAt: (x, z) => this.groundAt(x, z),
-      waterLevel: this.planet.water?.level ?? null,
-      waterHeightAt: this.water ? (x, z, t) => this.water.heightAt(x, z, t) : undefined,
-    })
+    // Only when the world itself changed. The terrain is rebuilt for a scatter or detail
+    // setting too, and re-seeding the wildlife for that puts every flock back at its spawn
+    // point in the middle of the map — a quality toggle should not restart the birds.
+    if (this._faunaPlanet !== this.planet.id) {
+      this._faunaPlanet = this.planet.id
+      this.fauna.setPlanet(this.planet, {
+        heightAt: (x, z) => this.groundAt(x, z),
+        waterLevel: this.planet.water?.level ?? null,
+        waterHeightAt: this.water ? (x, z, t) => this.water.heightAt(x, z, t) : undefined,
+      })
+    }
     this._syncFaunaSites()
   }
 

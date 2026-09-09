@@ -454,7 +454,6 @@ export class Hud {
     on('#btn-sound', 'click', () => this.settings.set('sound', !this.settings.get('sound')))
     on('#btn-open', 'click', () => this.actions.openThread?.())
     on('#btn-viewed', 'click', () => this.actions.markViewed?.())
-    on('#btn-resume', 'click', () => this.actions.resumeThread?.())
     on('#btn-archive', 'click', () => this.actions.archiveThread?.())
     on('#btn-deselect', 'click', () => this.actions.select?.(null))
     on('#btn-new-session', 'click', () => this.actions.newConversation?.())
@@ -689,7 +688,9 @@ export class Hud {
     const bits = [
       `<span class="tag"><i class="swatch" style="background:${hex(agent.trim.getHex())}"></i>${escapeHtml(status)}</span>`,
     ]
-    // The repo is the panel's own heading now, so the card says what the *thread* is.
+    // The repo is the panel's own heading now, so the card says what the *thread* is —
+    // starting with whose it is, since that decides what Open can do.
+    if (thread.harnessName) bits.push(`<span class="tag">${escapeHtml(thread.harnessName)}</span>`)
     if (thread.worktree) bits.push(`<span class="tag">⑂ ${escapeHtml(thread.worktree)}</span>`)
     if (thread.gitBranch) bits.push(`<span class="tag">${escapeHtml(thread.gitBranch)}</span>`)
     if (thread.model) bits.push(`<span class="tag">${escapeHtml(shortModel(thread.model))}</span>`)
@@ -704,9 +705,6 @@ export class Hud {
     // often is how a HUD starts costing frames.
     this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
     this.$('#btn-open').disabled = thread.canOpen === false
-    // The second door, for a thread the desktop app has forgotten: only on ones that have gone
-    // quiet, where Open is the button most likely to do nothing.
-    this.$('#btn-resume').hidden = !(thread.canResume && agent.status === 'sleeping')
     // Only offered when there is something to dismiss. A third button on every card would
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
@@ -1082,7 +1080,6 @@ const TEMPLATE = `
   <div class="pair">
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
     <button class="btn" id="btn-viewed" title="Stop this thread asking for you until it moves on again (V)">${ICON.eye} Viewed</button>
-    <button class="btn" id="btn-resume" title="Open did nothing? Re-import the transcript into the desktop app — it arrives as a new untitled session">${ICON.open} Resume</button>
     <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>
   </div>
 </div>

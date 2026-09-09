@@ -5,6 +5,15 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js'
+import { Pass } from 'three/addons/postprocessing/Pass.js'
+
+/**
+ * The layer for things that are *read* rather than looked at — status badges, name plates.
+ * They are drawn by their own pass after bloom, so the one `?` that wants you is a crisp
+ * symbol and not a smear of light, and with the composer off they are simply part of the
+ * scene.
+ */
+export const OVERLAY_LAYER = 1
 import { SHADOW_SIZES } from './settings.js'
 import { createTiltShift } from './tiltshift.js'
 
@@ -200,6 +209,10 @@ export class Engine {
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), this.settings.get('bloomStrength'), 0.55, 0.92)
     composer.addPass(this.bloomPass)
 
+    // The overlay layer, drawn into the scene buffer once bloom has been added to it. The
+    // main RenderPass leaves the layer out (see `_loop`), so nothing on it can feed the bloom.
+    composer.addPass(new OverlayPass(this.scene, this.camera))
+
     // After bloom, so an out-of-focus lamp keeps its glow and the glow goes soft with it
     // — blurring first would drop those pixels under the bloom threshold and switch the
     // glow off exactly where the eye expects the most of it. Still before OutputPass, so
@@ -341,12 +354,7 @@ export class Engine {
     for (const u of this.updaters) u.update?.(dt, this.elapsed)
 
     this.renderer.info.reset()
-    if (this.composer && this._wantsPost()) {
-      this._syncDepthTexture()
-      this.composer.render(dt)
-    } else {
-      this.renderer.render(this.scene, this.camera)
-    }
+    this._draw(dt)
 
     this.perf.sample(dt, this.renderer.info)
     if (this.settings.get('autoQuality')) this._governQuality()
@@ -359,10 +367,17 @@ export class Engine {
    */
   renderFrame() {
     this.renderer.info.reset()
+    this._draw(0)
+  }
+
+  _draw(dt) {
     if (this.composer && this._wantsPost()) {
+      // The scene pass sees everything but the overlay; the overlay pass sees only it.
+      this.camera.layers.set(0)
       this._syncDepthTexture()
-      this.composer.render(0)
+      this.composer.render(dt)
     } else {
+      this.camera.layers.enableAll()
       this.renderer.render(this.scene, this.camera)
     }
   }
@@ -433,6 +448,27 @@ export class Engine {
     window.removeEventListener('pageshow', this._onWake)
     this._disposeComposer()
     this.renderer.dispose()
+  }
+}
+
+/** Draws the overlay layer on top of whatever is in the composer's buffer, keeping its depth. */
+class OverlayPass extends Pass {
+  constructor(scene, camera) {
+    super()
+    this.scene = scene
+    this.camera = camera
+    this.needsSwap = false
+    this.clear = false
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    const autoClear = renderer.autoClear
+    renderer.autoClear = false
+    this.camera.layers.set(OVERLAY_LAYER)
+    renderer.setRenderTarget(this.renderToScreen ? null : readBuffer)
+    renderer.render(this.scene, this.camera)
+    this.camera.layers.set(0)
+    renderer.autoClear = autoClear
   }
 }
 

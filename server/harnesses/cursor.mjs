@@ -197,7 +197,7 @@ async function scanThreads() {
       archived: false,
       sizeBytes: entry.size,
       source: 'agent',
-      canOpen: false,
+      canOpen: Boolean(projectPath),
       ref: { sessionId: entry.id, cwd: projectPath },
     })
   }
@@ -207,13 +207,13 @@ async function scanThreads() {
 /**
  * Cursor registers `cursor://`, but only for files and folders — nothing found so far addresses
  * a single agent thread, and inventing a route would be a link that silently does nothing.
- * Revealing the repo is the honest offer, and the UI greys the button and shows this instead.
+ * So Open takes you to the repo in Cursor, which is one click from the thread, and the page
+ * is told that is what happened rather than left to wonder why the thread did not appear.
  */
-function openThread() {
-  return {
-    ok: false,
-    error: 'Cursor has no link to a single thread — open the repo and pick it from the agent list.',
-  }
+function openThread(ref) {
+  const shown = newSession(ref?.cwd)
+  if (!shown.ok) return { ok: false, error: 'Cursor has no link to a single thread, and this one has no folder to open either.' }
+  return { ...shown, note: 'Cursor has no link to a single thread — opened the repo in Cursor; pick it from the agent list.' }
 }
 
 /** `cursor://file/<abs>` is answered by the installed app; the OS opener does the finding. */

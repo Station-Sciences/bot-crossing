@@ -18,7 +18,6 @@ import {
   fetchState,
   saveState,
   openThread,
-  resumeThread,
   newSession,
   revealFolder,
 } from './game/api.js'
@@ -235,31 +234,13 @@ const actions = {
     const thread = threads.find((t) => t.id === selectedId)
     if (!thread) return
     try {
-      await openThread(thread)
+      const res = await openThread(thread)
       colony.astronauts.celebrate(thread.id)
-      hud.toast(`Opened in ${thread.harnessName || 'your harness'}`)
+      hud.toast(res?.note || `Opened in ${thread.harnessName || 'your harness'}`)
       // Opening is the thing that makes a thread no longer unread, so refresh shortly after.
       setTimeout(poll, 1800)
     } catch (err) {
       hud.toast(err.message || 'Could not open that thread', 'err')
-    }
-  },
-
-  /**
-   * The fallback for a thread that Open does nothing for. An old session the desktop app has
-   * dropped from its own list cannot be navigated to; re-importing the CLI transcript can
-   * still bring it back, at the cost of a duplicate untitled session — so it is a second
-   * button rather than the first.
-   */
-  resumeThread: async () => {
-    const thread = threads.find((t) => t.id === selectedId)
-    if (!thread) return
-    try {
-      await resumeThread(thread)
-      hud.toast('Re-importing the transcript — expect a new untitled session')
-      setTimeout(poll, 4000)
-    } catch (err) {
-      hud.toast(err.message || 'Could not resume that thread', 'err')
     }
   },
 
@@ -341,6 +322,9 @@ window.addEventListener('resize', () => hud.setSideWidth(sideWidth()))
 
 // ── selection ─────────────────────────────────────────────────────────────────────────
 
+let lastVoiced = null
+let lastPhrase = 0
+
 function select(id, { fly = false } = {}) {
   selectedId = id
   const agent = id ? colony.agentFor(id) : null
@@ -354,6 +338,14 @@ function select(id, { fly = false } = {}) {
   colony.astronauts.setSelected(agent)
   const thread = threads.find((t) => t.id === id) || agent.thread
   hud.setSelection(agent, thread)
+  // It answers. One of six little phrases, from where it is standing, never twice in a row.
+  if (agent.id !== lastVoiced) {
+    lastVoiced = agent.id
+    let n = 1 + Math.floor(Math.random() * 6)
+    if (n === lastPhrase) n = (n % 6) + 1
+    lastPhrase = n
+    ambience.play(`select-${n}`, { x: agent.pos.x, y: agent.pos.y + 0.8, z: agent.pos.z, gain: 0.9 })
+  }
   // Picking somebody is also picking the zone they are standing on: the sidebar follows.
   if (thread?.project && colony.plots.has(thread.project)) selectedProject = thread.project
   syncProject()
