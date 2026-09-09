@@ -159,6 +159,12 @@ function plug(cell, R, margin, depth, twist, lean, rand, soil, rockLight, rockDa
   c.copy(rockDark)
   colors.push(c.r, c.g, c.b)
   const tip = rings * AROUND
+  // A soil cap over the top ring: the ground frays away inside the lip, and what shows
+  // through the gaps has to be earth, not the hollow inside of the plug.
+  positions.push(cell.x, -0.2, cell.z)
+  c.copy(soil)
+  colors.push(c.r, c.g, c.b)
+  const cap = tip + 1
 
   const index = []
   for (let k = 0; k < rings - 1; k++) {
@@ -167,13 +173,16 @@ function plug(cell, R, margin, depth, twist, lean, rand, soil, rockLight, rockDa
       const b = k * AROUND + ((i + 1) % AROUND)
       const d = (k + 1) * AROUND + i
       const e = (k + 1) * AROUND + ((i + 1) % AROUND)
-      index.push(a, d, b, b, d, e)
+      // Counter-clockwise seen from outside, so the outer faces are the front faces.
+      index.push(a, b, d, b, e, d)
     }
   }
   for (let i = 0; i < AROUND; i++) {
     const a = (rings - 1) * AROUND + i
     const b = (rings - 1) * AROUND + ((i + 1) % AROUND)
-    index.push(a, tip, b)
+    index.push(a, b, tip)
+    // The cap faces up, so it winds the other way round.
+    index.push(cap, (i + 1) % AROUND, i)
   }
   const geo = new THREE.BufferGeometry()
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
