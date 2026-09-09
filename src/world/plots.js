@@ -210,7 +210,16 @@ export function allocateCells(projects, previous = new Map()) {
 
 function layOut(projects, previous) {
   const reserved = key(SHIP_CELL.q, SHIP_CELL.r)
-  const wanted = projects.map((p) => ({ id: p.id, want: cellsNeeded(p.size) }))
+  // Shrinking has hysteresis. A zone sitting exactly on a cell boundary would otherwise
+  // hand a tile back the moment one thread is archived and claim it again when the next
+  // one starts — and every hand-back rebuilds the plot and walks its whole crew. A tile is
+  // only returned once the repo has lost a few threads past the line.
+  const wanted = projects.map((p) => {
+    const before = previous.get(p.id)
+    let want = cellsNeeded(p.size)
+    if (before && before.length > want) want = Math.min(before.length, cellsNeeded(p.size + 3))
+    return { id: p.id, want }
+  })
   const total = wanted.reduce((n, w) => n + w.want, 0)
 
   // Spiral order decides where a *new* project settles. The pool runs past what is needed

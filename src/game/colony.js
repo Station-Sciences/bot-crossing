@@ -386,10 +386,25 @@ export class Colony {
     for (const [name, list] of projects) {
       const plot = this.plots.get(name)
       if (!plot) continue
-      // Oldest thread first, so a given session keeps its slot as siblings come and go.
+      // Oldest thread first, so the *first* assignment of slots is deterministic; after that a
+      // thread keeps the slot it was given for as long as the plot stands. Numbering by
+      // position in this list, which is what this used to do, meant one archive shifted every
+      // younger sibling one slot along — every building on the plot moved and every
+      // astronaut walked, for a thread that had left.
       list.sort((a, b) => a.createdAt - b.createdAt)
+      const slotOf = plot.slotOf || (plot.slotOf = new Map())
+      for (const id of [...slotOf.keys()]) if (!list.some((t) => t.id === id)) slotOf.delete(id)
+      const taken = new Set(slotOf.values())
+      for (const thread of list) {
+        if (slotOf.has(thread.id)) continue
+        let slot = 0
+        while (taken.has(slot)) slot++
+        taken.add(slot)
+        slotOf.set(thread.id, slot)
+      }
 
-      list.forEach((thread, i) => {
+      list.forEach((thread) => {
+        const i = slotOf.get(thread.id)
         const status = statusFor(thread, now)
         if (stats[status] !== undefined) stats[status]++
         if (status === 'waiting' || status === 'blocked') urgent.add(plot.id)
@@ -825,9 +840,9 @@ export class Colony {
   _badgeFor(agent) {
     if (agent.state === 'spawning') return BADGE.spawning
     if (agent.state === 'leaving') return BADGE.leaving
-    // Badges only appear once an astronaut has actually reached its post — a stream of
-    // symbols bobbing over a walking crowd is noise.
-    if (agent.state !== 'at-site') return BADGE.none
+    // A badge belongs to the *thread*, not to the spot: an astronaut that has to walk —
+    // shoved off its mark by a neighbour, re-routed round a new building — is still the one
+    // waiting on you, and the symbol that says so must not blink out for the trip.
     return BADGE_FOR[agent.status] ?? BADGE.none
   }
 
