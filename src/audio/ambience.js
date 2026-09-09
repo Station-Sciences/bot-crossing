@@ -73,6 +73,7 @@ export class Ambience {
     this._pool = []
     this._byId = new Map()
     this._oneshots = []
+    this._auditions = []
     this._buffers = new Map()
     this._manifest = null
     this._noise = null
@@ -229,11 +230,68 @@ export class Ambience {
       this._sweepAt = now + 0.5
       this._sweepOneshots(now)
     }
+    if (this._auditions.length) this._tickAuditions(dt, now)
   }
 
   /** Play a sound once; in the world when given a position, otherwise straight to the ear. */
   play(name, opts) {
     return this._shoot(name, opts || PLAY_DEFAULTS, this.effectsBus)
+  }
+
+  /**
+   * Hear any sound by name for a few seconds, straight to the ear — the sound test panel.
+   * A one-shot simply fires; a bed or a loop is faded in, held, and faded out again. The
+   * function handed back stops it early.
+   */
+  audition(name, seconds = 8) {
+    const def = SOUNDS[name]
+    // The button that called this is a gesture, so the context can be created or resumed
+    // here; `resume` is asynchronous, and nodes scheduled against a context that is still
+    // waking simply start when it does.
+    this.unlock()
+    if (!def || !this.ctx || !this._enabled) return () => {}
+    if (def.kind === 'event') {
+      this.play(name, { gain: 1 })
+      return () => {}
+    }
+    const ctx = this.ctx
+    const voice = this._start(name, this.effectsBus, PLAY_DEFAULTS, true)
+    const g = voice.out.gain
+    const now = ctx.currentTime
+    const level = Math.max(0.0001, this._baseGain(name, voice))
+    g.setValueAtTime(0.0001, now)
+    g.exponentialRampToValueAtTime(level, now + 0.6)
+    const entry = { voice, stopAt: now + seconds, done: false }
+    entry.stop = () => {
+      if (entry.done) return
+      entry.done = true
+      const t = ctx.currentTime
+      g.cancelScheduledValues(t)
+      g.setValueAtTime(Math.max(0.0001, g.value), t)
+      g.exponentialRampToValueAtTime(0.0001, t + 0.5)
+      voice.stop(t + 0.55)
+      if (typeof setTimeout === 'function') setTimeout(() => voice.dispose(), 700)
+    }
+    this._auditions.push(entry)
+    return entry.stop
+  }
+
+  /** Whether `name` would play a file from the manifest or its synthesised stand-in. */
+  sourceOf(name) {
+    const entry = this._entry(name)
+    if (this._buffers.get(name)) return 'sample'
+    if (entry && typeof entry.file === 'string' && entry._state !== 'failed') return 'sample'
+    return 'synth'
+  }
+
+  _tickAuditions(dt, now) {
+    const list = this._auditions
+    for (let i = list.length - 1; i >= 0; i--) {
+      const a = list[i]
+      if (!a.done) a.voice.update?.(dt, now)
+      if (!a.done && now >= a.stopAt) a.stop()
+      if (a.done && now > a.stopAt + 1) list.splice(i, 1)
+    }
   }
 
   /** Hard on/off with a short ramp, then the context is suspended so idle costs nothing. */

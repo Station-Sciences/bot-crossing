@@ -167,6 +167,7 @@ export class Colony {
     this.activePlots = new Set()
     this._dustTint = new THREE.Color(this.planet.ground.high)
     this._c = new THREE.Color()
+    this._c2 = new THREE.Color()
     this.stats = { agents: 0, projects: 0, working: 0, waiting: 0, blocked: 0, done: 0 }
 
     this._buildTerrain()
@@ -801,6 +802,7 @@ export class Colony {
     this.astronauts.updateRings(elapsed)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))
     this._emit(dt, elapsed)
+    this._emitMotes(dt, night)
     this.particles.ambient(dt, this.camera, this.planet, night, (x, z) => this.surfaceAt(x, z))
     this.particles.update(dt)
     this.water?.update(dt, elapsed, this.camera, night, this.sky.sunDir)
@@ -901,6 +903,58 @@ export class Colony {
       if (agent.state === 'spawning' || (agent.state === 'leaving' && agent.scale < 0.6)) {
         if (Math.random() < dt * 3) this.ship.ping()
       }
+    }
+  }
+
+  /**
+   * Light that lives *on* things. Every building near the view sheds a slow mote now and
+   * then — warm by day, its plot's accent after dark, when the windows are lit — the lander's
+   * beacon draws a few of its own, and on a world with anything growing on it the yard fills
+   * with fireflies once the sun is down. Particles spawned around the camera say "weather";
+   * these say "this place is alive".
+   */
+  _emitMotes(dt, night) {
+    if (!this.particles.enabled) return
+    const full = this.settings.get('particles') === 'full'
+    const focus = this.sky.focus
+    const c = this._c
+    const living = this.planet.scatter !== 'rocks'
+    const fireflies = living && night > 0.35
+    // Buildings within reach of the view. Everything else is off screen or too far to read.
+    const reach = full ? 48 : 34
+    const reach2 = reach * reach
+    for (const [id, entry] of this.buildings) {
+      if (entry.retiring || entry.progress < 0.5) continue
+      const p = entry.mesh.position
+      const dx = p.x - focus.x
+      const dz = p.z - focus.z
+      if (dx * dx + dz * dz > reach2) continue
+      const live = this._isActive(id)
+      // A live site glows more; a dark one still breathes.
+      const rate = (live ? 0.9 : 0.28) * (full ? 1 : 0.55) * (0.6 + night * 0.9)
+      if (Math.random() < dt * rate) {
+        const r = 0.9 + Math.random() * 1.4
+        const a = Math.random() * Math.PI * 2
+        if (night > 0.35) c.set(entry.accent).lerp(this._c2.set(0xfff0c0), 0.35).multiplyScalar(2.2)
+        else c.set(0xfff2d0).multiplyScalar(1.6)
+        this.particles.mote(p.x + Math.cos(a) * r, p.y + 0.4 + Math.random() * 1.8, p.z + Math.sin(a) * r, c, 0.055, 4)
+      }
+      if (fireflies && Math.random() < dt * (full ? 0.7 : 0.35) * night) {
+        const r = 1.5 + Math.random() * 3.5
+        const a = Math.random() * Math.PI * 2
+        c.setRGB(1.5, 2.3, 0.55)
+        this.particles.mote(p.x + Math.cos(a) * r, p.y + 0.2 + Math.random() * 1.2, p.z + Math.sin(a) * r, c, 0.07, 5)
+      }
+    }
+    // The lander's beacon and pad lights draw a slow halo of their own.
+    const ship = this.ship.group.position
+    const sdx = ship.x - focus.x
+    const sdz = ship.z - focus.z
+    if (sdx * sdx + sdz * sdz < reach2 && Math.random() < dt * (0.8 + night * 1.4)) {
+      const a = Math.random() * Math.PI * 2
+      const r = 2 + Math.random() * 3
+      c.setRGB(0.7, 1.4, 2.4)
+      this.particles.mote(ship.x + Math.cos(a) * r, ship.y + 0.3 + Math.random() * 5, ship.z + Math.sin(a) * r, c, 0.06, 5)
     }
   }
 

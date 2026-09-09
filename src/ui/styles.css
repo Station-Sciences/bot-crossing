@@ -437,6 +437,42 @@ body {
   font-weight: 600;
 }
 
+.sound-test .sec-head {
+  margin-top: 10px;
+}
+
+.sound-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.sound-row .n {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sound-row .src {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sound-row .src.sample {
+  color: var(--teal);
+}
+
+.sound-row .btn {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
 .planets {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

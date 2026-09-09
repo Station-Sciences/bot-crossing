@@ -87,6 +87,8 @@ export async function saveState(state) {
  * what a Claude Code session id, or a Codex rollout id, actually looks like.
  */
 export const openThread = (thread) => post('/api/open', { harness: thread.harness, ref: thread.ref })
+/** The other door: ask the harness to re-import the transcript rather than navigate to it. */
+export const resumeThread = (thread) => post('/api/open', { harness: thread.harness, ref: { ...thread.ref, resume: true } })
 
 /** A brand new thread in a repo, via that harness's own new-session deep link. */
 export const newSession = (folder, harness) => post('/api/new-session', { folder, harness })

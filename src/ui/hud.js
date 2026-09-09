@@ -290,6 +290,58 @@ export class Hud {
       this._slider('Effects', 'effectsVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`, 'Hammering, drones, splashes, the chime when somebody needs you.')
     )
     body.appendChild(sound)
+
+    // The sound test: every bed, event and loop the current world uses, and then everything
+    // else, each with a play button and a note of whether it is a recording or a synth.
+    const test = group('Sound test')
+    this.soundTest = document.createElement('div')
+    this.soundTest.className = 'sound-test'
+    test.appendChild(this.soundTest)
+    body.appendChild(test)
+    this.controls.push({ el: test, sync: () => this._syncSoundTest() })
+  }
+
+  _syncSoundTest() {
+    const cat = this.actions.soundCatalog?.()
+    if (!cat) return
+    const signature = `${cat.planet}|${cat.beds.join()}|${cat.events.join()}`
+    if (this._last.soundTest === signature) return
+    this._last.soundTest = signature
+    const wrap = this.soundTest
+    wrap.innerHTML = ''
+    const section = (title, names) => {
+      if (!names.length) return
+      const h = document.createElement('div')
+      h.className = 'sec-head'
+      h.innerHTML = `<span>${escapeHtml(title)}</span>`
+      wrap.appendChild(h)
+      for (const name of [...new Set(names)]) {
+        const row = document.createElement('div')
+        row.className = 'sound-row'
+        const src = cat.sourceOf(name)
+        row.innerHTML = `<span class="n">${escapeHtml(name)}</span><span class="src ${src}">${src}</span>`
+        const b = document.createElement('button')
+        b.type = 'button'
+        b.className = 'btn ghost'
+        b.textContent = 'Play'
+        b.title = `Hear ${name} for a few seconds`
+        b.addEventListener('click', () => this.actions.audition?.(name))
+        row.appendChild(b)
+        wrap.appendChild(row)
+      }
+    }
+    section(`${cat.planet} — beds`, cat.beds)
+    section(`${cat.planet} — events`, cat.events)
+    section('Positional and cues', cat.loops)
+    const used = new Set([...cat.beds, ...cat.events, ...cat.loops])
+    section('Everything else', cat.all.filter((n) => !used.has(n)))
+    const stop = document.createElement('button')
+    stop.type = 'button'
+    stop.className = 'btn'
+    stop.textContent = 'Stop'
+    stop.style.marginTop = '8px'
+    stop.addEventListener('click', () => this.actions.stopAudition?.())
+    wrap.appendChild(stop)
   }
 
   _row(label, hint) {
@@ -402,6 +454,7 @@ export class Hud {
     on('#btn-sound', 'click', () => this.settings.set('sound', !this.settings.get('sound')))
     on('#btn-open', 'click', () => this.actions.openThread?.())
     on('#btn-viewed', 'click', () => this.actions.markViewed?.())
+    on('#btn-resume', 'click', () => this.actions.resumeThread?.())
     on('#btn-archive', 'click', () => this.actions.archiveThread?.())
     on('#btn-deselect', 'click', () => this.actions.select?.(null))
     on('#btn-new-session', 'click', () => this.actions.newConversation?.())
@@ -651,6 +704,9 @@ export class Hud {
     // often is how a HUD starts costing frames.
     this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
     this.$('#btn-open').disabled = thread.canOpen === false
+    // The second door, for a thread the desktop app has forgotten: only on ones that have gone
+    // quiet, where Open is the button most likely to do nothing.
+    this.$('#btn-resume').hidden = !(thread.canResume && agent.status === 'sleeping')
     // Only offered when there is something to dismiss. A third button on every card would
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
@@ -1026,6 +1082,7 @@ const TEMPLATE = `
   <div class="pair">
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
     <button class="btn" id="btn-viewed" title="Stop this thread asking for you until it moves on again (V)">${ICON.eye} Viewed</button>
+    <button class="btn" id="btn-resume" title="Open did nothing? Re-import the transcript into the desktop app — it arrives as a new untitled session">${ICON.open} Resume</button>
     <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>
   </div>
 </div>

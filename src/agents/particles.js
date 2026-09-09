@@ -334,6 +334,30 @@ export class Particles {
     }
   }
 
+  /**
+   * A mote of light: the slow glowing specks that hang around a lamp, a doorway, the
+   * lander's beacon, or — on a living world after dark — the fireflies over the yard.
+   */
+  mote(x, y, z, color, size = 0.06, life = 4) {
+    if (!this.enabled) return
+    const a = Math.random() * Math.PI * 2
+    this.glow.spawn(
+      x,
+      y,
+      z,
+      Math.cos(a) * 0.18,
+      0.06 + Math.random() * 0.14,
+      Math.sin(a) * 0.18,
+      color.r,
+      color.g,
+      color.b,
+      size * (0.7 + Math.random() * 0.6),
+      life * (0.7 + Math.random() * 0.6),
+      0.9,
+      -0.006
+    )
+  }
+
   /** Sleepy `z` bubbles. */
   snooze(x, y, z) {
     if (!this.enabled) return
