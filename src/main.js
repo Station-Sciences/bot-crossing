@@ -16,6 +16,7 @@ import {
   openThread,
   newSession,
   revealFolder,
+  fetchNeighbors,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 
@@ -47,7 +48,22 @@ const engine = new Engine(settings).mount(app)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
+let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, network: null }
+
+/** The machine's own network block, always a well-formed object for the settings panel. */
+function network() {
+  if (!state.network || typeof state.network !== 'object') state.network = { colonyName: '', share: false, neighbors: [] }
+  if (!Array.isArray(state.network.neighbors)) state.network.neighbors = []
+  return state.network
+}
+
+/** Write a change to the network block and let the server pick it up on the save. */
+function patchNetwork(patch) {
+  state.network = { ...network(), ...patch }
+  queueSave()
+  // Sharing or a new neighbour changes what the next scan returns, so pull one in soon.
+  setTimeout(poll, 600)
+}
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -141,6 +157,13 @@ const actions = {
    */
   newConversation: async () => {
     const name = selectedProject
+    // A visiting district's repo is on another machine — there is no folder here to root a
+    // new thread in, and starting one is the owner's to do, not a visitor's.
+    const plot = name && colony.plots.get(name)
+    if (plot?.colony) {
+      hud.toast(`You are visiting ${plot.colony}'s colony — new threads are hers to start`)
+      return
+    }
     const folder = name && pathForProject(name)
     if (!folder) {
       hud.toast('No folder on disk for that project', 'err')
@@ -179,6 +202,9 @@ const actions = {
   markViewed: () => {
     const thread = threads.find((t) => t.id === selectedId)
     if (!thread) return
+    // Unread on a visiting thread is her bookkeeping, not yours: marking it viewed here would
+    // record a timestamp against an id that only means something on her machine.
+    if (thread.colony) return
     state.viewedAt = { ...(state.viewedAt || {}), [thread.id]: Date.now() }
     queueSave()
     applyThreads(threads)
@@ -225,6 +251,12 @@ const actions = {
   openThread: async () => {
     const thread = threads.find((t) => t.id === selectedId)
     if (!thread) return
+    // A visiting colony's thread is on another machine — there is nothing here to open, and
+    // the harness deep link would resolve to your own session ids, not hers.
+    if (thread.colony) {
+      hud.toast(`This thread lives on ${thread.colony}'s machine — you are visiting, read-only`)
+      return
+    }
     try {
       await openThread(thread)
       colony.astronauts.celebrate(thread.id)
@@ -242,6 +274,12 @@ const actions = {
   archiveThread: () => {
     const thread = threads.find((t) => t.id === selectedId)
     if (!thread) return
+    // Archiving is retiring a thread from *your* colony. A visitor's thread is not yours to
+    // retire — it belongs to her map, and would walk straight back on the next poll anyway.
+    if (thread.colony) {
+      hud.toast(`${thread.colony}'s threads are read-only here — nothing to archive`)
+      return
+    }
     const foldedBefore = new Set(colony.dormantProjects || [])
     state.archived = [...new Set([...state.archived, thread.id])]
     state.archivedAt = { ...state.archivedAt, [thread.id]: Date.now() }
@@ -262,6 +300,23 @@ const actions = {
   },
 
   uiVisibility: (visible) => colony.setUiVisible(visible),
+
+  // ── shared colonies ────────────────────────────────────────────────────────────────
+  /** The machine's own network config, for the settings panel to render. */
+  getNetwork: () => ({ ...network() }),
+  /** Fold the live neighbour/discovery view together with the saved config. */
+  fetchNeighbors: () => fetchNeighbors(),
+  setShare: (on) => patchNetwork({ share: Boolean(on) }),
+  setColonyName: (name) => patchNetwork({ colonyName: String(name || '').slice(0, 80) }),
+  addNeighbor: ({ name, host, port }) => {
+    const clean = { name: String(name || host || '').slice(0, 80), host: String(host || '').trim(), port: Number(port) || 0 }
+    if (!clean.host || !clean.port) return
+    const neighbors = network().neighbors.filter((n) => !(n.host === clean.host && n.port === clean.port))
+    patchNetwork({ neighbors: [...neighbors, clean] })
+  },
+  removeNeighbor: (host, port) => {
+    patchNetwork({ neighbors: network().neighbors.filter((n) => !(n.host === host && n.port === port)) })
+  },
 
   // The card's bar is about the *thread*, not about how much of its building has risen —
   // those were the same number while construction was drawn by burying the structure.
@@ -393,9 +448,13 @@ function syncProject() {
     })
 
   hud.setProject({
-    name: plot.name,
+    name: plot.colony ? plot.name.replace(`${plot.colony} · `, '') : plot.name,
     accent: plot.accent,
-    path: pathForProject(plot.name),
+    // A visiting district's folder is on another machine, so there is nothing local to open,
+    // reveal or copy — the panel reads as read-only and its action buttons go quiet.
+    colony: plot.colony || '',
+    colonyOnline: plot.colonyOnline !== false,
+    path: plot.colony ? '' : pathForProject(plot.name),
     threads: list,
     selectedId,
   })

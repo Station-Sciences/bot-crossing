@@ -1,11 +1,13 @@
 import { defineConfig } from 'vite'
-import { apiMiddleware } from './server/api.mjs'
+import { apiMiddleware, initNetwork } from './server/api.mjs'
 
 /** Serves /api from inside the Vite dev server, so `npm run dev` is the whole game. */
 const api = () => ({
   name: 'bot-crossing-api',
   configureServer(server) {
     server.middlewares.use(apiMiddleware)
+    // Shared colonies work in dev exactly as in production.
+    initNetwork().catch(() => {})
   },
 })
 

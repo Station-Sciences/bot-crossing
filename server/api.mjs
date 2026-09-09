@@ -5,6 +5,9 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { openInTerminal, schemeHasHandler, schemeOf } from './lib/xdg.mjs'
 import { focusWindowOfPid } from './lib/windows.mjs'
+import { GuestServer, GUEST_PORT } from './guest.mjs'
+import { Discovery, INSTANCE_ID } from './discovery.mjs'
+import { Neighbors, cleanNeighbor } from './neighbors.mjs'
 import {
   defaultHarness,
   harnessStatus,
@@ -58,11 +61,34 @@ const emptyState = () => ({
   hiddenProjects: [],
   viewedAt: {},
   settings: null,
+  network: emptyNetwork(),
   updatedAt: 0,
 })
 
 const asObject = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {})
 const asArray = (v) => (Array.isArray(v) ? v : [])
+
+/** Sharing off, nobody added, named after whoever is logged in — the state of a fresh install. */
+function emptyNetwork() {
+  let name = ''
+  try {
+    name = os.userInfo().username
+  } catch {
+    name = os.hostname()
+  }
+  return { colonyName: name || 'colony', share: false, neighbors: [] }
+}
+
+/** The network block as the file is allowed to describe it — bad entries fall out, not in. */
+function cleanNetwork(raw) {
+  const base = emptyNetwork()
+  const net = asObject(raw)
+  return {
+    colonyName: String(net.colonyName || base.colonyName).slice(0, 80),
+    share: net.share === true,
+    neighbors: asArray(net.neighbors).map(cleanNeighbor).filter(Boolean),
+  }
+}
 
 async function readState() {
   try {
@@ -77,6 +103,7 @@ async function readState() {
       hiddenProjects: asArray(raw.hiddenProjects).map(String).filter(Boolean),
       viewedAt: asObject(raw.viewedAt),
       settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : null,
+      network: cleanNetwork(raw.network),
       updatedAt: Number(raw.updatedAt) || 0,
     }
   } catch {
@@ -112,6 +139,7 @@ async function writeState(next) {
     hiddenProjects: asArray(next.hiddenProjects).map(String).filter(Boolean),
     viewedAt: asObject(next.viewedAt),
     settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
+    network: cleanNetwork(next.network),
     updatedAt: Date.now(),
   }
   await fsp.mkdir(DATA_DIR, { recursive: true })
@@ -362,6 +390,44 @@ function readJsonBody(req, limit = 4 * 1024 * 1024) {
   })
 }
 
+// ── shared colonies ─────────────────────────────────────────────────────────────────────
+
+const neighbors = new Neighbors()
+const discovery = new Discovery()
+const guest = new GuestServer({
+  instanceId: INSTANCE_ID,
+  getName: () => currentNetwork.colonyName,
+  // Guests see the colony as its owner curates it: the same scan, with the same archived
+  // flags applied, minus anything actionable (the guest server strips that itself).
+  getThreads: async () => reconcileArchived(await scanThreads()),
+})
+
+let currentNetwork = emptyNetwork()
+
+/**
+ * Make the machinery match the colony file. Called at boot and again after every state
+ * write, so the settings panel's toggle is the only switch there is — no restart, no second
+ * source of truth. Everything here is idempotent: applying the same network twice starts
+ * nothing twice.
+ */
+function applyNetwork(network) {
+  currentNetwork = network
+  neighbors.setConfigured(network.neighbors)
+  if (network.share) {
+    guest.start()
+    discovery.setAnnounce(true, { name: network.colonyName, guestPort: guest.port })
+  } else {
+    guest.stop()
+    discovery.setAnnounce(false)
+  }
+}
+
+/** Boot wiring: read the file once, start listening for peers, honour a stored share=on. */
+export async function initNetwork() {
+  discovery.listen()
+  applyNetwork((await readState()).network)
+}
+
 /** Connect-style middleware: handles /api/*, passes everything else through. */
 export async function apiMiddleware(req, res, next) {
   const url = new URL(req.url, 'http://localhost')
@@ -377,7 +443,31 @@ export async function apiMiddleware(req, res, next) {
       // A harness that is present but cannot read its own store says so here, rather than
       // appearing healthy in the list while quietly contributing nothing.
       const warnings = (await harnessStatus()).filter((h) => h.detected && h.error).map((h) => h.error)
-      return send(res, 200, { threads, scannedAt: Date.now(), warnings })
+      // Neighbours ride along from cache — refreshed in the background, never awaited, so
+      // somebody else's sleeping laptop cannot slow this machine's own map down.
+      neighbors.refresh()
+      const visiting = neighbors.merged()
+      return send(res, 200, {
+        threads: [...threads, ...visiting.threads],
+        colonies: visiting.colonies,
+        scannedAt: Date.now(),
+        warnings,
+      })
+    }
+
+    if (url.pathname === '/api/neighbors' && req.method === 'GET') {
+      const configured = new Set(currentNetwork.neighbors.map((n) => `${n.host}:${n.port}`))
+      const discovered = discovery
+        .peers()
+        .filter((p) => !configured.has(`${p.host}:${p.guestPort}`))
+        .map((p) => ({ name: p.name, host: p.host, port: p.guestPort }))
+      return send(res, 200, {
+        network: currentNetwork,
+        colonies: neighbors.merged().colonies,
+        discovered,
+        sharing: guest.running,
+        guestPort: guest.port,
+      })
     }
 
     if (url.pathname === '/api/harnesses' && req.method === 'GET') {
@@ -411,7 +501,11 @@ export async function apiMiddleware(req, res, next) {
       return serialise(async () => {
         const current = await readState()
         if (base && current.updatedAt !== base) return send(res, 409, current)
-        return send(res, 200, await writeState(body))
+        const written = await writeState(body)
+        // The settings panel's network switches live in this same file, so a save is also
+        // the moment sharing starts or stops and the neighbour list changes.
+        applyNetwork(written.network)
+        return send(res, 200, written)
       })
     }
 

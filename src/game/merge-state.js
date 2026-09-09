@@ -127,5 +127,9 @@ export function mergeState(base, local, remote) {
     hiddenProjects: mergeSet(b.hiddenProjects, l.hiddenProjects, r.hiddenProjects),
     viewedAt: mergeMap(b.viewedAt, l.viewedAt, r.viewedAt),
     settings: l.settings && typeof l.settings === 'object' ? l.settings : r.settings ?? null,
+    // Network config is this machine's own — sharing, its colony name, the neighbours it
+    // visits. Like `settings`, local wins whole: two tabs are the same person on one machine,
+    // and field-wise merging could leave sharing half-toggled between them.
+    network: l.network && typeof l.network === 'object' ? l.network : r.network ?? null,
   }
 }

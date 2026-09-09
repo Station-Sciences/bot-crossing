@@ -250,6 +250,136 @@ export class Hud {
       this._toggle('Show FPS', 'showFps')
     )
     body.appendChild(view)
+
+    this._buildNetwork(body)
+  }
+
+  /**
+   * Shared colonies. Unlike everything above it, this section is not backed by `Settings`
+   * (per-browser render preferences) but by the colony file's `network` block and a live
+   * poll of the LAN — so it manages its own DOM and refreshes itself whenever the panel
+   * opens, rather than riding the `controls` sync.
+   */
+  _buildNetwork(body) {
+    if (!this.actions.getNetwork) return
+    const g = group('Shared colonies')
+    g.classList.add('network')
+    g.insertAdjacentHTML(
+      'beforeend',
+      `<p class="note">Share this machine's colony on your intranet, and visit your teammates'. Visiting is always read-only — you see their astronauts, you cannot touch their threads.</p>
+       <div class="row">
+         <div class="label"><span>Colony name</span><span class="hint">How you appear to others.</span></div>
+         <input class="net-name text-input" type="text" maxlength="80" spellcheck="false" placeholder="colony">
+       </div>
+       <div class="row">
+         <div class="label"><span>Share on the network</span><span class="hint net-share-hint">Off — nobody can see this colony.</span></div>
+         <button class="toggle net-share" role="switch" type="button"></button>
+       </div>
+       <div class="net-block">
+         <div class="net-head">Neighbours</div>
+         <div class="net-list net-configured"></div>
+       </div>
+       <div class="net-block net-discovered-block" hidden>
+         <div class="net-head">Found on your network</div>
+         <div class="net-list net-discovered"></div>
+       </div>
+       <div class="net-add">
+         <input class="net-host text-input" type="text" spellcheck="false" placeholder="hostname or IP">
+         <input class="net-port text-input" type="text" spellcheck="false" inputmode="numeric" placeholder="5275">
+         <button class="btn net-add-btn" type="button">Add</button>
+       </div>`
+    )
+    body.appendChild(g)
+
+    const name = g.querySelector('.net-name')
+    name.addEventListener('change', () => this.actions.setColonyName?.(name.value.trim()))
+    g.querySelector('.net-share').addEventListener('click', () => {
+      const now = Boolean(this.actions.getNetwork?.().share)
+      this.actions.setShare?.(!now)
+      this._refreshNetwork()
+    })
+    const host = g.querySelector('.net-host')
+    const port = g.querySelector('.net-port')
+    const add = () => {
+      const h = host.value.trim()
+      const p = Number(port.value.trim()) || 5275
+      if (!h) return
+      this.actions.addNeighbor?.({ name: h, host: h, port: p })
+      host.value = ''
+      port.value = ''
+      this._refreshNetwork()
+    }
+    g.querySelector('.net-add-btn').addEventListener('click', add)
+    port.addEventListener('keydown', (e) => e.key === 'Enter' && add())
+    host.addEventListener('keydown', (e) => e.key === 'Enter' && add())
+    this._net = g
+  }
+
+  /** Repaint the network section from the saved config and a fresh look at the LAN. */
+  async _refreshNetwork() {
+    const g = this._net
+    if (!g) return
+    const cfg = this.actions.getNetwork?.() || { colonyName: '', share: false, neighbors: [] }
+    const nameInput = g.querySelector('.net-name')
+    if (document.activeElement !== nameInput) nameInput.value = cfg.colonyName || ''
+    const share = g.querySelector('.net-share')
+    share.setAttribute('aria-checked', String(Boolean(cfg.share)))
+    g.querySelector('.net-share-hint').textContent = cfg.share
+      ? 'On — teammates on your network can visit this colony.'
+      : 'Off — nobody can see this colony.'
+
+    let live = { colonies: [], discovered: [] }
+    try {
+      live = await this.actions.fetchNeighbors?.()
+    } catch {
+      /* server not reachable or feature off — the saved list still renders */
+    }
+    const online = new Map((live.colonies || []).map((c) => [`${c.host}:${c.port}`, c]))
+
+    const configured = g.querySelector('.net-configured')
+    configured.innerHTML = ''
+    const neighbors = cfg.neighbors || []
+    if (!neighbors.length) {
+      configured.innerHTML = `<div class="net-empty">None yet. Add one below, or pick a discovered colony.</div>`
+    }
+    for (const n of neighbors) {
+      const state = online.get(`${n.host}:${n.port}`)
+      const on = Boolean(state?.online)
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<i class="net-dot ${on ? 'on' : 'off'}" title="${on ? 'Online' : 'Offline'}"></i>` +
+        `<span class="net-item-name">${escapeHtml(state?.name || n.name || n.host)}</span>` +
+        `<span class="net-item-addr">${escapeHtml(n.host)}:${n.port}</span>` +
+        `<button class="btn icon ghost net-remove" title="Stop visiting">${ICON.close}</button>`
+      row.querySelector('.net-remove').addEventListener('click', () => {
+        this.actions.removeNeighbor?.(n.host, n.port)
+        this._refreshNetwork()
+      })
+      configured.appendChild(row)
+    }
+
+    const discovered = (live.discovered || []).filter(
+      (d) => !neighbors.some((n) => n.host === d.host && n.port === d.port)
+    )
+    const dblock = g.querySelector('.net-discovered-block')
+    dblock.hidden = discovered.length === 0
+    const dlist = g.querySelector('.net-discovered')
+    dlist.innerHTML = ''
+    for (const d of discovered) {
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<i class="net-dot on"></i>` +
+        `<span class="net-item-name">${escapeHtml(d.name || d.host)}</span>` +
+        `<span class="net-item-addr">${escapeHtml(d.host)}:${d.port}</span>` +
+        `<button class="btn net-add-one">Add</button>`
+      row.querySelector('.net-add-one').addEventListener('click', () => {
+        this.actions.addNeighbor?.({ name: d.name, host: d.host, port: d.port })
+        this._refreshNetwork()
+      })
+      dlist.appendChild(row)
+    }
   }
 
   _row(label, hint) {
@@ -506,10 +636,12 @@ export class Hud {
     // The minute is part of the signature because `ago()` is: without it a repo where
     // nothing is happening keeps whatever "4m ago" it was first drawn with, for as long as
     // you leave the panel open.
+    const visiting = Boolean(project.colony)
     const signature =
-      `${project.name}~${project.path}~${project.accent}~${project.selectedId}~${Math.floor(Date.now() / 60000)}~` +
+      `${project.name}~${project.path}~${project.accent}~${project.selectedId}~${project.colony}~${project.colonyOnline}~${Math.floor(Date.now() / 60000)}~` +
       project.threads.map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}`).join('|')
     panel.classList.add('drilled')
+    panel.classList.toggle('visiting', visiting)
     if (this._last.project === signature) return
     this._last.project = signature
 
@@ -518,12 +650,20 @@ export class Hud {
     swatch.style.color = hex(project.accent) // the halo is `currentColor`
     this.$('.side .name').textContent = project.name
     const path = this.$('.side .path')
-    path.textContent = project.path ? shortPath(project.path) : 'folder unknown'
-    path.title = project.path || ''
-    // Nothing to open a new thread in, and nothing to reveal, without a folder on disk.
-    this.$('#btn-new-session').disabled = !project.path
-    this.$('#btn-reveal').disabled = !project.path
-    this.$('#btn-copy-path').disabled = !project.path
+    // A visiting district names its colony where a home repo names its folder.
+    if (visiting) {
+      path.textContent = `◈ on ${project.colony}'s colony${project.colonyOnline ? '' : ' · away'}`
+      path.title = `A repo on ${project.colony}'s machine — read-only`
+    } else {
+      path.textContent = project.path ? shortPath(project.path) : 'folder unknown'
+      path.title = project.path || ''
+    }
+    // A visiting district has no folder on this machine: opening a thread, revealing or
+    // copying a path all reach for something that is not here, so they are switched off.
+    this.$('#btn-new-session').disabled = visiting || !project.path
+    this.$('#btn-reveal').disabled = visiting || !project.path
+    this.$('#btn-copy-path').disabled = visiting || !project.path
+    this.$('#btn-hide-project').hidden = visiting
 
     const n = project.threads.length
     const waiting = project.threads.filter((t) => t.status === 'waiting' || t.status === 'blocked').length
@@ -590,6 +730,13 @@ export class Hud {
     const bits = [
       `<span class="tag"><i class="swatch" style="background:${hex(agent.trim.getHex())}"></i>${escapeHtml(status)}</span>`,
     ]
+    // A visiting colony's thread wears its origin, so it is never mistaken for one of yours —
+    // and the card's actions are pared back to match, since none of them can reach her machine.
+    if (thread.colony) {
+      bits.push(
+        `<span class="tag visiting" title="On ${escapeHtml(thread.colony)}'s colony — read-only${thread.colonyOnline === false ? ', currently offline' : ''}">◈ ${escapeHtml(thread.colony)}${thread.colonyOnline === false ? ' · away' : ''}</span>`
+      )
+    }
     // The repo is the panel's own heading now, so the card says what the *thread* is.
     if (thread.worktree) bits.push(`<span class="tag">⑂ ${escapeHtml(thread.worktree)}</span>`)
     if (thread.gitBranch) bits.push(`<span class="tag">${escapeHtml(thread.gitBranch)}</span>`)
@@ -605,10 +752,16 @@ export class Hud {
     // often is how a HUD starts costing frames.
     this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
     this.$('#btn-open').disabled = thread.canOpen === false
+    // A visiting thread lives on somebody else's machine: opening, archiving and marking it
+    // viewed all reach for records that are not yours, so the card drops those controls
+    // entirely and leaves only what you came to do — look.
+    const visiting = Boolean(thread.colony)
+    this.$('#btn-open').hidden = visiting
+    this.$('#btn-archive').hidden = visiting
     // Only offered when there is something to dismiss. A third button on every card would
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
-    this.$('#btn-viewed').hidden = !thread.unread
+    this.$('#btn-viewed').hidden = visiting || !thread.unread
   }
 
   /**
@@ -761,6 +914,13 @@ export class Hud {
     this.$('#btn-settings').setAttribute('aria-pressed', String(open))
     // Both live in the same slot on the right; the sidebar steps aside rather than hides.
     this.$('.side').classList.toggle('shifted', open)
+    // The network section is live — neighbours come and go on the LAN — so it refreshes while
+    // the panel is open and stops the moment it closes.
+    clearInterval(this._netTimer)
+    if (open && this._net) {
+      this._refreshNetwork()
+      this._netTimer = setInterval(() => this._refreshNetwork(), 5000)
+    }
   }
 
   toggleHelp(force) {
