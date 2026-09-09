@@ -298,7 +298,7 @@ follows this machine's own clock so the colony's light matches the light out of 
 | --- | --- |
 | **Luna**, **Mars**, **Terra** | The originals: airless, rusty, earthlike |
 | **Shoreline** | Green ground, white sand, and the sea along one side |
-| **Archipelago** | One island, a few more on the horizon, water everywhere else |
+| **Archipelago** | An island the colony's own shape, a few more on the horizon, water everywhere else |
 | **Canopy** | Jungle: broad trees, parrots, butterflies, lakes in the hollows, fireflies after dark |
 | **Dune** | Sand seas in long wind-bent ridges, cacti, heat haze |
 | **Frost** | Snow, snow-dusted pines, frozen lakes, ravens |
@@ -315,7 +315,11 @@ radius, `coast` past a line, `dunes` lays ridges over everything. Worlds with wa
 sea get their lakes for free: the crater bowls that were already there dip below the
 waterline and fill. On Cinder the water is lava, which is the same shader with a glow.
 
-Aerie is the odd one out: its ground exists only where the colony does. Every hex cell a
+Archipelago's coast is the colony's too: land is the hex footprint plus a beach, and the
+sea bed drops away past it, so claiming a tile pushes the waterline out and folding a repo
+away lets the water back in. The terrain is rebuilt when that happens.
+
+Aerie goes further: its ground exists only where the colony does. Every hex cell a
 repo holds gets a jagged plug of rock hung beneath it (`world/hexisland.js`) — a hex prism
 that twists and shrinks to a point, stalactites trailing below, the big ones under the
 middle of the island — and the terrain shader throws away every fragment more than a

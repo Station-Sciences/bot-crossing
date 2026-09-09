@@ -4,7 +4,7 @@ import { createWater } from '../world/water.js'
 import { Fauna } from '../world/fauna.js'
 import { createGrass } from '../world/grass.js'
 import { createSkyIsland } from '../world/skyisland.js'
-import { SKY_MARGIN, SKY_MAX_CELLS } from '../world/planet.js'
+import { SKY_MARGIN, SKY_MAX_CELLS, setIslandFootprint } from '../world/planet.js'
 import { createHexIsland } from '../world/hexisland.js'
 import { bendPoint } from '../core/curve.js'
 import { Sky } from '../world/sky.js'
@@ -190,6 +190,8 @@ export class Colony {
       disposeTree(this.scatterGroup)
     }
 
+    // An island world is shaped around the colony: the coast has to know the cells first.
+    if (this.planet.shape === 'island') setIslandFootprint(this._footprintCells(), PLOT_CELL)
     this.terrain = createTerrain(this.planet, this.settings.get('groundDetail'))
     this.worldGroup.add(this.terrain)
     this._buildIsland()
@@ -616,10 +618,14 @@ export class Colony {
 
     this.plotOrder = [...this.plots.values()]
     // Zones that just moved, appeared or grew are zones the scatter does not know about —
-    // nor, on a floating island, the rock under them.
+    // nor, on a floating island, the rock under them; and on an island in the sea, the
+    // coast itself moves, which is the whole terrain.
     if (this.scatterGroup && this._plotFootprint() !== this._scatterFootprint) {
-      this._buildScatter()
-      if (this.island) this._syncIslandRock()
+      if (this.planet.shape === 'island') this._buildTerrain()
+      else {
+        this._buildScatter()
+        if (this.island) this._syncIslandRock()
+      }
     }
     // Which hex cells are decked. Ground height is asked for once per moving agent per
     // frame, so it wants to be a lookup rather than a scan over every plot's every tile.

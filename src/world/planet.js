@@ -240,7 +240,7 @@ export const PLANETS = {
     },
     audio: {
       beds: [
-        { sound: 'surf', gain: 0.6 },
+        { sound: 'surf', gain: 0.6, shore: true },
         { sound: 'wind-soft', gain: 0.35 },
         { sound: 'crickets', gain: 0, night: 0.3 },
       ],
@@ -284,8 +284,8 @@ export const PLANETS = {
     },
     audio: {
       beds: [
-        { sound: 'ocean-swell', gain: 0.55 },
-        { sound: 'surf-gentle', gain: 0.4 },
+        { sound: 'ocean-swell', gain: 0.55, shore: true },
+        { sound: 'surf-gentle', gain: 0.4, shore: true },
         { sound: 'wind-soft', gain: 0.4 },
       ],
       events: [
@@ -538,9 +538,14 @@ const DETAIL_SEGMENTS = { low: 72, medium: 128, high: 190 }
 const COAST_DIR = { x: -Math.SQRT1_2, z: -Math.SQRT1_2 }
 /** How far out the land ends on a coast. Past the colony, before the far hills. */
 const COAST_OFFSET = 58
-/** The island: land to here, then a shelf that drops into the sea over the next stretch. */
+/** The island's outer islets start past here; the island itself is the colony's footprint. */
 const ISLAND_RADIUS = 60
-const ISLAND_SHELF = 36
+/** How far the beach runs out from the last hex cell before the bed drops into the sea. */
+const ISLAND_BEACH = 5
+const ISLAND_SHELF = 26
+/** The hex cells the island is built around — the colony hands them over as it grows. */
+let _islandCells = []
+let _islandReach = ISLAND_RADIUS
 /** How far under the sea the bed settles, on either shape. Deep enough to read as sea. */
 const SEA_DEPTH = 7
 /** How far past the plots a floating island's ground reaches: a grass margin, then nothing. */
@@ -706,7 +711,17 @@ function sampleHeight(x, z, field, planet) {
 
   let sea = 0 // 0 on land, 1 where the sea bed has fully taken over
   if (planet.shape === 'island') {
-    sea = THREE.MathUtils.smoothstep(dist, ISLAND_RADIUS, ISLAND_RADIUS + ISLAND_SHELF)
+    // Land is the colony's own hex footprint plus a beach, and the sea takes over past
+    // that — so a repo claiming a tile pushes the coast out, and a repo folding away lets
+    // the water back in. The waterline wanders a little so it is a coast, not a stencil.
+    let near = dist
+    for (let i = 0; i < _islandCells.length; i++) {
+      const c = _islandCells[i]
+      const d = Math.hypot(x - c.x, z - c.z)
+      if (d < near || i === 0) near = d
+    }
+    const wobble = fbm(noise, x * 0.03 + 5, z * 0.03 + 9, 2) * 6
+    sea = THREE.MathUtils.smoothstep(near + wobble, _islandReach, _islandReach + ISLAND_SHELF)
   } else if (planet.shape === 'coast') {
     const along = x * COAST_DIR.x + z * COAST_DIR.z
     // The waterline wanders, or the beach is a ruler.
@@ -1118,6 +1133,17 @@ export function shorelinePoints(planet, spacing = 10) {
   }
   _shores.set(planet.id, pts)
   return pts
+}
+
+/**
+ * Tell the island worlds which hex cells the colony holds. The field is evaluated on demand
+ * everywhere, so this only has to be set before the terrain is (re)built; the shoreline
+ * cache goes with it, since the coast has moved.
+ */
+export function setIslandFootprint(cells, cellRadius) {
+  _islandCells = cells.map((c) => ({ x: c.x, z: c.z }))
+  _islandReach = cellRadius + ISLAND_BEACH
+  _shores.clear()
 }
 
 /** Whether a world point is under this planet's water, if it has any. */
