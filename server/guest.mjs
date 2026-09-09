@@ -22,18 +22,49 @@ export function guestThread(thread) {
   return { ...rest, canOpen: false }
 }
 
+/**
+ * A socket address as a bare IPv4/IPv6 string, comparable to what a neighbour is added as.
+ * Node reports IPv4 clients over a dual-stack socket as `::ffff:192.168.0.5`, so the mapping
+ * prefix is stripped; loopback arrives as `::1` or `127.0.0.1`.
+ */
+export function normalizeIp(addr) {
+  if (!addr) return ''
+  let ip = String(addr)
+  if (ip.startsWith('::ffff:')) ip = ip.slice(7)
+  return ip
+}
+
+const isLoopback = (ip) => ip === '127.0.0.1' || ip === '::1' || ip.startsWith('127.')
+
+/**
+ * May this address read the colony? Loopback always (local page, tests), otherwise only the
+ * hosts the owner has added as neighbours — so "shared" means "shared with the colleagues I
+ * chose", not "readable by the whole LAN". Hosts added by name rather than IP will not match a
+ * raw address; discovery adds by IP, which is the path that matters.
+ */
+export function hostAllowed(remoteAddr, allowedHosts) {
+  const ip = normalizeIp(remoteAddr)
+  if (!ip) return false
+  if (isLoopback(ip)) return true
+  return (allowedHosts || []).some((h) => normalizeIp(h) === ip)
+}
+
 export class GuestServer {
   /**
    * @param getName    () → the colony's display name, read fresh per request so a rename
    *                   never needs a listener restart.
    * @param getThreads async () → the same scan the owner's page gets.
+   * @param getAllowedHosts () → the IPs allowed to read this colony: the hosts of the
+   *                   neighbours the owner has added. Loopback is always allowed. Read fresh
+   *                   per request, so adding a colleague takes effect without a restart.
    */
-  constructor({ port = GUEST_PORT, instanceId, version = '', getName, getThreads }) {
+  constructor({ port = GUEST_PORT, instanceId, version = '', getName, getThreads, getAllowedHosts }) {
     this.port = port
     this.instanceId = instanceId
     this.version = version
     this.getName = getName
     this.getThreads = getThreads
+    this.getAllowedHosts = getAllowedHosts || (() => [])
     this._server = null
   }
 
@@ -63,6 +94,11 @@ export class GuestServer {
       const json = JSON.stringify(body)
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
       res.end(json)
+    }
+    // Who is asking, before what they asked. A host that is not a configured neighbour gets
+    // 403 and never learns whether anything is shared — the allowlist is not even consulted.
+    if (!hostAllowed(req.socket?.remoteAddress, this.getAllowedHosts())) {
+      return send(403, { error: 'This colony only answers colleagues it has added' })
     }
     if (req.method !== 'GET') return send(405, { error: 'The guest API is read-only' })
     const url = new URL(req.url, 'http://guest')

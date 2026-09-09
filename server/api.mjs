@@ -404,6 +404,9 @@ const discovery = new Discovery()
 const guest = new GuestServer({
   instanceId: INSTANCE_ID,
   getName: () => currentNetwork.colonyName,
+  // Only the colleagues this colony has added may read it — mutual add, so sharing is never
+  // readable by the whole LAN. Read fresh per request so adding someone takes effect at once.
+  getAllowedHosts: () => (currentNetwork.neighbors || []).map((n) => n.host),
   // Guests see only what the owner opted to share: the same scan, archived flags applied,
   // then filtered to the allowlist — by session id or by repo name — before anything leaves.
   // An empty allowlist shares nothing, which is the whole point of opt-in.

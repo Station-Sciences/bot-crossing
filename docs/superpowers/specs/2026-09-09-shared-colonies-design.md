@@ -91,8 +91,22 @@ button, manual host:port entry.
 
 - Fetching a neighbour's own zone layout (`/guest/state`): the merged map lays guest zones out
   itself, so the endpoint is not built.
-- Transitive sharing (seeing Chantal's neighbours), auth/allowlists beyond the LAN boundary,
-  TLS: the trust model is "same intranet, opt-in, read-only socket".
+- Transitive sharing (seeing Chantal's neighbours) and TLS: the trust model is "same intranet,
+  opt-in, read-only, mutual-add".
+
+## Amendment 2026-09-09: opt-in allowlist and origin check
+
+Two tightenings landed after the first cut, both after review:
+
+- **Per-session opt-in** (`network.shared`): sharing exposes only the sessions and repos on an
+  allowlist, empty by default, so "share on" never means "share everything". Toggled by a
+  "Share with others" button on a repo and a "Share" button on a session; enforced in the guest
+  `getThreads` filter.
+- **Origin check** (`server/guest.mjs`): the guest listener answers only loopback and the hosts
+  the owner has added as neighbours, so a shared session is readable by the colleagues you chose
+  rather than by the whole LAN. This makes visiting **mutual**: to be visited, add the visitor.
+  Hosts added by name rather than IP will not match a raw remote address; discovery adds by IP,
+  which is the path that matters.
 - macOS/Linux parity concerns: everything here is plain Node networking, platform-neutral.
 
 ## Practical notes

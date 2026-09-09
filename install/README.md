@@ -3,6 +3,11 @@
 One installer does everything on a Windows PC — for a brand-new machine **and** for
 updating one that already has Bot Crossing. It needs no admin rights for the app itself.
 
+> **Already have a clone you work in?** Do not run this installer — it installs a *second*
+> copy under `%LOCALAPPDATA%\BotCrossing` with its own autostart, and both would fight over
+> port 5274. Just `git pull` in the clone you already have; the installer is for a machine
+> with nothing on it yet.
+
 ## The easy way
 
 1. Copy this whole `install` folder to the PC (a USB stick or a network share is fine).

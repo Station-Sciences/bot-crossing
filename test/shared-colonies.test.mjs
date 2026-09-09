@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { GuestServer, guestThread } from '../server/guest.mjs'
+import { GuestServer, guestThread, hostAllowed, normalizeIp } from '../server/guest.mjs'
 import { Neighbors, cleanNeighbor } from '../server/neighbors.mjs'
 import { Discovery } from '../server/discovery.mjs'
 import { allocateCells, colonyAnchor } from '../src/world/plots.js'
@@ -30,6 +30,7 @@ async function withGuest(fn) {
     instanceId: 'test-instance',
     getName: () => 'Chantal',
     getThreads: async () => [FIXTURE_THREAD],
+    getAllowedHosts: () => [], // loopback is always allowed, so the tests still reach it
   })
   guest.start()
   await new Promise((resolve) => guest._server.once('listening', resolve))
@@ -73,6 +74,25 @@ test('the guest socket answers info and threads, and nothing else', async () => 
       assert.equal((await fetch(`${base}/guest/threads`, { method })).status, 405, `${method} must be refused`)
     }
   })
+})
+
+// ── the origin check ────────────────────────────────────────────────────────────
+
+test('the guest socket answers only loopback and added neighbours', () => {
+  // Loopback, however it is spelled, always: the local page and the tests reach the socket.
+  assert.equal(hostAllowed('127.0.0.1', []), true)
+  assert.equal(hostAllowed('::1', []), true)
+  assert.equal(hostAllowed('::ffff:127.0.0.1', []), true)
+
+  // A LAN host is answered only when it is on the neighbour list.
+  const neighbours = ['192.168.55.42', 'chantal-pc']
+  assert.equal(hostAllowed('192.168.55.42', neighbours), true)
+  // Node reports a v4 client on a dual-stack socket with the ::ffff: prefix.
+  assert.equal(hostAllowed('::ffff:192.168.55.42', neighbours), true)
+  // A stranger on the same LAN is refused, even with sharing on and an allowlist set.
+  assert.equal(hostAllowed('192.168.55.99', neighbours), false)
+  assert.equal(hostAllowed('192.168.55.99', []), false)
+  assert.equal(normalizeIp('::ffff:10.0.0.1'), '10.0.0.1')
 })
 
 // ── the merge ─────────────────────────────────────────────────────────────────
