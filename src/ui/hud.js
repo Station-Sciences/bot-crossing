@@ -584,31 +584,46 @@ export class Hud {
     this.selected = { agent, thread }
     card.classList.add('on')
 
-    this.$('.thread-pop .title').textContent = thread.title || 'Untitled thread'
-    const status = STATUS_LABEL[agent.status] || agent.status
+    // An errand is not the thread it was sent from: it carries a brief instead of a title, and
+    // has no branch, model or progress of its own. Showing its parent's card here would say
+    // something true about the wrong astronaut.
+    const errand = Boolean(agent.subagent)
+    this.$('.thread-pop .title').textContent = errand
+      ? agent.task || 'Subagent'
+      : thread.title || 'Untitled thread'
+    const status = errand ? 'Subagent' : STATUS_LABEL[agent.status] || agent.status
     const meta = this.$('.thread-pop .meta')
     const bits = [
       `<span class="tag"><i class="swatch" style="background:${hex(agent.trim.getHex())}"></i>${escapeHtml(status)}</span>`,
     ]
-    // The repo is the panel's own heading now, so the card says what the *thread* is.
-    if (thread.worktree) bits.push(`<span class="tag">⑂ ${escapeHtml(thread.worktree)}</span>`)
-    if (thread.gitBranch) bits.push(`<span class="tag">${escapeHtml(thread.gitBranch)}</span>`)
-    if (thread.model) bits.push(`<span class="tag">${escapeHtml(shortModel(thread.model))}</span>`)
-    bits.push(`<span>${ago(thread.lastActivityAt)}</span>`)
+    if (errand) {
+      bits.push(`<span class="tag">${escapeHtml(thread.title || 'Untitled thread')}</span>`)
+      bits.push(`<span>${ago(agent.activeAt || thread.lastActivityAt)}</span>`)
+    } else {
+      // The repo is the panel's own heading now, so the card says what the *thread* is.
+      if (thread.worktree) bits.push(`<span class="tag">⑂ ${escapeHtml(thread.worktree)}</span>`)
+      if (thread.gitBranch) bits.push(`<span class="tag">${escapeHtml(thread.gitBranch)}</span>`)
+      if (thread.model) bits.push(`<span class="tag">${escapeHtml(shortModel(thread.model))}</span>`)
+      bits.push(`<span>${ago(thread.lastActivityAt)}</span>`)
+    }
     meta.innerHTML = bits.join('')
 
-    const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
+    const pct = errand ? 0 : Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
     this.$('.thread-pop .progress > i').style.width = `${pct}%`
     this.$('.thread-pop .progress > i').style.background = hex(agent.trim.getHex())
     // Measured once per selection rather than per frame: placing the card beside its
     // astronaut needs its size sixty times a second, and asking the layout for it that
     // often is how a HUD starts costing frames.
     this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
-    this.$('#btn-open').disabled = thread.canOpen === false
+    // Nothing here acts on an errand: there is no session to hand back, and archiving it would
+    // hide a thread nobody archived. Disabled rather than hidden, so the card does not resize
+    // as the selection moves between an astronaut and one of its subagents.
+    this.$('#btn-open').disabled = errand || thread.canOpen === false
+    this.$('#btn-archive').disabled = errand
     // Only offered when there is something to dismiss. A third button on every card would
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
-    this.$('#btn-viewed').hidden = !thread.unread
+    this.$('#btn-viewed').hidden = errand || !thread.unread
   }
 
   /**

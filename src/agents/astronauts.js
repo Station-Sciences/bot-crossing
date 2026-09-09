@@ -40,6 +40,14 @@ const AGENT_LOOK = {
   leaving: { trim: 0x6f7f75, eye: [1.0, 1.0, 1.1] },
 }
 
+/** Small enough that a cluster of them reads as one thread's fan-out rather than as more threads. */
+const SUBAGENT_SIZE = 0.45
+/**
+ * One livery whatever the errand is doing. Deliberately not the gold of `celebrating`, which the
+ * colony spends on a merged PR — a fan-out is not a celebration.
+ */
+const SUBAGENT_LOOK = { trim: 0x7f6fc9, eye: [1.5, 1.2, 3.0] }
+
 const WALK_SPEED = 2.1
 const TURN_RATE = 7.5
 /**
@@ -512,6 +520,10 @@ export class Astronauts {
       id: entry.id,
       thread: entry.thread,
       status: entry.status,
+      subagent: Boolean(entry.subagent),
+      task: entry.task || '',
+      activeAt: entry.activeAt || 0,
+      size: entry.subagent ? SUBAGENT_SIZE : 1,
       site: entry.site ? entry.site.clone() : new THREE.Vector3(),
       // The thing being worked on, and where round it this astronaut is standing to do it.
       anchor: entry.anchor ? entry.anchor.clone() : null,
@@ -596,7 +608,8 @@ export class Astronauts {
 
   /** Status change → new behaviour, new trim, new eye colour. */
   _applyStatus(agent, status) {
-    const look = AGENT_LOOK[status] || AGENT_LOOK.idle
+    let look = AGENT_LOOK[status] || AGENT_LOOK.idle
+    if (agent.subagent) look = SUBAGENT_LOOK
     agent.trim.set(look.trim)
     agent.eye.setRGB(look.eye[0], look.eye[1], look.eye[2])
     agent.loop = FACE_LOOPS[status] || null
@@ -1168,7 +1181,7 @@ export class Astronauts {
       // agent than there are slots, which is exactly when the colony would empty.
       if (i >= this.capacity) break
       if (agent.state === 'gone') continue
-      const s = agent.scale
+      const s = agent.scale * (agent.size ?? 1)
       if (s <= 0.001) continue
 
       // Root transform for the whole character. The rig is authored at 2.2 units tall, so
@@ -1272,7 +1285,7 @@ export class Astronauts {
 
     for (const agent of this.agents) {
       if (agent.scale < 0.3 || agent.state === 'gone') continue
-      v.set(agent.pos.x, agent.pos.y + (this.headHeight || 0.75), agent.pos.z).project(camera)
+      v.set(agent.pos.x, agent.pos.y + (this.headHeight || 0.75) * (agent.size ?? 1), agent.pos.z).project(camera)
       if (v.z > 1) continue // behind the camera
       agent.screen.copy(v)
       const dx = (v.x - ndcX) * aspect
@@ -1328,6 +1341,7 @@ export class Astronauts {
   }
 
   setHover(agent) {
+    if (agent) this.hoverRing.scale.setScalar(agent.size ?? 1)
     this.hoverRing.visible = Boolean(agent)
     if (agent) this.hoverRing.position.set(agent.pos.x, agent.pos.y + 0.03, agent.pos.z)
   }
@@ -1346,7 +1360,7 @@ export class Astronauts {
         this.selectRing.position.set(a.pos.x, a.pos.y + 0.035, a.pos.z)
         this.selectRing.rotation.y = elapsed * 0.6
         const s = 1 + Math.sin(elapsed * 3) * 0.05
-        this.selectRing.scale.setScalar(s)
+        this.selectRing.scale.setScalar(s * (a.size ?? 1))
       }
     }
     if (this.hoverRing.visible) this.hoverRing.rotation.y = -elapsed * 0.4

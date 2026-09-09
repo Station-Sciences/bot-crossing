@@ -177,7 +177,7 @@ const actions = {
    * behaviour you actually want and the reason this is a timestamp rather than a flag.
    */
   markViewed: () => {
-    const thread = threads.find((t) => t.id === selectedId)
+    const thread = actionableThread()
     if (!thread) return
     state.viewedAt = { ...(state.viewedAt || {}), [thread.id]: Date.now() }
     queueSave()
@@ -223,7 +223,7 @@ const actions = {
   },
 
   openThread: async () => {
-    const thread = threads.find((t) => t.id === selectedId)
+    const thread = actionableThread()
     if (!thread) return
     try {
       await openThread(thread)
@@ -240,7 +240,7 @@ const actions = {
   // the astronaut walks back to the ship. The harness's own records are never touched — see
   // `reconcileArchived` in server/api.mjs for why that stopped being worth doing.
   archiveThread: () => {
-    const thread = threads.find((t) => t.id === selectedId)
+    const thread = actionableThread()
     if (!thread) return
     const foldedBefore = new Set(colony.dormantProjects || [])
     state.archived = [...new Set([...state.archived, thread.id])]
@@ -278,6 +278,20 @@ hud.setSideWidth(sideWidth())
 window.addEventListener('resize', () => hud.setSideWidth(sideWidth()))
 
 // ── selection ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * The thread the card's actions apply to, or null when a subagent is selected. An errand has no
+ * session of its own to open, archive or dismiss, and silently doing nothing is how a button
+ * teaches somebody that the whole card is broken.
+ */
+function actionableThread() {
+  const thread = threads.find((t) => t.id === selectedId)
+  if (thread) return thread
+  if (selectedId && colony.agentFor(selectedId)?.subagent) {
+    hud.toast('That is a subagent — select the thread that sent it')
+  }
+  return null
+}
 
 function select(id, { fly = false } = {}) {
   selectedId = id

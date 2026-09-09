@@ -45,6 +45,11 @@ const STALE_MS = 3 * 24 * 60 * 60 * 1000
 const AGENT_RADIUS = 0.26
 /** Progress a live thread adds per second, so a working site visibly grows while you watch. */
 const LIVE_GROWTH = 0.004
+/**
+ * How many subagents one thread may show at once. A wide fan-out is a detail of how somebody
+ * split their work, not something the colony owes the map in full.
+ */
+const MAX_SUBAGENTS = 4
 /** How many zones' positions to remember, including repos with nothing running in them. */
 const LAYOUT_MEMORY = 80
 
@@ -317,6 +322,9 @@ export class Colony {
     }
 
     const roster = []
+    // Subagents ride at the end of the roster on purpose: `setRoster` truncates at `maxAgents`
+    // — 40 on the lowest preset — and an errand must never push a real thread off the map.
+    const entourage = []
     const seenBuildings = new Set()
     const stats = { agents: 0, projects: projects.length }
     for (const key of STATUS_ORDER) stats[key] = 0
@@ -343,17 +351,32 @@ export class Colony {
         const building = this._syncBuilding(thread, plot, i)
         seenBuildings.add(thread.id)
 
+        const site = this._workSite(plot, building, i)
         roster.push({
           id: thread.id,
           thread,
           status,
-          site: this._workSite(plot, building, i),
+          site,
           // Where the work actually is. A working astronaut circles it rather than standing
           // at one spot, so it needs the building, not just a place to stand near it.
           anchor: building.mesh.position.clone(),
           // Already on the colony's books, so it does not need an entrance.
           known: knownIds.has(thread.id),
         })
+
+        for (const sub of (thread.subagents || []).slice(0, MAX_SUBAGENTS)) {
+          entourage.push({
+            id: `${thread.id}/${sub.id}`,
+            thread,
+            status: 'working',
+            subagent: true,
+            task: sub.task,
+            activeAt: sub.lastActivityAt,
+            site,
+            anchor: building.mesh.position.clone(),
+            known: true,
+          })
+        }
       })
     }
 
@@ -368,7 +391,7 @@ export class Colony {
     this.activePlots = active
     this._rebuildNavigation()
     this.stats = { ...stats, done: stats.celebrating }
-    this.astronauts.setRoster(roster, this._world())
+    this.astronauts.setRoster([...roster, ...entourage], this._world())
     return this.stats
   }
 
@@ -753,6 +776,8 @@ export class Colony {
   }
 
   _badgeFor(agent) {
+    // An errand has no state of its own to report; its parent's badge already speaks for it.
+    if (agent.subagent) return BADGE.none
     if (agent.state === 'spawning') return BADGE.spawning
     if (agent.state === 'leaving') return BADGE.leaving
     // Badges only appear once an astronaut has actually reached its post — a stream of
@@ -768,6 +793,9 @@ export class Colony {
 
     for (const agent of this.astronauts.agents) {
       if (agent.scale < 0.5) continue
+      // Half-size bodies throwing full-size sparks read as a rendering fault, and the parent is
+      // already emitting for the same building.
+      if (agent.subagent) continue
       // What this one is standing on, which on a plot is the deck rather than the terrain
       // under it. Everything thrown off an astronaut has to land back on the same surface.
       const ground = agent.groundY || 0
