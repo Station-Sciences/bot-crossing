@@ -92,3 +92,10 @@ export const openThread = (thread) => post('/api/open', { harness: thread.harnes
 export const newSession = (folder, harness) => post('/api/new-session', { folder, harness })
 
 export const revealFolder = (folder) => post('/api/reveal', { folder })
+
+/**
+ * The state of shared colonies: the machine's own network config, whichever neighbours are
+ * currently reachable, and any not-yet-added colonies discovered on the LAN. Read fresh
+ * whenever the settings panel opens — it changes as machines come and go.
+ */
+export const fetchNeighbors = () => req('/api/neighbors')

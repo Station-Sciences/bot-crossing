@@ -1,9 +1,14 @@
 import fsp from 'node:fs/promises'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { openInTerminal, schemeHasHandler, schemeOf } from './lib/xdg.mjs'
+import { focusWindowOfPid } from './lib/windows.mjs'
+import { GuestServer, GUEST_PORT } from './guest.mjs'
+import { Discovery, INSTANCE_ID } from './discovery.mjs'
+import { Neighbors, cleanNeighbor } from './neighbors.mjs'
 import {
   defaultHarness,
   harnessStatus,
@@ -57,11 +62,41 @@ const emptyState = () => ({
   hiddenProjects: [],
   viewedAt: {},
   settings: null,
+  network: emptyNetwork(),
   updatedAt: 0,
 })
 
 const asObject = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {})
 const asArray = (v) => (Array.isArray(v) ? v : [])
+
+/** Sharing off, nobody added, named after whoever is logged in — the state of a fresh install. */
+function emptyNetwork() {
+  let name = ''
+  try {
+    name = os.userInfo().username
+  } catch {
+    name = os.hostname()
+  }
+  return { colonyName: name || 'colony', share: false, neighbors: [], shared: [] }
+}
+
+/**
+ * The network block as the file is allowed to describe it — bad entries fall out, not in.
+ *
+ * `shared` is the opt-in allowlist: the ids of sessions, and the names of repos, that this
+ * colony hands out to visitors. Empty means nothing is shared even when `share` is on, which
+ * is the safe default — a session is never exposed until it is named here.
+ */
+function cleanNetwork(raw) {
+  const base = emptyNetwork()
+  const net = asObject(raw)
+  return {
+    colonyName: String(net.colonyName || base.colonyName).slice(0, 80),
+    share: net.share === true,
+    neighbors: asArray(net.neighbors).map(cleanNeighbor).filter(Boolean),
+    shared: [...new Set(asArray(net.shared).map(String).filter(Boolean))].slice(0, 2000),
+  }
+}
 
 async function readState() {
   try {
@@ -76,6 +111,7 @@ async function readState() {
       hiddenProjects: asArray(raw.hiddenProjects).map(String).filter(Boolean),
       viewedAt: asObject(raw.viewedAt),
       settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : null,
+      network: cleanNetwork(raw.network),
       updatedAt: Number(raw.updatedAt) || 0,
     }
   } catch {
@@ -111,6 +147,7 @@ async function writeState(next) {
     hiddenProjects: asArray(next.hiddenProjects).map(String).filter(Boolean),
     viewedAt: asObject(next.viewedAt),
     settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
+    network: cleanNetwork(next.network),
     updatedAt: Date.now(),
   }
   await fsp.mkdir(DATA_DIR, { recursive: true })
@@ -175,8 +212,15 @@ async function resolveFolder(folder) {
 }
 
 /**
- * Show a harness's answer to "open this" — `{ ok, url, command }` — and say truthfully whether
- * anything happened.
+ * Show a harness's answer to "open this" — `{ ok, url, command, pid }` — and say truthfully
+ * whether anything happened.
+ *
+ * A `pid` names a live process whose thread already has a window on this machine — a session
+ * running in a terminal right now. Fronting that window is tried before anything else, because
+ * the URL fallback for exactly these threads is `resume`, which imports the transcript into the
+ * desktop app as a second, untitled session. Only when no window can be found (the terminal is
+ * on another desktop, the process is detached, the walk found only the Claude app itself) does
+ * the URL run as before.
  *
  * macOS and Windows hand the URL to the opener exactly as before: a scheme the harness's app
  * registers is always answered there, so nothing is probed. Linux is the platform where the URL
@@ -193,6 +237,8 @@ async function resolveFolder(folder) {
 async function present(result) {
   // Only the reason reaches the page: a failure may still carry the adapter's command.
   if (!result || !result.ok) return { ok: false, error: result?.error || 'Nothing to open' }
+
+  if (result.pid && (await focusWindowOfPid(result.pid))) return { ok: true, focused: true }
 
   if (process.platform !== 'linux') {
     if (!result.url) return { ok: false, error: 'That harness has no deep link to open on this platform' }
@@ -352,6 +398,104 @@ function readJsonBody(req, limit = 4 * 1024 * 1024) {
   })
 }
 
+// ── shared colonies ─────────────────────────────────────────────────────────────────────
+
+const neighbors = new Neighbors()
+const discovery = new Discovery()
+const guest = new GuestServer({
+  instanceId: INSTANCE_ID,
+  getName: () => currentNetwork.colonyName,
+  // Only the colleagues this colony has added may read it — mutual add, so sharing is never
+  // readable by the whole LAN. Read fresh per request so adding someone takes effect at once.
+  getAllowedHosts: () => (currentNetwork.neighbors || []).map((n) => n.host),
+  // Guests see only what the owner opted to share: the same scan, archived flags applied,
+  // then filtered to the allowlist — by session id or by repo name — before anything leaves.
+  // An empty allowlist shares nothing, which is the whole point of opt-in.
+  getThreads: async () => {
+    const all = await reconcileArchived(await scanThreads())
+    const shared = new Set(currentNetwork.shared || [])
+    if (!shared.size) return []
+    return all.filter((t) => shared.has(t.id) || shared.has(t.project))
+  },
+})
+
+let currentNetwork = emptyNetwork()
+
+/**
+ * Make the machinery match the colony file. Called at boot and again after every state
+ * write, so the settings panel's toggle is the only switch there is — no restart, no second
+ * source of truth. Everything here is idempotent: applying the same network twice starts
+ * nothing twice.
+ */
+function applyNetwork(network) {
+  currentNetwork = network
+  neighbors.setConfigured(network.neighbors)
+  if (network.share) {
+    guest.start()
+    discovery.setAnnounce(true, { name: network.colonyName, guestPort: guest.port })
+  } else {
+    guest.stop()
+    discovery.setAnnounce(false)
+  }
+}
+
+/**
+ * Keep the network sockets alive without a human toggling anything.
+ *
+ * Sleep, a Wi-Fi drop or an IP change can leave the guest listener or the discovery socket
+ * dead — and before this the only cure was switching sharing off and on, on *both* machines,
+ * because the sharer's socket had quietly died. This tick re-asserts the intended state every
+ * `RECONCILE_MS`: it rebinds discovery, heals a dropped guest listener, and re-announces, all
+ * idempotent so a healthy machine does nothing. The visitor side already recovers on its own —
+ * its neighbour poll retries every few seconds — so once the sharer's socket is back, the
+ * district returns without anyone touching a switch.
+ */
+const RECONCILE_MS = 15 * 1000
+
+/**
+ * Actually connect to a local TCP port, briefly, to prove it still accepts connections.
+ * `server.listening` lies after the machine sleeps — the socket claims to be up while nothing
+ * reaches it — so the only honest check is to open a connection and see if it lands. Resolves
+ * true on connect, false on error or timeout.
+ */
+function probePort(port, timeout = 1000) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port })
+    let done = false
+    const finish = (ok) => {
+      if (done) return
+      done = true
+      socket.destroy()
+      resolve(ok)
+    }
+    socket.setTimeout(timeout)
+    socket.once('connect', () => finish(true))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+  })
+}
+
+async function reconcileNetwork() {
+  if (!currentNetwork) return
+  discovery.listen() // no-op if the socket is up; rebinds if it dropped
+  if (currentNetwork.share) {
+    // A dropped listener heals; a listener that only *looks* alive (post-sleep) is caught by
+    // probing the port for real and force-restarting when nothing answers.
+    if (guest.needsHeal) guest.start()
+    else if (guest.running && !(await probePort(guest.port))) guest.restart()
+    discovery.setAnnounce(true, { name: currentNetwork.colonyName, guestPort: guest.port })
+  }
+}
+
+/** Boot wiring: read the file once, start listening for peers, honour a stored share=on. */
+export async function initNetwork() {
+  discovery.listen()
+  applyNetwork((await readState()).network)
+  clearInterval(reconcileNetwork._timer)
+  reconcileNetwork._timer = setInterval(reconcileNetwork, RECONCILE_MS)
+  reconcileNetwork._timer.unref?.()
+}
+
 /** Connect-style middleware: handles /api/*, passes everything else through. */
 export async function apiMiddleware(req, res, next) {
   const url = new URL(req.url, 'http://localhost')
@@ -367,7 +511,37 @@ export async function apiMiddleware(req, res, next) {
       // A harness that is present but cannot read its own store says so here, rather than
       // appearing healthy in the list while quietly contributing nothing.
       const warnings = (await harnessStatus()).filter((h) => h.detected && h.error).map((h) => h.error)
-      return send(res, 200, { threads, scannedAt: Date.now(), warnings })
+      // Neighbours ride along from cache — refreshed in the background, never awaited, so
+      // somebody else's sleeping laptop cannot slow this machine's own map down.
+      neighbors.refresh()
+      const visiting = neighbors.merged()
+      return send(res, 200, {
+        threads: [...threads, ...visiting.threads],
+        colonies: visiting.colonies,
+        scannedAt: Date.now(),
+        warnings,
+      })
+    }
+
+    if (url.pathname === '/api/neighbors' && req.method === 'GET') {
+      const configured = new Set(currentNetwork.neighbors.map((n) => `${n.host}:${n.port}`))
+      const discovered = discovery
+        .peers()
+        .filter((p) => !configured.has(`${p.host}:${p.guestPort}`))
+        .map((p) => ({ name: p.name, host: p.host, port: p.guestPort }))
+      // Strangers who tried to read us but are not on the list — the answer to "I added their
+      // IP but they still can't get in" when a VPN presents a different address than expected.
+      const refused = guest.running
+        ? guest.recentRefused().filter((r) => !configured.has(`${r.host}:${guest.port}`))
+        : []
+      return send(res, 200, {
+        network: currentNetwork,
+        colonies: neighbors.merged().colonies,
+        discovered,
+        refused,
+        sharing: guest.running,
+        guestPort: guest.port,
+      })
     }
 
     if (url.pathname === '/api/harnesses' && req.method === 'GET') {
@@ -401,7 +575,11 @@ export async function apiMiddleware(req, res, next) {
       return serialise(async () => {
         const current = await readState()
         if (base && current.updatedAt !== base) return send(res, 409, current)
-        return send(res, 200, await writeState(body))
+        const written = await writeState(body)
+        // The settings panel's network switches live in this same file, so a save is also
+        // the moment sharing starts or stops and the neighbour list changes.
+        applyNetwork(written.network)
+        return send(res, 200, written)
       })
     }
 

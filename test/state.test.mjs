@@ -25,6 +25,15 @@ test('a removal survives the merge — a plain union would resurrect it', () => 
   assert.deepEqual(out.archived, ['t2'])
 })
 
+test('network config takes the local tab whole, like settings — never half a share toggle', () => {
+  const base = { network: { colonyName: 'Dimitri', share: false, neighbors: [] } }
+  const local = { network: { colonyName: 'Dimitri', share: true, neighbors: [{ name: 'Chantal', host: 'c-pc', port: 5275 }] } }
+  const remote = { network: { colonyName: 'Dimitri', share: false, neighbors: [] } }
+  const out = mergeState(base, local, remote)
+  assert.equal(out.network.share, true)
+  assert.equal(out.network.neighbors.length, 1)
+})
+
 test('two tabs moving different zones both keep their move', () => {
   const out = mergeState(
     { plots: { a: [[0, 0]], b: [[1, 1]] } },

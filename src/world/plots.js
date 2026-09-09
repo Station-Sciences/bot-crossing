@@ -83,6 +83,11 @@ function hexToWorld(q, r, size = CELL) {
   return { x: size * 1.5 * q, z: size * Math.sqrt(3) * (r + q / 2) }
 }
 
+/** The world XZ of a cell's centre — so the colony can sample terrain height under a plot. */
+export function cellWorld(q, r) {
+  return hexToWorld(q, r)
+}
+
 /**
  * The inverse: which cell a world point falls in. Exact rather than nearest-centre, because
  * it decides whether something is standing on a plot's raised deck or on bare ground, and a
@@ -126,6 +131,19 @@ function hexRing(radius) {
 
 const cellsNeeded = (threadCount) =>
   Math.max(1, Math.min(MAX_CELLS, Math.ceil(threadCount / SLOTS_PER_CELL)))
+
+/**
+ * Where a visiting colony pitches its district: a fixed cell on a ring well outside the home
+ * zones, picked by the colony's name so the same neighbour always lands on the same ground —
+ * across polls, reloads and machines. The gap of bare terrain between ring ~4 and here is
+ * deliberate: a district you walk to reads as somebody else's settlement, not as your own
+ * colony growing a lobe.
+ */
+const ANCHOR_RING = 5
+export function colonyAnchor(name) {
+  const ring = hexRing(ANCHOR_RING)
+  return ring[hashString(`colony:${name}`) % ring.length]
+}
 
 /** Hex distance in axial coordinates: the cube distance, halved. */
 function hexDistance(a, b) {
@@ -173,9 +191,14 @@ function hexDistance(a, b) {
  * The ship's cell counts as walkable here even though nobody may claim it: a colony that
  * happens to wrap around the ship is not two colonies.
  */
-function isConnected(out) {
+function isConnected(out, anchored = new Set()) {
   const cells = new Map()
-  for (const [, list] of out) for (const c of list) cells.set(key(c.q, c.r), c)
+  // Anchored zones are *meant* to be islands — a visiting colony's district sits out past
+  // the home zones by design — so they neither have to be reached nor count as unreachable.
+  for (const [id, list] of out) {
+    if (anchored.has(id)) continue
+    for (const c of list) cells.set(key(c.q, c.r), c)
+  }
   if (cells.size < 2) return true
   const ship = key(SHIP_CELL.q, SHIP_CELL.r)
   const passable = new Set([...cells.keys(), ship])
@@ -199,17 +222,18 @@ function isConnected(out) {
 }
 
 export function allocateCells(projects, previous = new Map()) {
+  const anchored = new Set(projects.filter((p) => p.anchor).map((p) => p.id))
   const laid = layOut(projects, previous)
   // Remembering where a zone sat is worth a great deal, right up until it leaves the colony
   // as scattered islands. Then the memory is describing a map that no longer exists, and
   // starting over — compact, from the middle, the way a first run does it — is the lesser
   // upheaval. It only happens when the alternative is visibly broken.
-  return isConnected(laid) ? laid : layOut(projects, new Map())
+  return isConnected(laid, anchored) ? laid : layOut(projects, new Map())
 }
 
 function layOut(projects, previous) {
   const reserved = key(SHIP_CELL.q, SHIP_CELL.r)
-  const wanted = projects.map((p) => ({ id: p.id, want: cellsNeeded(p.size) }))
+  const wanted = projects.map((p) => ({ id: p.id, want: cellsNeeded(p.size), anchor: p.anchor || null }))
   const total = wanted.reduce((n, w) => n + w.want, 0)
 
   // Spiral order decides where a *new* project settles. The pool runs past what is needed
@@ -224,8 +248,11 @@ function layOut(projects, previous) {
   let farthest = 0
   for (const project of projects) {
     for (const cell of previous.get(project.id) || []) farthest = Math.max(farthest, hexDistance(cell, ORIGIN))
+    // An anchored district sits out past the home zones, so the pool has to reach it — plus
+    // a ring of slack for the district to grow into.
+    if (project.anchor) farthest = Math.max(farthest, hexDistance(project.anchor, ORIGIN) + 2)
   }
-  for (let ring = 0; (pool.length < total + 30 || ring <= farthest) && ring < 12; ring++) {
+  for (let ring = 0; (pool.length < total + 30 || ring <= farthest) && ring < ANCHOR_RING + 5; ring++) {
     for (const cell of hexRing(ring)) {
       const k = key(cell.q, cell.r)
       if (k === reserved) continue
@@ -234,8 +261,13 @@ function layOut(projects, previous) {
     }
   }
 
+  // How far an anchored zone's remembered root may sit from its colony's anchor before the
+  // memory is thrown away and it re-seeds by the anchor. A visiting colony's repos are meant to
+  // read as one district; a plot that was placed before its colony was known — or under an
+  // older anchor — stays stranded across the map otherwise, which is exactly what this catches.
+  const DISTRICT_DRIFT = 3
   const held = new Map()
-  for (const { id, want } of wanted) {
+  for (const { id, want, anchor } of wanted) {
     const before = previous.get(id)
     if (!before || !before.length) continue
     // The root cell is the whole point — it is the zone's origin, and everything standing
@@ -243,6 +275,9 @@ function layOut(projects, previous) {
     // the root is gone this project is seeded afresh rather than quietly re-rooted onto
     // whichever of its old cells happens to still be free.
     if (!free.has(key(before[0].q, before[0].r))) continue
+    // A district member whose memory drifted far from the anchor is re-seeded, so a stale
+    // placement cannot hold a repo out on its own away from the rest of its colony.
+    if (anchor && hexDistance(before[0], anchor) > DISTRICT_DRIFT) continue
     const keep = []
     for (const cell of before) {
       if (keep.length >= want) break // shrunk: whatever it claimed last is what it gives up
@@ -257,31 +292,54 @@ function layOut(projects, previous) {
   const out = new Map()
   // Anybody who was already here grows first, so a newcomer cannot take the cell a zone
   // was about to expand into while its own seed is still free.
-  for (const { id, want } of wanted) {
+  for (const { id, want, anchor } of wanted) {
     const cells = held.get(id)
     if (!cells) continue
-    growBlob(cells, want, free)
+    growBlob(cells, want, free, anchor)
     out.set(id, cells)
   }
 
-  for (const { id, want } of wanted) {
+  for (const { id, want, anchor } of wanted) {
     if (out.has(id)) continue
-    const seed = pool.find((c) => free.has(key(c.q, c.r)))
+    // A home project settles on the innermost free cell; an anchored one settles as close to
+    // its colony's anchor as the ground allows, which is what pulls a neighbour's repos into
+    // one district instead of scattering them through the home zones.
+    const seed = anchor
+      ? nearestFree(pool, free, anchor)
+      : pool.find((c) => free.has(key(c.q, c.r)))
     if (!seed) {
       out.set(id, [])
       continue
     }
     free.delete(key(seed.q, seed.r))
     const cells = [{ q: seed.q, r: seed.r }]
-    growBlob(cells, want, free)
+    growBlob(cells, want, free, anchor)
     out.set(id, cells)
   }
   return out
 }
 
+/** The free pool cell nearest a point — the anchored counterpart of "first in the spiral". */
+function nearestFree(pool, free, to) {
+  let best = null
+  let bestD = Infinity
+  for (const c of pool) {
+    if (!free.has(key(c.q, c.r))) continue
+    const d = hexDistance(c, to)
+    if (d < bestD) {
+      bestD = d
+      best = c
+    }
+  }
+  return best
+}
+
 /** Claim free neighbours until the blob is big enough, hugging its root cell first. */
-function growBlob(cells, want, free) {
+function growBlob(cells, want, free, anchor = null) {
   const root = cells[0]
+  // Growth leans toward the middle of whatever this zone belongs to: the colony's origin for
+  // a home zone, the district's anchor for a visiting one.
+  const pull = anchor || ORIGIN
   while (cells.length < want) {
     let best = null
     let bestScore = Infinity
@@ -290,7 +348,7 @@ function growBlob(cells, want, free) {
         const n = { q: c.q + dq, r: c.r + dr }
         if (!free.has(key(n.q, n.r))) continue
         // Hug the root first, then the middle of the colony, so blobs come out compact.
-        const score = hexDistance(n, root) * 100 + hexDistance(n, ORIGIN)
+        const score = hexDistance(n, root) * 100 + hexDistance(n, pull)
         if (score < bestScore) {
           bestScore = score
           best = n
@@ -406,13 +464,20 @@ function hexPrism(radius, height) {
 // ── plot mesh ─────────────────────────────────────────────────────────────────────────
 
 export class Plot {
-  constructor({ id, name, index, cells, accent }) {
+  constructor({ id, name, index, cells, accent, groundY = 0 }) {
     this.id = id
     this.name = name
     this.index = index
     this.cells = cells
     this.accent = accent
     this.cellKeys = new Set(cells.map((c) => key(c.q, c.r)))
+    /**
+     * The terrain height the whole slab sits on. Near the ship this is ~0 and changes nothing,
+     * but a visiting colony's district is anchored far out where the ground rolls, and a slab
+     * pinned to y=0 there floats over a dip or is swallowed by a rise. Everything on the plot —
+     * deck, border, buildings, the crew's footing — is measured up from this.
+     */
+    this.groundY = groundY
 
     // The plot's origin is its **root** tile — the one it was seeded on and never gives up
     // — rather than the centroid of whatever cells it holds this minute. A zone that gains
@@ -446,7 +511,7 @@ export class Plot {
     this.radius = CELL * Math.sqrt(cells.length)
 
     this.group = new THREE.Group()
-    this.group.position.copy(this.center)
+    this.group.position.set(this.center.x, this.groundY, this.center.z)
     this.group.name = `plot:${id}`
 
     this._buildDeck()
@@ -670,8 +735,10 @@ export class Plot {
   }
 
   worldSlot(index, out = new THREE.Vector3()) {
+    // Buildings live in world space, not under the plot group, so the slab's own ground height
+    // has to be added back in here or a sunk district's buildings hang in the air above it.
     const s = this.slotFor(index)
-    return out.set(this.center.x + s.x, DECK_TOP, this.center.z + s.z)
+    return out.set(this.center.x + s.x, this.groundY + DECK_TOP, this.center.z + s.z)
   }
 
   /** Night lighting, plus a pulse on the border when this plot holds something urgent. */
@@ -779,6 +846,86 @@ export function createLabel(text, accent, pixelRatio = 4) {
   }
   const mesh = new THREE.Mesh(geo, mat)
   mesh.renderOrder = 8
+  mesh.frustumCulled = false
+  mesh.visible = false
+  mesh.userData.dispose = () => {
+    texture.dispose()
+    geo.dispose()
+    mat.dispose()
+  }
+  return mesh
+}
+
+/**
+ * A district banner: a bigger, bolder version of a name plate, floating over a visiting
+ * colony's cluster of plots. Same billboarding as `createLabel`, scaled up so it reads as the
+ * heading over a whole neighbourhood rather than a single zone's plate, with a leading glyph
+ * that marks the district as a visitor's.
+ */
+export function createBanner(text, accent, pixelRatio = 4) {
+  const fontSize = 46
+  const font = `600 ${fontSize}px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif`
+  const pad = 20
+  const prefix = '◈ '
+  const label = prefix + text
+
+  const measure = document.createElement('canvas').getContext('2d')
+  measure.font = font
+  const textWidth = Math.ceil(measure.measureText(label).width)
+
+  const canvas = document.createElement('canvas')
+  const w = textWidth + pad * 2
+  const h = fontSize + pad * 2
+  canvas.width = Math.ceil(w * pixelRatio)
+  canvas.height = Math.ceil(h * pixelRatio)
+  const c = canvas.getContext('2d')
+  c.scale(pixelRatio, pixelRatio)
+
+  c.font = font
+  c.textAlign = 'left'
+  c.textBaseline = 'middle'
+  const midY = h / 2
+  c.shadowColor = 'rgba(0,0,0,0.9)'
+  c.shadowBlur = 12
+  c.fillStyle = 'rgba(0,0,0,0.92)'
+  for (let i = 0; i < 3; i++) c.fillText(label, pad, midY)
+  c.shadowBlur = 0
+  // The visitor glyph takes the accent; the name stays bright so it reads at distance.
+  c.fillStyle = '#' + new THREE.Color(accent).getHexString()
+  c.fillText(prefix, pad, midY)
+  c.fillStyle = '#f4f2ee'
+  c.fillText(text, pad + Math.ceil(c.measureText(prefix).width), midY)
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.minFilter = THREE.LinearMipmapLinearFilter
+  texture.magFilter = THREE.LinearFilter
+  texture.generateMipmaps = true
+  texture.anisotropy = 8
+
+  const height = 0.95
+  const geo = new THREE.PlaneGeometry(height * (w / h), height)
+  const mat = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+    opacity: 0,
+  })
+  // A touch larger on screen than a plate, and it shrinks less with distance so it stays the
+  // heading you can pick the district out by from across the colony.
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace(
+      '#include <project_vertex>',
+      `vec4 mvPosition = modelViewMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
+       float dist = -mvPosition.z;
+       mvPosition.xy += position.xy * ( 0.85 + dist * 0.045 );
+       gl_Position = projectionMatrix * mvPosition;`
+    )
+  }
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.renderOrder = 9
   mesh.frustumCulled = false
   mesh.visible = false
   mesh.userData.dispose = () => {

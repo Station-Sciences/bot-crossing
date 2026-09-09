@@ -2,7 +2,7 @@ import http from 'node:http'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { apiMiddleware } from './api.mjs'
+import { apiMiddleware, initNetwork } from './api.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.join(here, '..', 'dist')
@@ -60,4 +60,9 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Bot Crossing → http://${HOST}:${PORT}`)
+})
+
+// Shared colonies: start listening for neighbours, and resume sharing if it was left on.
+initNetwork().catch(() => {
+  /* a machine that cannot open the sockets still gets its own colony */
 })

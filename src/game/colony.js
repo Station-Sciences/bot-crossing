@@ -4,8 +4,11 @@ import { Sky } from '../world/sky.js'
 import {
   Plot,
   allocateCells,
+  colonyAnchor,
+  cellWorld,
   shipPosition,
   createLabel,
+  createBanner,
   hashString,
   worldToHex,
   DECK_TOP,
@@ -122,6 +125,8 @@ export class Colony {
 
     this.plots = new Map()
     this.plotOrder = []
+    /** colony name → floating district banner, for visiting colonies only. */
+    this.colonyBanners = new Map()
     /**
      * Where every zone sits, kept across polls *and* across the departures of the threads
      * that made it: a repo whose last session you archive comes back to the same ground
@@ -269,11 +274,18 @@ export class Colony {
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
     const byProject = new Map()
+    // Which visiting colony a project belongs to, if any — read off the guest threads, whose
+    // project name the server already prefixed with the colony's. A home repo has no entry.
+    const projectColony = new Map()
     for (const thread of live) {
       const key = thread.project || 'unknown'
       if (!byProject.has(key)) byProject.set(key, [])
       byProject.get(key).push(thread)
+      if (thread.colony && !projectColony.has(key)) {
+        projectColony.set(key, { colony: thread.colony, online: thread.colonyOnline !== false })
+      }
     }
+    this.projectColony = projectColony
     /**
      * Repos where nothing has stirred in days, folded away on request.
      *
@@ -376,8 +388,14 @@ export class Colony {
     // The previous layout is an input, so a zone only moves when its own footprint changes
     // — never because a different repo gained or lost a thread. `plotCells` carries it
     // between polls, and the colony file carries it between sessions.
+    const colonyOf = this.projectColony || new Map()
     const layout = allocateCells(
-      projects.map(([name, list]) => ({ id: name, size: list.length })),
+      projects.map(([name, list]) => {
+        const visiting = colonyOf.get(name)
+        // A visiting colony's repos anchor to that colony's district out past the home zones,
+        // so they cluster together and read as somebody else's settlement.
+        return { id: name, size: list.length, anchor: visiting ? colonyAnchor(visiting.colony) : null }
+      }),
       this.plotCells
     )
     // Remembered, not replaced: a project that has just lost its last thread keeps its
@@ -409,28 +427,90 @@ export class Colony {
       if (this.plots.has(name)) return
       const cells = layout.get(name)
       if (!cells?.length) return
+      const visiting = colonyOf.get(name)
       const accent = this._pickAccent(name)
-      const plot = new Plot({ id: name, name, index, cells, accent })
+      // Sit the slab on the terrain under its root cell. Near the ship that is ~0; a visiting
+      // district anchored far out lands on whatever the ground does there, instead of floating.
+      const root = cellWorld(cells[0].q, cells[0].r)
+      const groundY = terrainHeight(root.x, root.z, this.planet)
+      const plot = new Plot({ id: name, name, index, cells, accent, groundY })
       plot.signature = wanted.get(name)
+      // A visiting colony's plot carries its colony so the district can be banner-labelled and
+      // dimmed together, and so a click knows the repo is read-only.
+      plot.colony = visiting ? visiting.colony : ''
       this.plots.set(name, plot)
       this.plotGroup.add(plot.group)
 
-      const label = createLabel(name, accent)
-      label.position.set(plot.labelAnchor.x, 3.2, plot.labelAnchor.z)
+      // Guest plots drop the colony prefix from their own plate — the district banner carries
+      // the colony name, so the plate need only say which repo.
+      const labelText = visiting ? name.replace(`${visiting.colony} · `, '') : name
+      const label = createLabel(labelText, accent)
+      label.position.set(plot.labelAnchor.x, plot.groundY + 3.2, plot.labelAnchor.z)
       plot.label = label
       this.labelGroup.add(label)
     })
 
+    // Keep the online/offline flag current on plots that already existed — a colony going
+    // offline must dim its district without rebuilding every plot in it.
+    for (const [name, plot] of this.plots) {
+      if (!plot.colony) continue
+      plot.colonyOnline = colonyOf.get(name)?.online !== false
+    }
+
     this.plotOrder = [...this.plots.values()]
+    this._syncColonyBanners()
     // Zones that just moved, appeared or grew are zones the scatter does not know about.
     if (this.scatterGroup && this._plotFootprint() !== this._scatterFootprint) this._buildScatter()
     // Which hex cells are decked. Ground height is asked for once per moving agent per
     // frame, so it wants to be a lookup rather than a scan over every plot's every tile.
-    this.deckedCells = new Set()
+    // Cell → the deck's top height there, so the crew stands on a sunk district's deck rather
+    // than at a flat 0.45. Near the ship groundY is ~0, so this is the old DECK_TOP everywhere
+    // that mattered before districts existed.
+    this.deckedCells = new Map()
     for (const plot of this.plotOrder) {
-      for (const cell of plot.cells) this.deckedCells.add(`${cell.q},${cell.r}`)
+      for (const cell of plot.cells) this.deckedCells.set(`${cell.q},${cell.r}`, plot.groundY + DECK_TOP)
     }
     this._syncLabels()
+  }
+
+  /**
+   * One banner floating over each visiting colony's cluster of plots. Positioned at the
+   * centroid of that colony's zones, so it recentres on its own as the district grows or
+   * shrinks, and rebuilt only when the set of colonies on the map changes.
+   */
+  _syncColonyBanners() {
+    const groups = new Map()
+    for (const plot of this.plotOrder) {
+      if (!plot.colony) continue
+      if (!groups.has(plot.colony)) groups.set(plot.colony, [])
+      groups.get(plot.colony).push(plot)
+    }
+    // Retire banners for colonies that have left the map entirely.
+    for (const [name, banner] of this.colonyBanners) {
+      if (groups.has(name)) continue
+      this.labelGroup.remove(banner)
+      banner.userData.dispose?.()
+      this.colonyBanners.delete(name)
+    }
+    for (const [name, plots] of groups) {
+      let banner = this.colonyBanners.get(name)
+      if (!banner) {
+        // Accent taken from the district's first plot, so the banner glyph matches its zones.
+        banner = createBanner(name, plots[0].accent)
+        this.colonyBanners.set(name, banner)
+        this.labelGroup.add(banner)
+      }
+      let cx = 0
+      let cz = 0
+      let cy = 0
+      for (const plot of plots) {
+        cx += plot.middle.x
+        cz += plot.middle.z
+        cy += plot.groundY
+      }
+      banner.position.set(cx / plots.length, cy / plots.length + 5.0, cz / plots.length)
+      banner.userData.online = plots.every((p) => p.colonyOnline !== false)
+    }
   }
 
   /**
@@ -451,7 +531,8 @@ export class Colony {
 
   groundAt(x, z) {
     const cell = worldToHex(x, z)
-    if (this.deckedCells?.has(`${cell.q},${cell.r}`)) return DECK_TOP
+    const deck = this.deckedCells?.get(`${cell.q},${cell.r}`)
+    if (deck !== undefined) return deck
     return terrainHeight(x, z, this.planet)
   }
 
@@ -661,6 +742,15 @@ export class Colony {
       const next = THREE.MathUtils.damp(label.material.opacity, wanted, 9, dt)
       label.material.opacity = next
       label.visible = next > 0.01
+    }
+    // District banners stay up whenever their colony is on the map — they are the sign you
+    // read to know whose settlement you are looking at. An offline colony's banner dims
+    // rather than vanishing, so a sleeping machine reads as "away", not "gone".
+    for (const banner of this.colonyBanners.values()) {
+      const wanted = this.uiVisible ? (banner.userData.online ? 1 : 0.4) : 0
+      const next = THREE.MathUtils.damp(banner.material.opacity, wanted, 9, dt)
+      banner.material.opacity = next
+      banner.visible = next > 0.01
     }
   }
 

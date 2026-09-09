@@ -44,6 +44,8 @@ const ICON = {
   copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>`,
   locate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.6"/><path d="M12 1.8v2.6M12 19.6v2.6M1.8 12h2.6M19.6 12h2.6"/></svg>`,
   orbit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><ellipse cx="12" cy="12" rx="10.2" ry="4.6" transform="rotate(-24 12 12)"/><circle cx="21" cy="8.2" r="1.5" fill="currentColor" stroke="none"/></svg>`,
+  // A broadcast mast — sharing with the network.
+  share: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="2"/><path d="M12 14v6M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M6 6a8 8 0 0 0 0 12M18 6a8 8 0 0 1 0 12"/></svg>`,
 }
 
 const STAT_DEFS = [
@@ -250,6 +252,181 @@ export class Hud {
       this._toggle('Show FPS', 'showFps')
     )
     body.appendChild(view)
+
+    this._buildNetwork(body)
+  }
+
+  /**
+   * Shared colonies. Unlike everything above it, this section is not backed by `Settings`
+   * (per-browser render preferences) but by the colony file's `network` block and a live
+   * poll of the LAN — so it manages its own DOM and refreshes itself whenever the panel
+   * opens, rather than riding the `controls` sync.
+   */
+  _buildNetwork(body) {
+    if (!this.actions.getNetwork) return
+    const g = group('Shared colonies')
+    g.classList.add('network')
+    g.insertAdjacentHTML(
+      'beforeend',
+      `<p class="note">Share this machine's colony on your intranet, and visit your teammates'. Visiting is always read-only — you see their astronauts, you cannot touch their threads.</p>
+       <div class="row">
+         <div class="label"><span>Colony name</span><span class="hint">How you appear to others.</span></div>
+         <input class="net-name text-input" type="text" maxlength="80" spellcheck="false" placeholder="colony">
+       </div>
+       <div class="row">
+         <div class="label"><span>Share on the network</span><span class="hint net-share-hint">Off — nobody can see this colony.</span></div>
+         <button class="toggle net-share" role="switch" type="button"></button>
+       </div>
+       <p class="net-count" hidden></p>
+       <div class="net-block">
+         <div class="net-head">Neighbours</div>
+         <div class="net-list net-configured"></div>
+       </div>
+       <div class="net-block net-discovered-block" hidden>
+         <div class="net-head">Found on your network</div>
+         <div class="net-list net-discovered"></div>
+       </div>
+       <div class="net-block net-refused-block" hidden>
+         <div class="net-head">Tried to visit you</div>
+         <p class="note">A colleague reached your colony from an address you have not added — over a VPN this can differ from the one they expect. Add it to let them in.</p>
+         <div class="net-list net-refused"></div>
+       </div>
+       <div class="net-add">
+         <input class="net-host text-input" type="text" spellcheck="false" placeholder="hostname or IP">
+         <input class="net-port text-input" type="text" spellcheck="false" inputmode="numeric" placeholder="5275">
+         <button class="btn net-add-btn" type="button">Add</button>
+       </div>`
+    )
+    body.appendChild(g)
+
+    const name = g.querySelector('.net-name')
+    name.addEventListener('change', () => this.actions.setColonyName?.(name.value.trim()))
+    g.querySelector('.net-share').addEventListener('click', () => {
+      const now = Boolean(this.actions.getNetwork?.().share)
+      this.actions.setShare?.(!now)
+      this._refreshNetwork()
+    })
+    const host = g.querySelector('.net-host')
+    const port = g.querySelector('.net-port')
+    const add = () => {
+      const h = host.value.trim()
+      const p = Number(port.value.trim()) || 5275
+      if (!h) return
+      this.actions.addNeighbor?.({ name: h, host: h, port: p })
+      host.value = ''
+      port.value = ''
+      this._refreshNetwork()
+    }
+    g.querySelector('.net-add-btn').addEventListener('click', add)
+    port.addEventListener('keydown', (e) => e.key === 'Enter' && add())
+    host.addEventListener('keydown', (e) => e.key === 'Enter' && add())
+    this._net = g
+  }
+
+  /** Repaint the network section from the saved config and a fresh look at the LAN. */
+  async _refreshNetwork() {
+    const g = this._net
+    if (!g) return
+    const cfg = this.actions.getNetwork?.() || { colonyName: '', share: false, neighbors: [] }
+    const nameInput = g.querySelector('.net-name')
+    if (document.activeElement !== nameInput) nameInput.value = cfg.colonyName || ''
+    const share = g.querySelector('.net-share')
+    share.setAttribute('aria-checked', String(Boolean(cfg.share)))
+    g.querySelector('.net-share-hint').textContent = cfg.share
+      ? 'On — teammates on your network can visit this colony.'
+      : 'Off — nobody can see this colony.'
+
+    // What is actually exposed, so "sharing" never quietly means "sharing everything" or
+    // "sharing nothing". Only shown while sharing is on.
+    const countEl = g.querySelector('.net-count')
+    const summary = this.actions.sharedSummary?.() || { repos: 0, exposed: 0 }
+    countEl.hidden = !cfg.share
+    if (cfg.share) {
+      countEl.innerHTML =
+        summary.exposed === 0
+          ? 'Nothing shared yet — open a repo and press <b>Share with others</b>, or select a session and press <b>Share</b>.'
+          : `Sharing <b>${summary.exposed}</b> session${summary.exposed === 1 ? '' : 's'}` +
+            (summary.repos ? ` across <b>${summary.repos}</b> repo${summary.repos === 1 ? '' : 's'}` : '') +
+            '.'
+    }
+
+    let live = { colonies: [], discovered: [] }
+    try {
+      live = await this.actions.fetchNeighbors?.()
+    } catch {
+      /* server not reachable or feature off — the saved list still renders */
+    }
+    const online = new Map((live.colonies || []).map((c) => [`${c.host}:${c.port}`, c]))
+
+    const configured = g.querySelector('.net-configured')
+    configured.innerHTML = ''
+    const neighbors = cfg.neighbors || []
+    if (!neighbors.length) {
+      configured.innerHTML = `<div class="net-empty">None yet. Add one below, or pick a discovered colony.</div>`
+    }
+    for (const n of neighbors) {
+      const state = online.get(`${n.host}:${n.port}`)
+      const on = Boolean(state?.online)
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<i class="net-dot ${on ? 'on' : 'off'}" title="${on ? 'Online' : 'Offline'}"></i>` +
+        `<span class="net-item-name">${escapeHtml(state?.name || n.name || n.host)}</span>` +
+        `<span class="net-item-addr">${escapeHtml(n.host)}:${n.port}</span>` +
+        `<button class="btn icon ghost net-remove" title="Stop visiting">${ICON.close}</button>`
+      row.querySelector('.net-remove').addEventListener('click', () => {
+        this.actions.removeNeighbor?.(n.host, n.port)
+        this._refreshNetwork()
+      })
+      configured.appendChild(row)
+    }
+
+    const discovered = (live.discovered || []).filter(
+      (d) => !neighbors.some((n) => n.host === d.host && n.port === d.port)
+    )
+    const dblock = g.querySelector('.net-discovered-block')
+    dblock.hidden = discovered.length === 0
+    const dlist = g.querySelector('.net-discovered')
+    dlist.innerHTML = ''
+    for (const d of discovered) {
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<i class="net-dot on"></i>` +
+        `<span class="net-item-name">${escapeHtml(d.name || d.host)}</span>` +
+        `<span class="net-item-addr">${escapeHtml(d.host)}:${d.port}</span>` +
+        `<button class="btn net-add-one">Add</button>`
+      row.querySelector('.net-add-one').addEventListener('click', () => {
+        this.actions.addNeighbor?.({ name: d.name, host: d.host, port: d.port })
+        this._refreshNetwork()
+      })
+      dlist.appendChild(row)
+    }
+
+    // Strangers the guest socket turned away — the click adds them at the guest port so a
+    // colleague blocked by a VPN's unexpected source address can be let in on sight.
+    const refused = (live.refused || []).filter(
+      (r) => !neighbors.some((n) => n.host === r.host)
+    )
+    const rblock = g.querySelector('.net-refused-block')
+    rblock.hidden = refused.length === 0
+    const rlist = g.querySelector('.net-refused')
+    rlist.innerHTML = ''
+    const guestPort = live.guestPort || 5275
+    for (const r of refused) {
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<i class="net-dot off"></i>` +
+        `<span class="net-item-name">${escapeHtml(r.host)}</span>` +
+        `<span class="net-item-addr">turned away</span>` +
+        `<button class="btn net-add-one">Add</button>`
+      row.querySelector('.net-add-one').addEventListener('click', () => {
+        this.actions.addNeighbor?.({ name: r.host, host: r.host, port: guestPort })
+        this._refreshNetwork()
+      })
+      rlist.appendChild(row)
+    }
   }
 
   _row(label, hint) {
@@ -362,11 +539,13 @@ export class Hud {
     on('#btn-open', 'click', () => this.actions.openThread?.())
     on('#btn-viewed', 'click', () => this.actions.markViewed?.())
     on('#btn-archive', 'click', () => this.actions.archiveThread?.())
+    on('#btn-share-session', 'click', () => this.selected && this.actions.toggleShareSession?.(this.selected.thread.id))
     on('#btn-deselect', 'click', () => this.actions.select?.(null))
     on('#btn-new-session', 'click', () => this.actions.newConversation?.())
     on('#btn-reveal', 'click', () => this.actions.revealProject?.())
     on('#btn-copy-path', 'click', () => this.actions.copyProjectPath?.())
     on('#btn-hide-project', 'click', () => this.actions.hideProject?.())
+    on('#btn-share-repo', 'click', () => this.actions.toggleShareRepo?.(this.project?.name))
     on('#btn-hidden-toggle', 'click', () => this.toggleHiddenList())
     on('#btn-locate', 'click', () => this.actions.focusProject?.(this.project?.name))
     on('#btn-close-project', 'click', () => this.actions.closeProject?.())
@@ -404,7 +583,7 @@ export class Hud {
    */
   setLegend(projects, activeName = null, hidden = [], folded = []) {
     const signature =
-      projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
+      projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}:${p.colony || ''}:${p.colonyOnline}`).join('|') +
       `~${activeName}~` +
       hidden.map((p) => `${p.name}:${p.count}`).join('|') +
       `~${folded.length}`
@@ -413,21 +592,50 @@ export class Hud {
 
     const wrap = this.$('.projects')
     wrap.innerHTML = ''
-    for (const p of projects) {
+
+    const repoButton = (p) => {
       const b = document.createElement('button')
       b.type = 'button'
       b.className = 'repo'
-      b.title = `${p.count} thread${p.count === 1 ? '' : 's'} in ${p.name}`
+      b.title = `${p.count} thread${p.count === 1 ? '' : 's'} in ${p.label || p.name}`
       b.setAttribute('aria-pressed', String(p.name === activeName))
       b.innerHTML =
         `<i class="swatch" style="background:${hex(p.accent)};color:${hex(p.accent)}"></i>` +
-        `<span class="n">${escapeHtml(p.name)}</span>` +
+        `<span class="n">${escapeHtml(p.label || p.name)}</span>` +
         (p.urgent ? '<i class="alarm"></i>' : '') +
         `<span class="count">${p.count}</span>`
       b.addEventListener('click', () => this.actions.pickProject?.(p.name))
-      wrap.appendChild(b)
+      return b
     }
-    this.$('.sec-head span').textContent = `${projects.length} repo${projects.length === 1 ? '' : 's'}`
+
+    // Your own repos first; each visiting colony is its own labelled section below, so it is
+    // always clear whose world a repo belongs to.
+    const home = projects.filter((p) => !p.colony)
+    const byColony = new Map()
+    for (const p of projects) {
+      if (!p.colony) continue
+      if (!byColony.has(p.colony)) byColony.set(p.colony, [])
+      byColony.get(p.colony).push(p)
+    }
+
+    for (const p of home) wrap.appendChild(repoButton(p))
+
+    for (const [colony, repos] of byColony) {
+      const head = document.createElement('div')
+      head.className = 'colony-head'
+      const online = repos.every((r) => r.colonyOnline)
+      head.innerHTML =
+        `<i class="net-dot ${online ? 'on' : 'off'}"></i>` +
+        `<span class="colony-name">${escapeHtml(colony)}</span>` +
+        `<span class="colony-tag">visiting${online ? '' : ' · away'}</span>`
+      wrap.appendChild(head)
+      for (const p of repos) wrap.appendChild(repoButton(p))
+    }
+
+    const colonyCount = byColony.size
+    this.$('.sec-head span').textContent =
+      `${home.length} repo${home.length === 1 ? '' : 's'}` +
+      (colonyCount ? ` · ${colonyCount} visiting` : '')
 
     // The hidden list is its own block at the foot of the sidebar: collapsed by default, because
     // the whole point of hiding a repo is not to look at it.
@@ -506,10 +714,12 @@ export class Hud {
     // The minute is part of the signature because `ago()` is: without it a repo where
     // nothing is happening keeps whatever "4m ago" it was first drawn with, for as long as
     // you leave the panel open.
+    const visiting = Boolean(project.colony)
     const signature =
-      `${project.name}~${project.path}~${project.accent}~${project.selectedId}~${Math.floor(Date.now() / 60000)}~` +
+      `${project.name}~${project.path}~${project.accent}~${project.selectedId}~${project.colony}~${project.colonyOnline}~${Math.floor(Date.now() / 60000)}~` +
       project.threads.map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}`).join('|')
     panel.classList.add('drilled')
+    panel.classList.toggle('visiting', visiting)
     if (this._last.project === signature) return
     this._last.project = signature
 
@@ -518,12 +728,28 @@ export class Hud {
     swatch.style.color = hex(project.accent) // the halo is `currentColor`
     this.$('.side .name').textContent = project.name
     const path = this.$('.side .path')
-    path.textContent = project.path ? shortPath(project.path) : 'folder unknown'
-    path.title = project.path || ''
-    // Nothing to open a new thread in, and nothing to reveal, without a folder on disk.
-    this.$('#btn-new-session').disabled = !project.path
-    this.$('#btn-reveal').disabled = !project.path
-    this.$('#btn-copy-path').disabled = !project.path
+    // A visiting district names its colony where a home repo names its folder.
+    if (visiting) {
+      path.textContent = `◈ on ${project.colony}'s colony${project.colonyOnline ? '' : ' · away'}`
+      path.title = `A repo on ${project.colony}'s machine — read-only`
+    } else {
+      path.textContent = project.path ? shortPath(project.path) : 'folder unknown'
+      path.title = project.path || ''
+    }
+    // A visiting district has no folder on this machine: opening a thread, revealing or
+    // copying a path all reach for something that is not here, so they are switched off.
+    this.$('#btn-new-session').disabled = visiting || !project.path
+    this.$('#btn-reveal').disabled = visiting || !project.path
+    this.$('#btn-copy-path').disabled = visiting || !project.path
+    this.$('#btn-hide-project').hidden = visiting
+    // Share is offered on your own repos, only while sharing is on. Its label flips to say
+    // what the click will do, and the button lights up while the repo is being shared.
+    const shareBtn = this.$('#btn-share-repo')
+    shareBtn.hidden = !project.sharing
+    shareBtn.classList.toggle('on', Boolean(project.repoShared))
+    shareBtn.innerHTML = project.repoShared
+      ? `${ICON.share} Stop sharing`
+      : `${ICON.share} Share with others`
 
     const n = project.threads.length
     const waiting = project.threads.filter((t) => t.status === 'waiting' || t.status === 'blocked').length
@@ -544,6 +770,7 @@ export class Hud {
       b.innerHTML =
         '<i class="pip"></i>' +
         `<span class="t">${escapeHtml(t.title || 'Untitled thread')}</span>` +
+        (t.shared ? `<span class="shared-mark" title="Shared with the network">${ICON.share}</span>` : '') +
         `<span class="when">${ago(t.lastActivityAt)}</span>` +
         (t.worktree ? `<span class="wt">⑂ ${escapeHtml(t.worktree)}</span>` : '')
       b.addEventListener('click', () => this.actions.focusThread?.(t.id))
@@ -590,6 +817,13 @@ export class Hud {
     const bits = [
       `<span class="tag"><i class="swatch" style="background:${hex(agent.trim.getHex())}"></i>${escapeHtml(status)}</span>`,
     ]
+    // A visiting colony's thread wears its origin, so it is never mistaken for one of yours —
+    // and the card's actions are pared back to match, since none of them can reach her machine.
+    if (thread.colony) {
+      bits.push(
+        `<span class="tag visiting" title="On ${escapeHtml(thread.colony)}'s colony — read-only${thread.colonyOnline === false ? ', currently offline' : ''}">◈ ${escapeHtml(thread.colony)}${thread.colonyOnline === false ? ' · away' : ''}</span>`
+      )
+    }
     // The repo is the panel's own heading now, so the card says what the *thread* is.
     if (thread.worktree) bits.push(`<span class="tag">⑂ ${escapeHtml(thread.worktree)}</span>`)
     if (thread.gitBranch) bits.push(`<span class="tag">${escapeHtml(thread.gitBranch)}</span>`)
@@ -605,10 +839,29 @@ export class Hud {
     // often is how a HUD starts costing frames.
     this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
     this.$('#btn-open').disabled = thread.canOpen === false
+    // A visiting thread lives on somebody else's machine: opening, archiving and marking it
+    // viewed all reach for records that are not yours, so the card drops those controls
+    // entirely and leaves only what you came to do — look.
+    const visiting = Boolean(thread.colony)
+    this.$('#btn-open').hidden = visiting
+    this.$('#btn-archive').hidden = visiting
     // Only offered when there is something to dismiss. A third button on every card would
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
-    this.$('#btn-viewed').hidden = !thread.unread
+    this.$('#btn-viewed').hidden = visiting || !thread.unread
+    // Share is offered on your own sessions while sharing is on. When the whole repo is
+    // shared the per-session switch is redundant, so it reads as a locked-on state instead.
+    const shareState = visiting ? '' : this.actions.sessionShareState?.(thread.id) || ''
+    const shareBtn = this.$('#btn-share-session')
+    shareBtn.hidden = visiting || !this.actions.sharingOn?.()
+    shareBtn.classList.toggle('on', shareState !== '')
+    shareBtn.disabled = shareState === 'repo'
+    shareBtn.innerHTML =
+      shareState === 'repo'
+        ? `${ICON.share} Shared (repo)`
+        : shareState === 'session'
+          ? `${ICON.share} Stop sharing`
+          : `${ICON.share} Share`
   }
 
   /**
@@ -761,6 +1014,13 @@ export class Hud {
     this.$('#btn-settings').setAttribute('aria-pressed', String(open))
     // Both live in the same slot on the right; the sidebar steps aside rather than hides.
     this.$('.side').classList.toggle('shifted', open)
+    // The network section is live — neighbours come and go on the LAN — so it refreshes while
+    // the panel is open and stops the moment it closes.
+    clearInterval(this._netTimer)
+    if (open && this._net) {
+      this._refreshNetwork()
+      this._netTimer = setInterval(() => this._refreshNetwork(), 5000)
+    }
   }
 
   toggleHelp(force) {
@@ -942,6 +1202,7 @@ const TEMPLATE = `
           <button class="btn" id="btn-reveal" title="Show this folder in ${FILE_MANAGER}">${ICON.folder} ${FILE_MANAGER}</button>
           <button class="btn" id="btn-copy-path" title="Copy the folder path">${ICON.copy} Copy path</button>
         </div>
+        <button class="btn" id="btn-share-repo" title="Share this repo — every session in it becomes visible to colonies visiting you" hidden>${ICON.share} Share with others</button>
         <button class="btn" id="btn-hide-project" title="Hide this repo from the colony — does not archive its threads">${ICON.eyeOff} Hide from colony</button>
       </div>
       <div class="threads-head"></div>
@@ -978,6 +1239,7 @@ const TEMPLATE = `
   <div class="pair">
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
     <button class="btn" id="btn-viewed" title="Stop this thread asking for you until it moves on again (V)">${ICON.eye} Viewed</button>
+    <button class="btn" id="btn-share-session" title="Share this one session with the network" hidden>${ICON.share} Share</button>
     <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>
   </div>
 </div>
