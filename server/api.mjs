@@ -1,4 +1,5 @@
 import fsp from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
@@ -165,10 +166,19 @@ function launchCli(dir, claudeArgs) {
   let cmd
   let args
   if (process.platform === 'win32') {
-    // Windows Terminal when installed; a plain console window otherwise.
-    spawnDetached('wt', ['-d', dir, ...cmdLine], dir, () =>
-      spawnDetached('cmd', ['/c', 'start', '""', '/D', dir, 'cmd', '/k', ...cmdLine], dir),
-    )
+    // Absolute paths: the server may have been started from a shell (Git Bash, a sandbox)
+    // whose PATH node cannot resolve, and `wt` is an app-execution alias that spawn()
+    // only finds by its full path. Windows Terminal when installed; a console otherwise.
+    const systemRoot = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
+    const cmdExe = process.env.ComSpec || path.join(systemRoot, 'System32', 'cmd.exe')
+    const localAppData = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local')
+    const wtExe = path.join(localAppData, 'Microsoft', 'WindowsApps', 'wt.exe')
+    // `claude` is an npm .cmd shim, so it has to run under cmd.exe in either terminal.
+    const fallback = () => spawnDetached(cmdExe, ['/c', 'start', '""', '/D', dir, cmdExe, '/k', ...cmdLine], dir)
+    // wt.exe is an app-execution alias (a reparse point) that CreateProcess rejects when
+    // called directly, so it is launched through `start`, which resolves it like a shell.
+    if (existsSync(wtExe)) spawnDetached(cmdExe, ['/c', 'start', '""', '/D', dir, wtExe, '-d', dir, cmdExe, '/k', ...cmdLine], dir, fallback)
+    else fallback()
     return
   } else if (process.platform === 'darwin') {
     const script = `cd ${JSON.stringify(dir)} && ${cmdLine.map((a) => JSON.stringify(a)).join(' ')}`
