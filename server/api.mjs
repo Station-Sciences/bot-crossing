@@ -529,10 +529,16 @@ export async function apiMiddleware(req, res, next) {
         .peers()
         .filter((p) => !configured.has(`${p.host}:${p.guestPort}`))
         .map((p) => ({ name: p.name, host: p.host, port: p.guestPort }))
+      // Strangers who tried to read us but are not on the list — the answer to "I added their
+      // IP but they still can't get in" when a VPN presents a different address than expected.
+      const refused = guest.running
+        ? guest.recentRefused().filter((r) => !configured.has(`${r.host}:${guest.port}`))
+        : []
       return send(res, 200, {
         network: currentNetwork,
         colonies: neighbors.merged().colonies,
         discovered,
+        refused,
         sharing: guest.running,
         guestPort: guest.port,
       })

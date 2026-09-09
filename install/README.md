@@ -27,7 +27,19 @@ it on in **Settings (S) → Shared colonies**.
   district on your map — **read-only**: you see their astronauts, you can't touch their threads.
 
 The first time you turn sharing on, Windows may pop up a firewall prompt for `node` — allow
-it on **Private** networks. (Running the installer as administrator adds that rule for you.)
+it. (Running the installer as administrator adds the rule for you.) The rule is opened on all
+network profiles, which is safe here: the colony only ever answers colleagues you have added,
+so an open port is not an open door.
+
+### Over a VPN (incl. FortiClient)
+
+Auto-discovery does not cross a VPN — add each other **by IP**. Find your VPN IP with
+`ipconfig` (the VPN adapter's address). It only works if the VPN lets the two machines reach
+each other directly (`ping <their VPN IP>` succeeds); many corporate SSL-VPNs block
+client-to-client by default, which their IT would have to allow for TCP 5275. If a colleague
+can reach you but is still refused, their address arrived looking different than the one you
+added (VPN NAT) — the real one shows up under **Settings → Shared colonies → "Tried to visit
+you"**, one click to add.
 
 ## Options (for the person setting it up)
 

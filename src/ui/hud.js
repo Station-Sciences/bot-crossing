@@ -286,6 +286,11 @@ export class Hud {
          <div class="net-head">Found on your network</div>
          <div class="net-list net-discovered"></div>
        </div>
+       <div class="net-block net-refused-block" hidden>
+         <div class="net-head">Tried to visit you</div>
+         <p class="note">A colleague reached your colony from an address you have not added — over a VPN this can differ from the one they expect. Add it to let them in.</p>
+         <div class="net-list net-refused"></div>
+       </div>
        <div class="net-add">
          <input class="net-host text-input" type="text" spellcheck="false" placeholder="hostname or IP">
          <input class="net-port text-input" type="text" spellcheck="false" inputmode="numeric" placeholder="5275">
@@ -396,6 +401,31 @@ export class Hud {
         this._refreshNetwork()
       })
       dlist.appendChild(row)
+    }
+
+    // Strangers the guest socket turned away — the click adds them at the guest port so a
+    // colleague blocked by a VPN's unexpected source address can be let in on sight.
+    const refused = (live.refused || []).filter(
+      (r) => !neighbors.some((n) => n.host === r.host)
+    )
+    const rblock = g.querySelector('.net-refused-block')
+    rblock.hidden = refused.length === 0
+    const rlist = g.querySelector('.net-refused')
+    rlist.innerHTML = ''
+    const guestPort = live.guestPort || 5275
+    for (const r of refused) {
+      const row = document.createElement('div')
+      row.className = 'net-item'
+      row.innerHTML =
+        `<i class="net-dot off"></i>` +
+        `<span class="net-item-name">${escapeHtml(r.host)}</span>` +
+        `<span class="net-item-addr">turned away</span>` +
+        `<button class="btn net-add-one">Add</button>`
+      row.querySelector('.net-add-one').addEventListener('click', () => {
+        this.actions.addNeighbor?.({ name: r.host, host: r.host, port: guestPort })
+        this._refreshNetwork()
+      })
+      rlist.appendChild(row)
     }
   }
 

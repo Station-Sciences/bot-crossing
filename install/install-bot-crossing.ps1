@@ -203,6 +203,9 @@ if (-not $NoAutostart) {
 }
 
 # -- 6. Firewall (best effort) ------------------------------------------------
+# Opened on ALL profiles (profile=any), not just private, so sharing also works over a VPN
+# whose adapter Windows classifies as public/domain. Safe here: the guest listener answers only
+# the colleagues the owner has added (an app-level origin check), so an open port is not open access.
 function Test-Admin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
   (New-Object Security.Principal.WindowsPrincipal($id)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -211,17 +214,17 @@ if (Test-Admin) {
   try {
     netsh advfirewall firewall delete rule name="Bot Crossing guest" | Out-Null 2>&1
     netsh advfirewall firewall delete rule name="Bot Crossing discovery" | Out-Null 2>&1
-    netsh advfirewall firewall add rule name="Bot Crossing guest" dir=in action=allow protocol=TCP localport=5275 profile=private | Out-Null
-    netsh advfirewall firewall add rule name="Bot Crossing discovery" dir=in action=allow protocol=UDP localport=5276 profile=private | Out-Null
-    Ok "Firewall opened for sharing (TCP 5275, UDP 5276, private networks)"
+    netsh advfirewall firewall add rule name="Bot Crossing guest" dir=in action=allow protocol=TCP localport=5275 profile=any | Out-Null
+    netsh advfirewall firewall add rule name="Bot Crossing discovery" dir=in action=allow protocol=UDP localport=5276 profile=any | Out-Null
+    Ok "Firewall opened for sharing (TCP 5275, UDP 5276, all networks)"
   } catch {
     Warn "Could not add firewall rules automatically."
   }
 } else {
   Warn "Not running as admin - sharing needs the firewall opened once."
   Warn "If teammates cannot see this colony, run these in an elevated PowerShell:"
-  Write-Host '      netsh advfirewall firewall add rule name="Bot Crossing guest" dir=in action=allow protocol=TCP localport=5275 profile=private' -ForegroundColor DarkGray
-  Write-Host '      netsh advfirewall firewall add rule name="Bot Crossing discovery" dir=in action=allow protocol=UDP localport=5276 profile=private' -ForegroundColor DarkGray
+  Write-Host '      netsh advfirewall firewall add rule name="Bot Crossing guest" dir=in action=allow protocol=TCP localport=5275 profile=any' -ForegroundColor DarkGray
+  Write-Host '      netsh advfirewall firewall add rule name="Bot Crossing discovery" dir=in action=allow protocol=UDP localport=5276 profile=any' -ForegroundColor DarkGray
 }
 
 # -- 7. Launch ----------------------------------------------------------------

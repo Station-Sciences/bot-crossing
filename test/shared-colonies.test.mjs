@@ -95,6 +95,18 @@ test('the guest socket answers only loopback and added neighbours', () => {
   assert.equal(normalizeIp('::ffff:10.0.0.1'), '10.0.0.1')
 })
 
+test('a refused stranger is remembered so it can be added, and forgotten after a while', () => {
+  const guest = new GuestServer({ instanceId: 'x', getName: () => 'X', getThreads: async () => [], getAllowedHosts: () => [] })
+  guest._noteRefused('10.212.134.7')
+  assert.equal(guest.recentRefused().some((r) => r.host === '10.212.134.7'), true)
+  // Stale entries drop out of the window.
+  guest._refused.set('10.212.134.7', Date.now() - 10 * 60 * 1000)
+  assert.equal(guest.recentRefused().length, 0)
+  // And the list is bounded rather than growing without limit.
+  for (let i = 0; i < 40; i++) guest._noteRefused(`10.0.0.${i}`)
+  assert.ok(guest._refused.size <= 12)
+})
+
 // ── the merge ─────────────────────────────────────────────────────────────────
 
 test('cleanNeighbor drops garbage and keeps the valid shape', () => {

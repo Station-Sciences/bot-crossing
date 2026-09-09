@@ -69,6 +69,13 @@ export class GuestServer {
     /** True between start() and stop(): the listener is *meant* to be up, so heal it if it dies. */
     this._wantOn = false
     this._healTimer = null
+    /**
+     * IP -> last time a host we do NOT know tried to read us. This is the answer to \"I added
+     * their IP but they still can't see me\": over a NAT'ing VPN (FortiClient among them) the
+     * address the socket sees is not always the one the colleague added, and this surfaces the
+     * real one so it can be added with a click. Bounded and short-lived — a debugging aid, not a log.
+     */
+    this._refused = new Map()
   }
 
   get running() {
@@ -129,6 +136,23 @@ export class GuestServer {
     if (wanted) this.start()
   }
 
+  /** Record a stranger's IP, and forget the oldest once the list of them grows past a handful. */
+  _noteRefused(ip) {
+    this._refused.set(ip, Date.now())
+    while (this._refused.size > 12) this._refused.delete(this._refused.keys().next().value)
+  }
+
+  /** Strangers seen in the last few minutes — the page offers these as one-click adds. */
+  recentRefused(windowMs = 5 * 60 * 1000) {
+    const now = Date.now()
+    const out = []
+    for (const [ip, at] of this._refused) {
+      if (now - at > windowMs) this._refused.delete(ip)
+      else out.push({ host: ip, lastSeen: at })
+    }
+    return out
+  }
+
   async _handle(req, res) {
     const send = (status, body) => {
       const json = JSON.stringify(body)
@@ -138,6 +162,8 @@ export class GuestServer {
     // Who is asking, before what they asked. A host that is not a configured neighbour gets
     // 403 and never learns whether anything is shared — the allowlist is not even consulted.
     if (!hostAllowed(req.socket?.remoteAddress, this.getAllowedHosts())) {
+      const ip = normalizeIp(req.socket?.remoteAddress)
+      if (ip && !isLoopback(ip)) this._noteRefused(ip)
       return send(403, { error: 'This colony only answers colleagues it has added' })
     }
     if (req.method !== 'GET') return send(405, { error: 'The guest API is read-only' })
