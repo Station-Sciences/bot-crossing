@@ -89,6 +89,21 @@ const HEAD_BYTES = 192 * 1024
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000
 
 /**
+ * How long a subagent's transcript may sit untouched before its errand counts as abandoned.
+ * A subagent runs inside its parent's process, so the pid probe the rest of this file uses does
+ * not exist for it, and one that is thinking writes nothing for minutes at a time — at two or
+ * three minutes they blink out while still working.
+ */
+const SUBAGENT_WINDOW_MS = 10 * 60 * 1000
+
+/**
+ * A brief can be long: 36 of 147 transcripts on this machine open with more than 8 KB, the
+ * largest at 17 KB. `readHead` drops a trailing partial line, so a head that is too small yields
+ * nothing at all rather than a truncated task.
+ */
+const SUBAGENT_HEAD_BYTES = 64 * 1024
+
+/**
  * Every id this adapter hands out is prefixed. `server/harnesses/README.md` asks for ids unique
  * across harnesses, and while two UUIDs will not collide, the colony keys its archive list and
  * saved layout on this string — so it is worth being unambiguous rather than merely lucky.
@@ -267,6 +282,74 @@ async function scanLiveSessions() {
   return live
 }
 
+/** Briefs, kept until the file changes — the mtime cache `transcriptMeta` establishes. */
+const subagentCache = new Map()
+
+/** The prompt a parent handed its subagent, which is the only thing about an errand worth showing. */
+async function subagentTask(file, mtime) {
+  const cached = subagentCache.get(file)
+  if (cached && cached.mtime === mtime) return cached.task
+  let task = ''
+  // Not simply the first record, and sometimes not there at all: a forked subagent opens with a
+  // `fork-context-ref` and inherits its parent's context instead of being briefed, so it has no
+  // task text to find. Same test `readTranscriptMeta` puts to a thread's first prompt.
+  for (const record of jsonLines(await readHead(file, SUBAGENT_HEAD_BYTES).catch(() => ''))) {
+    if (record.type !== 'user' || !record.message) continue
+    const text = cleanPrompt(firstText(record.message.content))
+    if (text && !text.startsWith('<')) {
+      task = text
+      break
+    }
+  }
+  subagentCache.set(file, { mtime, task })
+  return task
+}
+
+/**
+ * The subagents a session has out right now, keyed by the session that sent them. Their
+ * transcripts live one level below the session's own, in
+ * `<project>/<sessionId>/subagents/agent-<id>.jsonl`.
+ *
+ * Only sessions with a live process are walked. Every other session on disk has subagent
+ * transcripts too, and all of that work would be thrown away: an errand cannot outlive the
+ * process running it.
+ */
+async function scanSubagents(livePending) {
+  const byParent = new Map()
+  const live = await livePending
+  if (!live.size) return byParent
+  const seen = new Set()
+  const cutoff = Date.now() - SUBAGENT_WINDOW_MS
+  for (const projectDir of await listDirs(CLI_PROJECTS)) {
+    for (const sessionDir of await listDirs(projectDir)) {
+      const parent = path.basename(sessionDir)
+      if (!live.has(parent)) continue
+      const dir = path.join(sessionDir, 'subagents')
+      for (const file of await listFiles(dir, (n) => n.endsWith('.jsonl'))) {
+        const stat = await fsp.stat(file).catch(() => null)
+        if (!stat || stat.mtimeMs < cutoff) continue
+        // A subagent that has handed its answer back is finished however recently it wrote —
+        // the same question `awaitingReply` asks of a thread, put to the errand's own transcript.
+        seen.add(file)
+        if (await awaitingReply(file)) continue
+        const out = byParent.get(parent) || []
+        out.push({
+          id: path.basename(file, '.jsonl'),
+          task: await subagentTask(file, stat.mtimeMs),
+          lastActivityAt: stat.mtimeMs,
+        })
+        byParent.set(parent, out)
+      }
+    }
+  }
+  // Errands are many and short-lived, so the cache is pruned to what this pass actually saw
+  // rather than growing for the life of the process the way the thread cache can afford to.
+  for (const file of subagentCache.keys()) {
+    if (!seen.has(file)) subagentCache.delete(file)
+  }
+  return byParent
+}
+
 /** Every thread the desktop app has a record for. */
 async function scanDesktopSessions() {
   const out = []
@@ -340,10 +423,14 @@ function toThread(t) {
 }
 
 async function scanThreads() {
-  const [desktop, transcripts, live] = await Promise.all([
+  // The subagent walk needs the live set, and waiting for it here would serialise scans the
+  // README says must never block — so it is handed the promise and waits on it itself.
+  const livePending = scanLiveSessions()
+  const [desktop, transcripts, live, subagents] = await Promise.all([
     scanDesktopSessions(),
     scanTranscripts(),
-    scanLiveSessions(),
+    livePending,
+    scanSubagents(livePending),
   ])
   const byId = new Map()
   const add = (thread) => {
@@ -476,6 +563,8 @@ async function scanThreads() {
     // A thread that handed the turn back wants you, whether or not the desktop app has ever seen
     // it — the only way a terminal-only thread can ask for anything at all.
     if (waiting) thread.unread = true
+    const errands = subagents.get(thread.cliSessionId)
+    if (errands) thread.subagents = errands
   }
   return threads.map(toThread)
 }

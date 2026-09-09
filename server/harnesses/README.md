@@ -96,6 +96,7 @@ what earns a repo its own zone, and `lastActivityAt` is what sorts the whole map
 | `sizeBytes` | number | Transcript size. **This is how finished a building looks**, on a log scale |
 | `source` | string | Free-form, for your own bookkeeping (the Claude adapter uses `desktop` / `cli`) |
 | `canOpen` | boolean | Whether this thread can be opened. The UI greys the button out |
+| `subagents` | array | Optional. Errands this thread has out *right now*: `{ id, task, lastActivityAt }`. Drawn as small companions at the parent's building — no zone, no badge, not counted. Omit it and nothing changes |
 | `ref` | object | **Opaque.** Whatever *you* need to find this thread again |
 
 ### About `ref`
