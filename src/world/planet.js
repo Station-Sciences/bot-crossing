@@ -545,7 +545,7 @@ const SEA_DEPTH = 7
 /** The floating island: land to here, then the ground falls out of sight over this shelf. */
 export const SKY_RIM = 58
 const SKY_SHELF = 4
-const SKY_DROP = 70
+const SKY_DROP = 34
 
 /**
  * Terrain is one plane, displaced and vertex-coloured on the CPU at build time. Doing it
