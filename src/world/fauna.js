@@ -323,40 +323,42 @@ function beakGeometry(r, len) {
  */
 const BIRDS = {
   gull: {
-    span: 0.62, root: 0.26, tip: 0.1, sweep: 0.08, body: [1, 0.85, 1.7], tail: 0.14,
-    rate: 3.2, amp: 0.55, glide: true, speed: 6.5, turn: 1.4, jitter: 1.5, dip: true, diurnal: true,
+    span: 0.62, root: 0.13, tip: 0.035, sweep: 0.16, body: [0.55, 0.45, 1.5], tail: 0.08,
+    rate: 2.6, amp: 0.5, glide: true, speed: 6.0, turn: 1.1, wander: 0.9, dip: true, diurnal: true,
     beak: 0xf0a030, colors: [0xf4f2ee, 0xe8e6e0, 0xd8d6cf],
   },
   parrot: {
-    span: 0.42, root: 0.3, tip: 0.18, sweep: 0.02, body: [1, 0.95, 1.5], tail: 0.3,
-    rate: 6, amp: 0.8, glide: false, speed: 5.5, turn: 2, jitter: 2.5, dip: false, diurnal: true,
+    span: 0.46, root: 0.14, tip: 0.05, sweep: 0.1, body: [0.6, 0.5, 1.4], tail: 0.18,
+    rate: 5.5, amp: 0.75, glide: false, speed: 5.5, turn: 1.6, wander: 1.4, dip: false, diurnal: true,
     beak: 0x3a3230, colors: [0xe84a3a, 0x3fb54a, 0x3a7fe0, 0xf0c030],
   },
   crow: {
-    span: 0.5, root: 0.28, tip: 0.16, sweep: 0.04, body: [1, 0.9, 1.6], tail: 0.22,
-    rate: 4, amp: 0.65, glide: false, speed: 5.5, turn: 1.8, jitter: 2, dip: false, diurnal: false,
+    span: 0.52, root: 0.14, tip: 0.06, sweep: 0.1, body: [0.6, 0.5, 1.5], tail: 0.14,
+    rate: 3.6, amp: 0.6, glide: false, speed: 5.5, turn: 1.4, wander: 1.1, dip: false, diurnal: false,
     beak: 0x1c1c22, colors: [0x1e1e26, 0x26262e, 0x2c2a34],
   },
   swallow: {
-    span: 0.44, root: 0.18, tip: 0.05, sweep: 0.14, body: [0.8, 0.75, 1.3], tail: 0.26,
-    rate: 7, amp: 0.7, glide: true, speed: 9, turn: 3.2, jitter: 6, dip: false, diurnal: true,
+    span: 0.42, root: 0.1, tip: 0.025, sweep: 0.2, body: [0.5, 0.4, 1.2], tail: 0.16,
+    rate: 6.5, amp: 0.65, glide: true, speed: 8.5, turn: 2.6, wander: 2.4, dip: false, diurnal: true,
     beak: 0x2a2a30, colors: [0x2a3c8a, 0x22336e, 0x3a4a9a],
   },
 }
 
 /** Body, head, beak, two wings and a tail — about 0.55 long and 1.45 across at size 1. */
 function birdGeometry(k) {
-  const bodyLen = 0.16 * k.body[2]
-  const body = new THREE.SphereGeometry(0.16, 10, 7)
+  // A scrap of a body and two thin swept wings: at the distance the colony is looked at, a
+  // bird is a crescent that flexes, and anything more than that reads as a model.
+  const bodyLen = 0.11 * k.body[2]
+  const body = new THREE.SphereGeometry(0.11, 8, 6)
   body.scale(k.body[0], k.body[1], k.body[2])
-  const head = new THREE.SphereGeometry(0.105, 8, 6)
-  head.translate(0, 0.1, bodyLen + 0.02)
-  const beak = beakGeometry(0.035, 0.13)
-  beak.translate(0, 0.085, bodyLen + 0.16)
+  const head = new THREE.SphereGeometry(0.06, 6, 5)
+  head.translate(0, 0.04, bodyLen + 0.01)
+  const beak = beakGeometry(0.02, 0.07)
+  beak.translate(0, 0.035, bodyLen + 0.08)
   const right = wingQuad(k.span, k.root, k.tip, k.sweep, 1)
-  right.translate(0.1, 0.05, 0.02)
+  right.translate(0.04, 0.02, 0.0)
   const left = wingQuad(k.span, k.root, k.tip, k.sweep, -1)
-  left.translate(-0.1, 0.05, 0.02)
+  left.translate(-0.04, 0.02, 0.0)
   const tail = new THREE.PlaneGeometry(0.16, k.tail)
   tail.rotateX(-Math.PI / 2)
   tail.translate(0, 0.02, -bodyLen - k.tail / 2 + 0.05)
@@ -563,7 +565,7 @@ class Flock {
     this.info = []
     for (let i = 0; i < this.count; i++) {
       const a = this.rand() * Math.PI * 2
-      const r = this.rand() * 6
+      const r = this.rand() * 14
       const alt = lo + this.rand() * (hi - lo)
       const heading = this.rand() * Math.PI * 2
       this.birds.push({
@@ -573,8 +575,12 @@ class Flock {
         vx: Math.sin(heading) * this.kind.speed,
         vy: 0,
         vz: Math.cos(heading) * this.kind.speed,
+        fx: Math.sin(heading) * this.kind.speed,
+        fy: 0,
+        fz: Math.cos(heading) * this.kind.speed,
         alt,
         heading,
+        wander: this.rand() * Math.PI * 2,
         roll: 0,
         dip: 0,
         dipWait: 6 + this.rand() * 20,
@@ -614,59 +620,70 @@ class Flock {
     const water = env.waterLevel
 
     let cx = 0
-    let cy = 0
     let cz = 0
-    let mx = 0
-    let my = 0
-    let mz = 0
     for (let i = 0; i < n; i++) {
-      const p = b[i]
-      cx += p.x
-      cy += p.y
-      cz += p.z
-      mx += p.vx
-      my += p.vy
-      mz += p.vz
+      cx += b[i].x
+      cz += b[i].z
     }
     cx /= n
-    cy /= n
     cz /= n
-    mx /= n
-    my /= n
-    mz /= n
-
     this.retarget -= dt
     const tdx = this.tx - cx
     const tdz = this.tz - cz
     if (this.retarget <= 0 || tdx * tdx + tdz * tdz < 100) this._pickTarget()
 
-    const maxSpeed = k.speed * 1.2 * motion
-    const minSpeed = k.speed * 0.55 * motion
-    const maxAccel = k.speed * k.turn * motion
+    // Reynolds' three rules over a *local* neighbourhood, not the whole flock: a bird only
+    // knows about the ones near it, which is what lets a flock stretch, split and re-form
+    // instead of contracting into a ball around its centroid.
+    const cruise = k.speed * motion
+    const maxForce = k.speed * k.turn * motion
+    const SEE = 9
+    const SEE2 = SEE * SEE
+    const NEAR2 = 2.4 * 2.4
 
     for (let i = 0; i < n; i++) {
       const p = b[i]
-      // Steering.
-      let ax = (cx - p.x) * 0.5 + (mx - p.vx) * 1.2 + (this.tx - p.x) * 0.12
-      let ay = (cy - p.y) * 0.3 + (my - p.vy) * 1.2
-      let az = (cz - p.z) * 0.5 + (mz - p.vz) * 1.2 + (this.tz - p.z) * 0.12
+      let nx = 0, ny = 0, nz = 0, cnt = 0
+      let ax = 0, ay = 0, az = 0
+      let sx = 0, sy = 0, sz = 0
       for (let j = 0; j < n; j++) {
         if (j === i) continue
         const q = b[j]
-        const dx = p.x - q.x
-        const dy = p.y - q.y
-        const dz = p.z - q.z
+        const dx = q.x - p.x
+        const dy = q.y - p.y
+        const dz = q.z - p.z
         const d2 = dx * dx + dy * dy + dz * dz
-        if (d2 < 6.25 && d2 > 1e-4) {
-          const f = 5 / d2
-          ax += dx * f
-          ay += dy * f
-          az += dz * f
+        if (d2 > SEE2) continue
+        nx += q.x; ny += q.y; nz += q.z
+        ax += q.vx; ay += q.vy; az += q.vz
+        cnt++
+        if (d2 < NEAR2 && d2 > 1e-4) {
+          const f = 1 / d2
+          sx -= dx * f; sy -= dy * f; sz -= dz * f
         }
       }
-      // A swallow's flight is nothing but jinks; a gull's is a slow lean.
-      ax += (this.rand() - 0.5) * k.jitter
-      az += (this.rand() - 0.5) * k.jitter
+      // Each rule asks for a velocity; the steering is the difference from the one it has.
+      let fx = 0, fy = 0, fz = 0
+      if (cnt) {
+        nx = nx / cnt - p.x; ny = ny / cnt - p.y; nz = nz / cnt - p.z
+        fx += nx * 0.06; fy += ny * 0.06; fz += nz * 0.06
+        ax = ax / cnt - p.vx; ay = ay / cnt - p.vy; az = az / cnt - p.vz
+        fx += ax * 0.35; fy += ay * 0.35; fz += az * 0.35
+      }
+      fx += sx * 2.2; fy += sy * 2.2; fz += sz * 2.2
+      // The wander is a heading that drifts, not a kick every frame: random forces average
+      // to a jitter, a slowly turning preference averages to a curve.
+      p.wander += (this.rand() - 0.5) * 3.0 * dt
+      fx += Math.sin(p.wander) * k.wander * 0.5
+      fz += Math.cos(p.wander) * k.wander * 0.5
+      // The flock's own errand, and its leash.
+      fx += (this.tx - p.x) * 0.02
+      fz += (this.tz - p.z) * 0.02
+      const r2 = p.x * p.x + p.z * p.z
+      if (r2 > FLOCK_RANGE * FLOCK_RANGE) {
+        fx -= p.x * 0.05
+        fz -= p.z * 0.05
+      }
 
       // The gull's dip: drop to the surface for a few seconds, then climb back.
       if (k.dip && water != null) {
@@ -688,52 +705,40 @@ class Flock {
         }
       }
       const wantY = p.dip > 0 ? water + 0.5 : this.groundY + p.alt
-      ay += (wantY - p.y) * 1.4 - p.vy * 1.8
+      fy += (wantY - p.y) * 0.6 - p.vy * 0.9
 
-      // Keep the flock over the colony.
-      const r2 = p.x * p.x + p.z * p.z
-      if (r2 > FLOCK_RANGE * FLOCK_RANGE) {
-        ax -= p.x * 0.08
-        az -= p.z * 0.08
+      const f2 = fx * fx + fy * fy + fz * fz
+      if (f2 > maxForce * maxForce) {
+        const s = maxForce / Math.sqrt(f2)
+        fx *= s; fy *= s; fz *= s
       }
-
-      const a2 = ax * ax + ay * ay + az * az
-      if (a2 > maxAccel * maxAccel) {
-        const s = maxAccel / Math.sqrt(a2)
-        ax *= s
-        ay *= s
-        az *= s
-      }
-      p.vx += ax * dt
-      p.vy += ay * dt
-      p.vz += az * dt
-      // A bird never stalls and never rockets: clamp to a band around its cruise speed.
-      const s2 = p.vx * p.vx + p.vy * p.vy + p.vz * p.vz
-      if (s2 > maxSpeed * maxSpeed) {
-        const s = maxSpeed / Math.sqrt(s2)
-        p.vx *= s
-        p.vy *= s
-        p.vz *= s
-      } else if (s2 < minSpeed * minSpeed && s2 > 1e-6) {
-        const s = minSpeed / Math.sqrt(s2)
-        p.vx *= s
-        p.vy *= s
-        p.vz *= s
-      }
+      p.vx += fx * dt
+      p.vy += fy * dt
+      p.vz += fz * dt
+      // Hold the speed near cruise rather than clamping at the edges of a band: a bird that
+      // brakes and surges is a bird being animated; one that carries its speed is flying.
+      const sp = Math.sqrt(p.vx * p.vx + p.vy * p.vy + p.vz * p.vz) || 1
+      const want = cruise * (p.dip > 0 ? 1.15 : 1)
+      const s = 1 + (want / sp - 1) * Math.min(1, 2.5 * dt)
+      p.vx *= s; p.vy *= s; p.vz *= s
       p.x += p.vx * dt
       p.y += p.vy * dt
       p.z += p.vz * dt
 
-      // Bank into turns. Facing +Z with Y up puts +X on the left, so a heading that grows is
-      // a left turn, and a left turn drops the left wing: positive roll about the body axis.
-      const heading = Math.atan2(p.vx, p.vz)
-      const yawRate = dt > 0 ? wrapAngle(heading - p.heading) / dt : 0
-      p.heading = heading
-      const roll = THREE.MathUtils.clamp(yawRate * 0.4, -0.75, 0.75)
-      p.roll += (roll - p.roll) * Math.min(1, 5 * dt)
+      // Orientation follows a *smoothed* copy of the velocity, so the body never snaps when
+      // a steering force flicks the true velocity; the bank comes from the lateral force —
+      // the same thing that turns the bird tips it into the turn.
+      const lam = Math.min(1, 6 * dt)
+      p.fx += (p.vx - p.fx) * lam
+      p.fy += (p.vy - p.fy) * lam
+      p.fz += (p.vz - p.fz) * lam
+      const heading = Math.atan2(p.fx, p.fz)
+      const right = -Math.cos(heading) * fx + Math.sin(heading) * fz
+      const roll = THREE.MathUtils.clamp(-right / (maxForce || 1) * 0.9, -0.8, 0.8)
+      p.roll += (roll - p.roll) * Math.min(1, 3 * dt)
 
       _dummy.position.set(p.x, p.y, p.z)
-      _target.set(p.x + p.vx, p.y + p.vy, p.z + p.vz)
+      _target.set(p.x + p.fx, p.y + p.fy, p.z + p.fz)
       _dummy.lookAt(_target)
       _dummy.rotateZ(p.roll)
       _dummy.scale.set(1, 1, 1)

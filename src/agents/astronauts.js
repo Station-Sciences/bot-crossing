@@ -42,6 +42,10 @@ const AGENT_LOOK = {
 }
 
 const WALK_SPEED = 2.1
+
+/** Who survives a display cap: the ones that want you, then the ones doing something. */
+const ROSTER_RANK = { blocked: 0, waiting: 1, working: 2, celebrating: 3, idle: 4, sleeping: 5 }
+const rosterRank = (entry) => ROSTER_RANK[entry.status] ?? 6
 const TURN_RATE = 7.5
 /**
  * How many astronauts may walk out of the ship in one reconcile. The rest of a big arrival —
@@ -470,12 +474,19 @@ export class Astronauts {
     this.roster = entries
     this.world = world || this.world
     const cap = Math.min(this.capacity, this.settings.get('maxAgents'))
-    // Agents on their way back to the ship still hold a slot, so the roster has to leave room
-    // for them. Without this the clamp above would quietly drop whoever sorted last, which is
-    // better than an empty planet but still not what the scan said.
-    const leaving = this.agents.reduce((n, a) => n + (a.state === 'leaving' ? 1 : 0), 0)
-    const wanted = entries.slice(0, Math.max(1, cap - leaving))
+    // The cap is a display budget, and the roster is cut to it by *who matters*: anyone
+    // blocked or waiting on you first, then whoever is working, then the rest — so a small
+    // budget shows the astronauts that are the whole point rather than the first ninety
+    // threads in alphabetical order of repo.
+    //
+    // It used to subtract the agents still walking home from the budget, on the theory that
+    // they hold a slot. They do, briefly, but the arithmetic feeds on itself: shrinking the cap
+    // sends a batch home, the batch then eats the budget, the next poll sends another batch,
+    // and within three polls the whole colony is on the ramp. Overflow is drawn-or-not by the
+    // instance buffer instead, which is what it was already doing for anything past capacity.
+    const wanted = entries.length > cap ? [...entries].sort((a, b) => rosterRank(a) - rosterRank(b)).slice(0, cap) : entries
     const seen = new Set()
+    const capped = entries.length > cap
 
     // The ramp is one door and the ship is a solid obstacle around it, so an entrance is a
     // queue. A handful arriving together is the shot the colony is for; a hundred is a scrum
@@ -495,8 +506,13 @@ export class Astronauts {
       this._spawnAgent(entry, walksOut)
     }
 
-    for (const agent of this.agents) {
-      if (!seen.has(agent.id) && agent.state !== 'leaving') this._sendHome(agent)
+    // Off the scan: walk home. Merely over the budget: gone, no ceremony — walking a
+    // display cap's worth of crew up the ramp reads as sixty threads being archived.
+    const onScan = capped ? new Set(entries.map((e) => e.id)) : seen
+    for (const agent of [...this.agents]) {
+      if (seen.has(agent.id) || agent.state === 'leaving') continue
+      if (onScan.has(agent.id)) this._drop(agent)
+      else this._sendHome(agent)
     }
     return this.agents.length
   }
@@ -622,6 +638,12 @@ export class Astronauts {
     const dx = pos.x - door.x
     const dz = pos.z - door.z
     return dx * dx + dz * dz < DOORWAY_CLEAR * DOORWAY_CLEAR
+  }
+
+  /** Off the map this frame, with no walk: the update loop reaps anything marked gone. */
+  _drop(agent) {
+    agent.state = 'gone'
+    agent.scale = 0
   }
 
   _sendHome(agent) {

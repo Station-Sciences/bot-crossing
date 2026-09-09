@@ -675,7 +675,7 @@ function makeIslets(planet, seed) {
 
 // ── scatter ───────────────────────────────────────────────────────────────────────────
 
-const SCATTER_BUDGET = 900
+const SCATTER_BUDGET = 2400
 
 /**
  * What grows on a world, and how it is planted.
@@ -899,9 +899,11 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
   const attempts = planet.water ? count * 3 : count
   let placed = 0
   for (let i = 0; i < attempts && placed < count; i++) {
-    // Bias outward: a ring is thicker where there is more area, which √ gives for free.
+    // Near-uniform over the disc, leaning a little toward the colony: the ground you
+    // actually look at is the ring just outside the plots, and a strict area-uniform spread
+    // leaves it thinner than the far field it is competing with.
     const a = rand() * Math.PI * 2
-    const d = 9 + Math.sqrt(rand()) * 150
+    const d = 9 + Math.pow(rand(), 0.58) * 150
     const x = Math.cos(a) * d
     const z = Math.sin(a) * d
     if (keepClear.some((p) => Math.hypot(x - p.x, z - p.z) < p.r)) continue
