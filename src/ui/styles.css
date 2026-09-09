@@ -82,10 +82,19 @@ body {
 }
 
 /* Hiding the UI fades every panel except the thread card: clicking an astronaut is still
-   how you ask what they are doing, so their card stays, on its own, beside them. */
+   how you ask what they are doing, so their card stays, on its own, beside them.
+
+   Once faded, the panels are made *invisible*, not just transparent. A panel with a
+   backdrop blur stays a composited layer at opacity 0, and Chromium redraws those over a
+   live canvas every frame — which, when the camera moves, shows up as large black
+   rectangles flickering where the sidebar and settings would be. `visibility: hidden`
+   takes them out of compositing entirely; its transition is delayed so the fade still
+   plays, and on the way back it is immediate so the fade-in has something to fade. */
 .hud.hidden > :not(.thread-pop) {
   opacity: 0 !important;
+  visibility: hidden !important;
   pointer-events: none !important;
+  transition: opacity 220ms ease, visibility 0s linear 220ms !important;
 }
 
 .hud.hidden > :not(.thread-pop) * {
@@ -94,7 +103,7 @@ body {
 
 /* Zero-specificity, so a panel with a transition of its own keeps it (and adds opacity). */
 .hud > :where(:not(.thread-pop)) {
-  transition: opacity 220ms ease;
+  transition: opacity 220ms ease, visibility 0s;
 }
 
 .panel {
