@@ -190,6 +190,22 @@ test("a visiting colony's repos cluster near its anchor, out past the home zones
   assert.ok(nearestGuest > farthestHome, 'the district overlaps the home zones instead of standing apart')
 })
 
+test("a district member stranded far from its anchor is pulled back to the district", () => {
+  const anchor = colonyAnchor('Chantie')
+  // Its memory says it sits near the middle of the map — a stale placement from before its
+  // colony was known. It must not stay there; it belongs in Chantie's district.
+  const stale = new Map([['Chantie · bot-crossing', [{ q: 0, r: 0 }]]])
+  const layout = allocateCells(
+    [
+      { id: 'Chantie · mios', size: 60, anchor },
+      { id: 'Chantie · bot-crossing', size: 1, anchor },
+    ],
+    stale
+  )
+  const root = layout.get('Chantie · bot-crossing')[0]
+  assert.ok(hexDist(root, anchor) <= 3, `bot-crossing stayed ${hexDist(root, anchor)} rings from the anchor`)
+})
+
 test('two colonies that both know a repo called "wra" get separate districts', () => {
   const layout = allocateCells([
     { id: 'Chantal · wra', size: 2, anchor: colonyAnchor('Chantal') },

@@ -261,8 +261,13 @@ function layOut(projects, previous) {
     }
   }
 
+  // How far an anchored zone's remembered root may sit from its colony's anchor before the
+  // memory is thrown away and it re-seeds by the anchor. A visiting colony's repos are meant to
+  // read as one district; a plot that was placed before its colony was known — or under an
+  // older anchor — stays stranded across the map otherwise, which is exactly what this catches.
+  const DISTRICT_DRIFT = 3
   const held = new Map()
-  for (const { id, want } of wanted) {
+  for (const { id, want, anchor } of wanted) {
     const before = previous.get(id)
     if (!before || !before.length) continue
     // The root cell is the whole point — it is the zone's origin, and everything standing
@@ -270,6 +275,9 @@ function layOut(projects, previous) {
     // the root is gone this project is seeded afresh rather than quietly re-rooted onto
     // whichever of its old cells happens to still be free.
     if (!free.has(key(before[0].q, before[0].r))) continue
+    // A district member whose memory drifted far from the anchor is re-seeded, so a stale
+    // placement cannot hold a repo out on its own away from the rest of its colony.
+    if (anchor && hexDistance(before[0], anchor) > DISTRICT_DRIFT) continue
     const keep = []
     for (const cell of before) {
       if (keep.length >= want) break // shrunk: whatever it claimed last is what it gives up
