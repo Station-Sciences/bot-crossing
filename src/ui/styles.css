@@ -81,14 +81,20 @@ body {
   --side: 334px;
 }
 
-.hud.hidden {
-  opacity: 0;
-  transform: scale(0.985);
+/* Hiding the UI fades every panel except the thread card: clicking an astronaut is still
+   how you ask what they are doing, so their card stays, on its own, beside them. */
+.hud.hidden > :not(.thread-pop) {
+  opacity: 0 !important;
   pointer-events: none !important;
 }
 
-.hud.hidden * {
+.hud.hidden > :not(.thread-pop) * {
   pointer-events: none !important;
+}
+
+/* Zero-specificity, so a panel with a transition of its own keeps it (and adds opacity). */
+.hud > :where(:not(.thread-pop)) {
+  transition: opacity 220ms ease;
 }
 
 .panel {
@@ -680,7 +686,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
 }
 
 /* Settings shares this edge; the sidebar steps aside rather than stacking under it. */
