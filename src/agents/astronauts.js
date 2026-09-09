@@ -78,6 +78,8 @@ const CONTACT = 1
  * cannot express, so it reads as an astronaut gliding across the deck.
  */
 const DRIFT_ARRIVE = 0.9
+/** Seconds to walk the ramp from the airlock to the ground. */
+const RAMP_TIME = 1.7
 const DRIFT_PACE = 0.55
 /**
  * How close to its site counts as arrived. Deliberately derived from SEPARATION and larger
@@ -157,6 +159,11 @@ export class Astronauts {
     /** Uniform bucket grid for the separation query, so it stays O(n) as the crew grows. */
     this._buckets = new Map()
     this.nav = null
+    // The first roster of a page load comes out of the ship one at a time — see `setRoster`.
+    this._rosters = 0
+    this._queue = []
+    this._queueTimer = 0
+    this._queueEvery = 0.3
   }
 
   // ── construction ────────────────────────────────────────────────────────────────────
@@ -499,7 +506,13 @@ export class Astronauts {
     // that shoves its own members into the ship's footprint, where they give up, sit down and
     // become the obstacle for everybody behind them. Past this many, the rest are simply
     // already outside — which is what a thread the colony has seen before is anyway.
+    // The first roster of a load is different: nobody is "already outside", because you
+    // have only just arrived too. Everyone comes out of the ship, one at a time, the ones
+    // waiting on you first — a trickle rather than a scrum, and the colony fills up while
+    // you watch instead of being found standing there.
+    const trickle = this._rosters++ === 0
     let entrances = MAX_ENTRANCE
+    const queued = []
     for (const entry of wanted) {
       seen.add(entry.id)
       const existing = this.byId.get(entry.id)
@@ -507,9 +520,24 @@ export class Astronauts {
         this._updateAgent(existing, entry)
         continue
       }
+      if (trickle) {
+        const agent = this._spawnAgent(entry, true)
+        agent.state = 'queued'
+        agent.scale = 0
+        queued.push(agent)
+        continue
+      }
       const walksOut = !entry.known && entrances > 0
       if (walksOut) entrances--
       this._spawnAgent(entry, walksOut)
+    }
+    if (queued.length) {
+      queued.sort((a, b) => rosterRank(a) - rosterRank(b))
+      this._queue.push(...queued)
+      // Spread over roughly half a minute, but never so fast it is a crowd nor so slow a
+      // small colony takes an age to arrive.
+      this._queueEvery = THREE.MathUtils.clamp(40 / this._queue.length, 0.35, 0.8)
+      this._queueTimer = 0.4
     }
 
     // Off the scan: walk home. Merely over the budget: gone, no ceremony — walking a
@@ -525,13 +553,18 @@ export class Astronauts {
 
   _spawnAgent(entry, walksOut = true) {
     const door = this.world?.shipDoor?.() || new THREE.Vector3(0, 0, 0)
+    const airlock = this.world?.shipAirlock?.() || door
     const jitter = () => (Math.random() - 0.5) * 1.4
-    // Straight onto its plot, a pace off the exact spot so a zone's crew does not appear in a
-    // stack. The nav grid sorts out anything that lands on a building.
+    // Out of the airlock and down the ramp, or straight onto its plot, a pace off the exact
+    // spot so a zone's crew does not appear in a stack. The nav grid sorts out anything
+    // that lands on a building.
     const site = entry.site || door
     const start = walksOut
-      ? new THREE.Vector3(door.x + jitter(), 0, door.z + jitter())
+      ? new THREE.Vector3(airlock.x, airlock.y, airlock.z)
       : new THREE.Vector3(site.x + jitter(), 0, site.z + jitter())
+    // The walk down the ramp: from the airlock to a spot just past its foot.
+    const rampFrom = walksOut ? airlock.clone() : null
+    const rampTo = walksOut ? new THREE.Vector3(door.x + jitter() * 0.5, door.y, door.z + jitter() * 0.5) : null
 
     const agent = {
       id: entry.id,
@@ -544,6 +577,10 @@ export class Astronauts {
       workAt: 0,
       pos: start,
       vel: new THREE.Vector3(),
+      // Progress down the ramp, 0..1; 1 (or no ramp at all) means on the ground.
+      ramp: walksOut ? 0 : 1,
+      rampFrom,
+      rampTo,
       yaw: Math.random() * Math.PI * 2,
       targetYaw: 0,
       speed: WALK_SPEED * (0.86 + Math.random() * 0.28),
@@ -563,8 +600,8 @@ export class Astronauts {
       hop: 0,
       // Ground tracking. `groundAt` is the height last sampled and `groundY` the eased value
       // actually stood on; both start null so the first frame snaps instead of easing up.
-      groundAt: null,
-      groundY: null,
+      groundAt: walksOut ? airlock.y : null,
+      groundY: walksOut ? airlock.y : null,
       groundX: 0,
       groundZ: 0,
       /** Distance actually covered per second, damped — what picks the animation clip. */
@@ -576,6 +613,16 @@ export class Astronauts {
       stuckFor: 0,
       /** Distance moved this frame by corrections, not by walking; kept out of the speed. */
       corr: 0,
+      // The wobble check: how far the astronaut has moved in total over the last second
+      // against where it was at the start of it. Lots of the one and none of the other is
+      // a glitch, whatever caused it — see `_unglitch`.
+      wobble: 0,
+      wobbleFrom: new THREE.Vector3(NaN, 0, NaN),
+      wobbleAt: 0,
+      /** Seconds left of being left alone after an unglitch, so nothing shoves it back. */
+      calm: 0,
+      /** Seconds left of walking through the crowd rather than round it. See `_walk`. */
+      ghost: 0,
       // Animation state: which baked clip, how far into it, and the row of the bone table
       // that lands on. Started at a random offset so a crowd never marches in step.
       clipKey: walksOut ? 'spawn' : 'idle',
@@ -609,8 +656,13 @@ export class Astronauts {
   _updateAgent(agent, entry) {
     agent.thread = entry.thread
     if (entry.site) {
-      const moved = Math.hypot(entry.site.x - agent.site.x, entry.site.z - agent.site.z) > 0.05
-      agent.site.copy(entry.site)
+      // Measured against the site the roster last handed over, not the one being stood at:
+      // an astronaut that gave up on an unreachable site and adopted the ground it reached
+      // would otherwise see the same site come round every poll and set off again.
+      const given = (agent.given ||= new THREE.Vector3(NaN, 0, NaN))
+      const moved = Number.isNaN(given.x) || Math.hypot(entry.site.x - given.x, entry.site.z - given.z) > 0.05
+      given.copy(entry.site)
+      if (moved) agent.site.copy(entry.site)
       // A site that has moved is a site to walk to. This matters most for an astronaut that
       // gave up on an unreachable one and adopted the ground it was standing on: the next
       // scan hands the real site back, and without this it would stand there for good,
@@ -642,8 +694,9 @@ export class Astronauts {
       this._sendHome(agent)
       return
     }
-    // A spawning agent keeps walking out of the ship; everyone else re-targets at once.
-    if (agent.state !== 'spawning') agent.state = 'walking'
+    // A spawning agent keeps walking out of the ship, a queued one stays inside it;
+    // everyone else re-targets at once.
+    if (agent.state !== 'spawning' && agent.state !== 'queued') agent.state = 'walking'
     agent.stateAge = 0
     agent.pathVersion = -1
   }
@@ -665,6 +718,8 @@ export class Astronauts {
 
   _sendHome(agent) {
     if (agent.state === 'leaving' || agent.state === 'gone') return
+    // Still inside the ship: nothing to walk home.
+    if (agent.state === 'queued') return this._drop(agent)
     agent.state = 'leaving'
     // The status goes too. A sleeper's status is what sits it down: the clip picker reads
     // it whenever the body is not moving, so a dormant astronaut sent home would stand up,
@@ -694,8 +749,13 @@ export class Astronauts {
     this._rebuildBuckets()
     this._routeBudget = PATH_BUDGET
 
+    this._releaseQueued(dt)
     for (let i = this.agents.length - 1; i >= 0; i--) {
       const agent = this.agents[i]
+      if (agent.state === 'queued') {
+        write++
+        continue
+      }
       agent.stateAge += dt
       this._step(agent, dt, elapsed, anim)
       this._animate(agent, dt, anim)
@@ -711,6 +771,42 @@ export class Astronauts {
 
     this._writeMatrices(elapsed, anim)
     return write
+  }
+
+  /** Let the next queued astronaut out of the ship when its turn comes. */
+  _releaseQueued(dt) {
+    if (!this._queue.length) return
+    this._queueTimer -= dt
+    if (this._queueTimer > 0) return
+    // Not while the last one out is still on the ramp or standing at its foot — a queue,
+    // not a pile — unless it has been a long time, in which case it is stuck and the rest
+    // should not wait behind it.
+    const last = this._lastOut
+    if (last && last.state !== 'gone' && this._queueTimer > -2) {
+      // Far enough down the ramp that the next one has a step of its own.
+      if (last.ramp < 0.4) return
+    }
+    this._queueTimer = this._queueEvery
+    let agent = this._queue.shift()
+    // Anyone that left the roster while still inside is simply not there.
+    while (agent && (agent.state !== 'queued' || !this.byId.has(agent.id))) agent = this._queue.shift()
+    if (!agent) return
+    agent.state = 'spawning'
+    agent.stateAge = 0
+    agent.clipKey = 'spawn'
+    agent.clipTime = 0
+    agent.pathVersion = -1
+    // Out of the airlock as it stands now — the ship may have moved since the roster.
+    const airlock = this.world?.shipAirlock?.()
+    const door = this.world?.shipDoor?.()
+    if (airlock && door) {
+      agent.rampFrom.copy(airlock)
+      agent.rampTo.set(door.x + (Math.random() - 0.5) * 0.7, door.y, door.z + (Math.random() - 0.5) * 0.7)
+      agent.pos.copy(airlock)
+      agent.groundAt = airlock.y
+      agent.groundY = airlock.y
+    }
+    this._lastOut = agent
   }
 
   /**
@@ -761,7 +857,23 @@ export class Astronauts {
     switch (agent.state) {
       case 'spawning': {
         agent.scale = Math.min(1, agent.scale + dt * 2.6)
-        if (agent.stateAge > 0.9) agent.state = 'walking'
+        // Down the ramp first: a straight walk from the airlock to its foot, the height
+        // following the ramp rather than the ground under it.
+        if (agent.ramp < 1) {
+          agent.ramp = Math.min(1, agent.ramp + dt / RAMP_TIME)
+          const t = agent.ramp
+          const from = agent.rampFrom
+          const to = agent.rampTo
+          agent.pos.x = from.x + (to.x - from.x) * t
+          agent.pos.z = from.z + (to.z - from.z) * t
+          const y = from.y + (to.y - from.y) * t
+          agent.groundAt = y
+          agent.groundY = y
+          agent.vel.set((to.x - from.x) / RAMP_TIME, 0, (to.z - from.z) / RAMP_TIME)
+          agent.targetYaw = Math.atan2(agent.vel.x, agent.vel.z)
+          break
+        }
+        if (agent.stateAge > 0.9 + RAMP_TIME) agent.state = 'walking'
         this._walk(agent, toSite, dist, dt, 0.55)
         break
       }
@@ -777,7 +889,10 @@ export class Astronauts {
         // Stuck for a couple of seconds gets a fresh route; stuck for longer gives up.
         if (agent.stuckFor > 2 && agent.stuckFor < 2.05) agent.pathVersion = -1
         const stuck = agent.stuckFor > 5 || (agent.blocked && agent.stateAge > 8) || agent.stateAge > 45
-        if (dist < ARRIVE_RADIUS || stuck) {
+        // Creeping the last metre for ten seconds — a crowd at the site, a spot just inside
+        // a keep circle — is close enough.
+        const nearEnough = dist < ARRIVE_RADIUS * 1.9 && agent.stateAge > 10
+        if (dist < ARRIVE_RADIUS || nearEnough || stuck) {
           // Adopting the ground it reached is right for a site something got built on top of.
           // It is exactly wrong next to the ship: an astronaut still shouldering its way out
           // of the doorway would claim the doorway, and the queue behind it inherits a
@@ -832,8 +947,10 @@ export class Astronauts {
     // apart whenever something is in the way: velocity stays high while the collision code
     // refuses the step, and an agent driven off intent alone walks on the spot against a
     // wall.
-    const moved = Math.max(0, Math.hypot(agent.pos.x - fromX, agent.pos.z - fromZ) - agent.corr) / Math.max(dt, 1e-4)
+    const travelled = Math.hypot(agent.pos.x - fromX, agent.pos.z - fromZ)
+    const moved = Math.max(0, travelled - agent.corr) / Math.max(dt, 1e-4)
     agent.corr = 0
+    this._watchWobble(agent, travelled, dt, elapsed)
     // Asymmetric on purpose. Setting off is picked up on the very frame it happens, so an
     // astronaut is never sliding in a standing pose; stopping decays over a tenth of a
     // second, which both stops a half-blocked step flickering the clip and lets the walk
@@ -849,7 +966,7 @@ export class Astronauts {
     // between plots rolls by half a metre either way, so a crew pinned to zero is buried for
     // half the colony. Sampled only when the agent has actually moved — most of the crew is
     // parked at its site, and the sample is a hex lookup plus a noise evaluation.
-    const ground = this.world?.groundAt
+    const ground = agent.ramp < 1 ? null : this.world?.groundAt
     if (ground) {
       if (agent.groundAt === null || Math.abs(agent.pos.x - agent.groundX) + Math.abs(agent.pos.z - agent.groundZ) > 0.2) {
         agent.groundX = agent.pos.x
@@ -869,17 +986,50 @@ export class Astronauts {
    * Slowing down uses the goal so an astronaut cruises through intermediate corners and only
    * eases as it actually arrives.
    */
+  /**
+   * One step of a walk. The rules that keep it from ever jamming, in the order games
+   * learned them:
+   *
+   * - The grid, not the keep radius, is what a walk collides with, and it is rasterised
+   *   with a smaller radius than the crew stands with — the gaps between buildings stay
+   *   routes, and a shoulder through a wall for a step is cheaper than a crowd that cannot
+   *   get past. The keep radius is applied on arrival, by `_settle`.
+   * - Separation only ever pushes *sideways* while walking. A push straight back is how a
+   *   stream of astronauts going the same way cancels itself out and mills on the spot.
+   * - An astronaut that gets nowhere for most of a second stops colliding with the crowd
+   *   for a couple of seconds and walks through it — the ghosting every RTS does — and asks
+   *   for a fresh route at the same time.
+   */
   _walk(agent, toTarget, goalDist, dt, factor) {
     const legDist = toTarget.length()
+    let dirX = 0
+    let dirZ = 0
     if (legDist > 0.05) {
       const dir = toTarget.divideScalar(legDist)
+      dirX = dir.x
+      dirZ = dir.z
       const want = agent.speed * factor * Math.min(1, goalDist / 1.8)
       agent.vel.x = THREE.MathUtils.damp(agent.vel.x, dir.x * want, 6, dt)
       agent.vel.z = THREE.MathUtils.damp(agent.vel.z, dir.z * want, 6, dt)
     }
 
-    const push = this._separation(agent, this._sep)
-    if (this.nav) this.nav.repel(agent.pos, push)
+    if (agent.ghost > 0) agent.ghost -= dt
+    const push = agent.ghost > 0 ? this._sep.set(0, 0, 0) : this._separation(agent, this._sep)
+    if (legDist > 0.05 && (push.x !== 0 || push.z !== 0)) {
+      // Sideways only: drop whatever part of the shove points back along the walk, and
+      // never let the rest be more than a lean.
+      const along = push.x * dirX + push.z * dirZ
+      if (along < 0) {
+        push.x -= dirX * along
+        push.z -= dirZ * along
+      }
+      const m = Math.hypot(push.x, push.z)
+      const cap = agent.speed * 0.7
+      if (m > cap) {
+        push.x *= cap / m
+        push.z *= cap / m
+      }
+    }
     const dx = (agent.vel.x + push.x) * dt
     const dz = (agent.vel.z + push.z) * dt
 
@@ -888,24 +1038,19 @@ export class Astronauts {
       // walk through a wall.
       if (!this.nav.slide(agent.pos, dx, dz)) {
         agent.vel.multiplyScalar(0.4)
-        // Wedged against something the path did not know about — ask for a new one.
-        agent.pathVersion = -1
         agent.blocked = true
       }
-      // A step the keep-out mostly undid is a refused step too — otherwise an astronaut
-      // whose goal sits inside a keep circle is pushed back exactly as far as it walked,
-      // every frame, and runs on the spot for good.
-      const undone = this.nav.keepOut(agent.pos)
-      agent.corr += undone
-      if (undone > 0.5 * Math.hypot(dx, dz)) agent.blocked = true
-      // Wanting to go somewhere and getting nowhere is being stuck. Count it, and once it
-      // has gone on for a moment stop trying: a foot shuffling against a wall flickers
-      // between the walk and the stand every frame, and whoever owns this leg reads the
-      // clock and picks somewhere else to go.
+      // Wanting to go somewhere and getting nowhere is being stuck. Count it; after most
+      // of a second, ghost through whatever it is and re-route. (Re-routing on every
+      // refused step, as this used to, only thrashed the route budget and left the
+      // wedged ones without a route at all.)
       const wants = legDist > 0.3
       if (wants && (agent.blocked || (agent.groundSpeed || 0) < 0.06)) agent.stuckFor += dt
       else agent.stuckFor = 0
-      if (agent.stuckFor > 0.35) agent.vel.set(0, 0, 0)
+      if (agent.stuckFor > 0.8 && agent.ghost <= 0) {
+        agent.ghost = 2.5
+        agent.pathVersion = -1
+      }
     } else {
       agent.pos.x += dx
       agent.pos.z += dz
@@ -1032,7 +1177,14 @@ export class Astronauts {
    * sleeper does not read as walking and stays in its sitting clip.
    */
   _settle(agent, dt) {
+    if (agent.calm > 0) return
     const push = this._separation(agent, this._sep)
+    // Someone sitting is not going to elbow a neighbour aside: a gentle nudge is all, or
+    // two sleepers in a tight spot trade shoves with a wall for ever.
+    if (agent.status === 'sleeping') {
+      push.x *= 0.3
+      push.z *= 0.3
+    }
     const x0 = agent.pos.x
     const z0 = agent.pos.z
     if (this.nav) {
@@ -1131,6 +1283,60 @@ export class Astronauts {
     agent.checkStart = elapsed
     agent.checkProp = pickProp()
     agent.workAt = Math.max(agent.workAt, elapsed + CHECK_LEN + 1.5)
+  }
+
+  /**
+   * The wobble check. Every second, compare how far the astronaut moved in total with how
+   * far it actually got. Half a metre of motion for none of progress is something jittering
+   * it in place — two keep circles, a crowd, a wall and a route disagreeing — and rather
+   * than know which, it is moved to the nearest clear ground and left alone a moment.
+   */
+  _watchWobble(agent, travelled, dt, elapsed) {
+    if (agent.calm > 0) agent.calm -= dt
+    agent.wobble += travelled
+    if (Number.isNaN(agent.wobbleFrom.x)) {
+      agent.wobbleFrom.copy(agent.pos)
+      agent.wobbleAt = elapsed
+      return
+    }
+    if (elapsed - agent.wobbleAt < 1) return
+    const net = Math.hypot(agent.pos.x - agent.wobbleFrom.x, agent.pos.z - agent.wobbleFrom.z)
+    if (agent.wobble > 0.7 && net < 0.12 && agent.state !== 'spawning' && agent.state !== 'leaving') this._unglitch(agent)
+    agent.wobble = 0
+    agent.wobbleFrom.copy(agent.pos)
+    agent.wobbleAt = elapsed
+  }
+
+  _unglitch(agent) {
+    const nav = this.nav
+    if (!nav) return
+    // Clear ground that nobody else is standing on, or the crowd shoves it straight back
+    // into whatever it was jittering against.
+    let spot = null
+    const x = agent.pos.x
+    const z = agent.pos.z
+    for (let r = 0; r <= 5 && !spot; r += 0.4) {
+      const n = r === 0 ? 1 : Math.max(8, Math.round(r * 12))
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + r * 5.1
+        const cx = x + Math.cos(a) * r
+        const cz = z + Math.sin(a) * r
+        if (nav.isBlocked(cx, cz) || nav.insideKeep(cx, cz) || this._crowded(cx, cz, agent)) continue
+        spot = { x: cx, z: cz }
+        break
+      }
+    }
+    if (spot) {
+      agent.pos.x = spot.x
+      agent.pos.z = spot.z
+    }
+    agent.vel.set(0, 0, 0)
+    agent.calm = 1.5
+    // A walker that jitters has a site it cannot reach: give up on it now.
+    agent.stuckFor = agent.state === 'walking' ? 6 : 0
+    // A walker gets a fresh route from the new spot; a wanderer or worker a new leg.
+    agent.pathVersion = -1
+    agent.driftBlocked = true
   }
 
   _faceToward(agent, point, dt) {

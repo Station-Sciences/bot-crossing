@@ -24,7 +24,7 @@ const CELL = 0.5
 /** Half-width of the navigable square. Comfortably contains the colony and the landing pad. */
 const HALF = 56
 /** Give up rather than stall the frame if a search goes pathological. */
-const MAX_EXPANSIONS = 6000
+const MAX_EXPANSIONS = 24000
 
 const SQRT2 = Math.SQRT2
 /** Scratch for the solid queries, so the frame loop allocates nothing. */
@@ -193,6 +193,11 @@ export class Navigation {
     const solids = this._solidsNear(pos.x, pos.z, _near)
     const startX = pos.x
     const startZ = pos.z
+    // Two keep circles that overlap make a pocket: out of one is into the other. A few
+    // passes settle the easy cases; a point still inside after that is left where it was
+    // rather than shoved back and forth, and the astronaut's own wobble check moves it.
+    for (let pass = 0; pass < 3; pass++) {
+    let any = false
     for (let i = 0; i < solids.length; i++) {
       const o = solids[i]
       const dx = pos.x - o.x
@@ -207,6 +212,7 @@ export class Navigation {
       }
       const nx = o.x + (dx / d) * keep
       const nz = o.z + (dz / d) * keep
+      any = true
       if (!this.isBlocked(nx, nz)) {
         pos.x = nx
         pos.z = nz
@@ -237,9 +243,36 @@ export class Navigation {
         }
       }
     }
+    if (!any) break
+    }
+    if (this.insideKeep(pos.x, pos.z) && this.insideKeep(startX, startZ)) {
+      pos.x = startX
+      pos.z = startZ
+      return 0
+    }
     // How far the point was put back, so a walk can tell a step that was undone from one
     // that landed.
     return Math.hypot(pos.x - startX, pos.z - startZ)
+  }
+
+  /**
+   * The nearest spot that is neither a blocked cell nor inside any keep circle — somewhere
+   * an astronaut can stand without anything pushing it. Searched on rings out to `maxR`.
+   */
+  nearestClear(x, z, maxR = 5) {
+    if (!this.isBlocked(x, z) && !this.insideKeep(x, z)) return { x, z }
+    for (let r = 0.35; r <= maxR; r += 0.35) {
+      const n = Math.max(8, Math.round(r * 14))
+      const a0 = (r * 7.3) % (Math.PI * 2)
+      for (let i = 0; i < n; i++) {
+        const a = a0 + (i / n) * Math.PI * 2
+        const cx = x + Math.cos(a) * r
+        const cz = z + Math.sin(a) * r
+        if (this.isBlocked(cx, cz) || this.insideKeep(cx, cz)) continue
+        return { x: cx, z: cz }
+      }
+    }
+    return null
   }
 
   /** Whether a point is inside any solid's keep radius — no place to aim a walk at. */
@@ -338,6 +371,10 @@ export class Navigation {
 
     let expansions = 0
     let found = false
+    // The node that got nearest the goal, for when the goal turns out to be unreachable —
+    // a route to the closest point beats no route, which is a straight line into a wall.
+    let best = startIdx
+    let bestH = this._heuristic(start.ix, start.iz, goal.ix, goal.iz)
 
     while (this.heapSize > 0) {
       const current = this._pop()
@@ -352,6 +389,11 @@ export class Navigation {
       const cx = current % size
       const cz = (current - cx) / size
       const g = gScore[current]
+      const h = this._heuristic(cx, cz, goal.ix, goal.iz)
+      if (h < bestH) {
+        bestH = h
+        best = current
+      }
 
       for (let k = 0; k < 8; k++) {
         const nx = cx + NEIGHBOURS[k * 2]
@@ -379,17 +421,21 @@ export class Navigation {
       }
     }
 
-    if (!found) return null
+    // Unreachable, or the search ran out: go as far as it got. If that is nowhere, null.
+    const endIdx = found ? goalIdx : best
+    if (!found && best === startIdx) return null
 
     // Walk the parents back, then smooth.
     const cells = []
-    let node = goalIdx
+    let node = endIdx
     while (node !== -1) {
       cells.push(node)
       node = parent[node]
     }
     cells.reverse()
-    return this._smooth(cells, sx, sz, reachableX, reachableZ)
+    const ex = found ? reachableX : this.toWorld(endIdx % size)
+    const ez = found ? reachableZ : this.toWorld((endIdx - (endIdx % size)) / size)
+    return this._smooth(cells, sx, sz, ex, ez)
   }
 
   /** Octile distance — admissible for 8-connected movement, and never overestimates. */

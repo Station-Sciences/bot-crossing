@@ -50,6 +50,12 @@ import { liveThreadsForColony } from './hidden-projects.js'
 const STALE_MS = 3 * 24 * 60 * 60 * 1000
 /** How wide an astronaut is, for the purpose of not fitting through gaps it should not. */
 const AGENT_RADIUS = 0.26
+/**
+ * The radius the crew *travels* with, which is smaller than the one it stands with. The
+ * grid is rasterised at this, so the gaps between buildings stay routes; a shoulder
+ * through a wall for a step is the price, and the keep radius sorts it out on arrival.
+ */
+const TRAVEL_RADIUS = 0.12
 /** Progress a live thread adds per second, so a working site visibly grows while you watch. */
 const LIVE_GROWTH = 0.004
 /** How many zones' positions to remember, including repos with nothing running in them. */
@@ -648,6 +654,7 @@ export class Colony {
   _world() {
     return {
       shipDoor: () => this.ship.shipDoor(),
+      shipAirlock: () => this.ship.shipAirlock(),
       groundAt: (x, z) => this.groundAt(x, z),
     }
   }
@@ -740,7 +747,7 @@ export class Colony {
       if (entry.retiring) continue
       const p = entry.mesh.position
       const footprint = entry.mesh.userData.footprint || 1.2
-      const r = footprint * 0.8 + AGENT_RADIUS
+      const r = footprint * 0.8 + TRAVEL_RADIUS
       // The grid blocks less than the whole footprint so the gaps stay walkable; the
       // keep radius is where the crew is actually held to — see `Navigation.repel`.
       obstacles.push({ x: p.x, z: p.z, r, keep: footprint * 0.92 + AGENT_RADIUS })
@@ -749,7 +756,7 @@ export class Colony {
     // straight through one is exactly as wrong as one walking through a habitat.
     for (const plot of this.plotOrder) {
       for (const spot of plot.clutterSpots || []) {
-        obstacles.push({ x: plot.center.x + spot.x, z: plot.center.z + spot.z, r: spot.r + AGENT_RADIUS, keep: spot.r + AGENT_RADIUS + 0.1 })
+        obstacles.push({ x: plot.center.x + spot.x, z: plot.center.z + spot.z, r: spot.r + TRAVEL_RADIUS, keep: spot.r + AGENT_RADIUS + 0.1 })
       }
     }
     // Ground scatter counts as well. A boulder an astronaut can walk through is the same
@@ -772,7 +779,7 @@ export class Colony {
         if (r < 0.55) continue
         // Held to as well as routed round: a shoulder through a boulder is the same glitch
         // as one through a wall, just smaller.
-        obstacles.push({ x: mat.elements[12], z: mat.elements[14], r: r + AGENT_RADIUS, keep: r + AGENT_RADIUS + 0.1 })
+        obstacles.push({ x: mat.elements[12], z: mat.elements[14], r: r + TRAVEL_RADIUS, keep: r + AGENT_RADIUS + 0.1 })
       }
     }
 
@@ -783,7 +790,7 @@ export class Colony {
         const a = (i / 4) * Math.PI * 2 + 0.78
         const x = site.x + Math.cos(a) * site.radius
         const z = site.z + Math.sin(a) * site.radius
-        obstacles.push({ x, z, r: 0.14 + AGENT_RADIUS, keep: 0.14 + AGENT_RADIUS + 0.12 })
+        obstacles.push({ x, z, r: 0.14 + TRAVEL_RADIUS, keep: 0.14 + AGENT_RADIUS + 0.12 })
       }
     }
 
@@ -906,7 +913,7 @@ export class Colony {
     // Clear of the building's *own* footprint rather than a fixed 2.35: a big habitat blocks
     // more ground than a small one, and a standing spot inside that radius is a spot the
     // crew can never actually reach — it walks at the wall for as long as the thread lives.
-    const blocked = (entry.mesh.userData.footprint || 1.2) * 0.8 + AGENT_RADIUS
+    const blocked = (entry.mesh.userData.footprint || 1.2) * 0.92 + AGENT_RADIUS
     const stand = Math.max(2.35, blocked + 0.5)
     let site = new THREE.Vector3(b.x + Math.cos(a) * stand, 0, b.z + Math.sin(a) * stand)
     // Outward points straight off the zone for a building on its edge, and an astronaut

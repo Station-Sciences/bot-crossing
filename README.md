@@ -355,16 +355,31 @@ phone starts on the Low preset. One finger drags the ground, two pinch to zoom.
 `public/dev-mobile.html` (untracked) frames the app at phone size for checking this in a
 desktop browser.
 
-### Staying out of the walls
+### Never getting stuck
 
-The navigation grid blocks a building at 80% of its footprint, so the gaps between slots
-stay walkable — which also lets an astronaut settle with a shoulder through a wall. So on
-top of the grid every building, crate and boulder carries a *keep* radius (`navigation.js`,
-`repel` and `keepOut`): a soft shove out of it while moving, and a hard put-back after every
-step, with a walk round the circle when straight out is blocked. Solids are bucketed on a
-coarse grid so the query costs the same with two hundred of them as with twenty. An
-astronaut that wants to move and gets nowhere counts the seconds (`stuckFor`); after a
-moment it stops shuffling, and whoever owns that leg picks somewhere else to go.
+The rules the crew moves by, which are the ones games settled on:
+
+- **Routes are planned on a grid rasterised with a small travel radius**, so the gaps
+  between buildings stay routes. A shoulder through a wall for a step is the price. When a
+  goal is unreachable or the search runs out, the route goes to the closest point reached
+  rather than nowhere — a straight line into a wall is how astronauts used to jam.
+- **Keep-out is for standing, not walking.** Every building, crate, boulder and scaffold
+  pole carries a keep radius (`navigation.js`), and an astronaut that has arrived is
+  pushed out of it and put back on it after every nudge. Walkers only collide with the grid.
+- **Separation only pushes sideways** while walking, and never harder than a lean. A shove
+  straight back is how a stream going one way cancels itself and mills on the spot.
+- **Ghosting.** An astronaut that gets nowhere for most of a second stops colliding with
+  the crowd for a couple of seconds, walks through it, and asks for a fresh route.
+- **The wobble check.** Every second, total motion is compared with net progress. Half a
+  metre of the one for none of the other is a glitch, whatever caused it: the astronaut is
+  moved to the nearest clear, uncrowded ground and left alone for a moment.
+- Whoever owns a leg — a wander, a spot round a building, a walk to a site — gives it up
+  after a second of no progress and picks somewhere else; a walk that creeps its last
+  metre for ten seconds counts as arrived.
+
+On a first load the whole crew comes out of the ship's airlock one at a time, the ones
+waiting on you first, and walks down the ramp to its site — a trickle over a minute or so,
+never a scrum at the foot of the ramp.
 
 ### Checking on it
 
