@@ -42,10 +42,10 @@ const QUALITY = {
 
 /** How far past the rim the rock lip sits, and how much further the belly bulges. */
 const LIP = 2
-const BELLY = 9.5
+const BELLY = 5.5
 /** The lip is this far under the local rim height; the belly's widest point this far above the cloud sea. */
 const LIP_DROP = 2
-const BELLY_ABOVE_SEA = 2
+const BELLY_ABOVE_SEA = 10
 /** The cloud sea is a 400-unit sheet — wider than the ground, so its fade hides the ground's corners. */
 const SEA_SIZE = 400
 
@@ -280,7 +280,8 @@ function buildStrand() {
 
   for (let i = 0; i <= STRAND_SEGMENTS; i++) {
     const t = i / STRAND_SEGMENTS
-    const w = (0.09 * (1 - 0.8 * t) + 0.012) / 2
+    // Fat enough to read from the far side of the island; a hair-thin strand at sixty metres is nothing.
+    const w = (0.22 * (1 - 0.7 * t) + 0.03) / 2
     positions.push(-w, -t, bend(t), w, -t, bend(t))
     aT.push(t, t)
     aLeaf.push(0, 0)
@@ -405,7 +406,8 @@ function plantVines({ mesh, count, rimRadius, cloudLevel, heightAt, rand, palett
     const fromLip = rand() < 0.4
     // Where on the flare it is rooted, as the same `u` the lathe used, so it lands on the rock.
     const u = fromLip ? 0.02 + rand() * 0.13 : 0.55 + rand() * 0.45
-    const r = rLip + (rBelly - rLip) * Math.pow(u, 0.55) - 0.6
+    // A metre and a half in: the rock's own noise pulls its face in by up to that much.
+    const r = rLip + (rBelly - rLip) * Math.pow(u, 0.55) - 1.5
     p.set(Math.cos(a) * r, yLip + (yBelly - yLip) * u, Math.sin(a) * r)
 
     // Bend direction (+z) out along the radius, leaning the hang outward by `tilt`, with a

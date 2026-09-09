@@ -544,7 +544,7 @@ const ISLAND_SHELF = 36
 const SEA_DEPTH = 7
 /** The floating island: land to here, then the ground falls out of sight over this shelf. */
 export const SKY_RIM = 58
-const SKY_SHELF = 16
+const SKY_SHELF = 9
 const SKY_DROP = 70
 
 /**
@@ -656,15 +656,10 @@ function sampleHeight(x, z, field, planet) {
     const wobble = fbm(noise, x * 0.02 + 7, z * 0.02 + 3, 2) * 9
     sea = THREE.MathUtils.smoothstep(along + wobble, COAST_OFFSET - 4, COAST_OFFSET + 32)
   }
-  if (planet.shape === 'sky') {
-    // Nothing under the rim: the ground is dropped so far it is never seen from above, and
-    // what shows instead is the island's own underside, built separately.
-    const fall = THREE.MathUtils.smoothstep(dist, SKY_RIM, SKY_RIM + SKY_SHELF)
-    y = y * (1 - fall) - SKY_DROP * fall
-    // Nothing else applies out there: no hills, no craters.
-    if (fall >= 1) return y
-    hills *= 1 - fall
-  }
+  // Nothing under a floating island's rim: the ground is dropped so far it is never seen
+  // from above, and what shows instead is the island's own underside, built separately.
+  const skyFall = planet.shape === 'sky' ? THREE.MathUtils.smoothstep(dist, SKY_RIM, SKY_RIM + SKY_SHELF) : 0
+  if (skyFall > 0) hills *= 1 - skyFall
   if (planet.shape === 'dunes') {
     // Long ridges running one way, bent by noise so they read as wind-blown rather than
     // corrugated. Faint inside the colony, tall past it.
@@ -674,6 +669,10 @@ function sampleHeight(x, z, field, planet) {
   }
 
   let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
+  if (skyFall > 0) {
+    y = y * (1 - skyFall) - SKY_DROP * skyFall
+    if (skyFall >= 1) return y // nothing else out there: no sea, no craters
+  }
   if (sea > 0) {
     // Hills sink with the land rather than poking up out of the water as pinnacles. The bed
     // falls away slowly at first and steeply later, which is what makes a beach a beach:

@@ -30,14 +30,14 @@ import { COLONY_RADIUS, GROUND_SIZE, mulberry } from './planet.js'
  */
 
 /** Blades at density 1, by quality tier. */
-const BLADES = { low: 12000, medium: 24000, high: 40000 }
+const BLADES = { low: 24000, medium: 50000, high: 90000 }
 
 /** The field: nothing inside the ship apron, and nothing past where the hills take over. */
 const RADIUS_MIN = 6
 const RADIUS_DENSE = 70
 const RADIUS_MAX = 125
 /** How much of the field lands in the dense inner disc. The rest thins outward. */
-const INNER_SHARE = 0.68
+const INNER_SHARE = 0.8
 
 /** Blades grow in small tufts — a meadow is clumpy, and a tuft reads at a distance where a lone blade is a speck. */
 const TUFT_MIN = 2
@@ -259,7 +259,7 @@ function resolve(planet) {
   const tip = new THREE.Color(g.tip ?? ground.high ?? 0x6d9a4a)
   if (g.root === undefined) root.offsetHSL(0, 0.12, -0.03)
   if (g.tip === undefined) tip.offsetHSL(0, 0.12, 0.06)
-  const height = Array.isArray(g.height) && g.height.length === 2 ? g.height : [0.35, 0.75]
+  const height = Array.isArray(g.height) && g.height.length === 2 ? g.height : [0.22, 0.48]
   return {
     root,
     tip,

@@ -3,6 +3,8 @@ import { PLANETS, createTerrain, createScatter, terrainHeight } from '../world/p
 import { createWater } from '../world/water.js'
 import { Fauna } from '../world/fauna.js'
 import { createGrass } from '../world/grass.js'
+import { createSkyIsland } from '../world/skyisland.js'
+import { SKY_RIM } from '../world/planet.js'
 import { bendPoint } from '../core/curve.js'
 import { Sky } from '../world/sky.js'
 import {
@@ -189,6 +191,7 @@ export class Colony {
 
     this.terrain = createTerrain(this.planet, this.settings.get('groundDetail'))
     this.worldGroup.add(this.terrain)
+    this._buildIsland()
     this._buildWater()
     this._buildScatter()
 
@@ -225,6 +228,28 @@ export class Colony {
     const pad = shipPosition()
     pad.y = this.ship.group.position.y
     this.fauna.setSites({ ship: this.ship.shipDoor(), pad, sites })
+  }
+
+  /**
+   * What holds a floating island up: nothing. What it needs instead is an underside — rock
+   * and roots and vines hanging off the rim — and a sea of cloud far below it.
+   */
+  _buildIsland() {
+    if (this.island) {
+      this.worldGroup.remove(this.island.group)
+      this.island.dispose()
+      this.island = null
+    }
+    if (this.planet.shape !== 'sky') return
+    const detail = this.settings.get('groundDetail')
+    this.island = createSkyIsland({
+      planet: this.planet,
+      heightAt: (x, z) => terrainHeight(x, z, this.planet),
+      rimRadius: SKY_RIM,
+      quality: detail === 'high' ? 'high' : detail === 'low' ? 'low' : 'medium',
+    })
+    this.island.setDaylight(this.sky.dayFactor ?? 1)
+    this.worldGroup.add(this.island.group)
   }
 
   /**
@@ -296,7 +321,9 @@ export class Colony {
     this.grass = createGrass({
       planet: this.planet,
       heightAt: (x, z) => terrainHeight(x, z, this.planet),
-      blocked: (x, z) => clear.some((p) => (x - p.x) * (x - p.x) + (z - p.z) * (z - p.z) < p.r * p.r),
+      blocked: (x, z) =>
+        (this.planet.shape === 'sky' && x * x + z * z > (SKY_RIM - 2) * (SKY_RIM - 2)) ||
+        clear.some((p) => (x - p.x) * (x - p.x) + (z - p.z) * (z - p.z) < p.r * p.r),
       density: this.settings.get('scatterDensity'),
       quality: detail === 'high' ? 'high' : detail === 'low' ? 'low' : 'medium',
     })
@@ -835,6 +862,10 @@ export class Colony {
     this.particles.update(dt)
     this.water?.update(dt, elapsed, this.camera, night, this.sky.sunDir)
     this.grass?.update(dt, elapsed)
+    if (this.island) {
+      this.island.update(dt, elapsed, this.camera)
+      this.island.setDaylight(this.sky.dayFactor ?? 1)
+    }
     this.fauna.update(dt, elapsed, this.camera, night, this._faunaHooks || (this._faunaHooks = {
       ripple: (x, z, s) => this.ripple(x, z, s),
       sound: (name, x, y, z) => this.onSound?.(name, x, y, z),
@@ -1036,6 +1067,7 @@ export class Colony {
     this.sky.dispose()
     this.fauna.dispose()
     this.grass?.dispose()
+    this.island?.dispose()
     this.water?.dispose()
     this.ship.dispose()
     this.astronauts.dispose()
