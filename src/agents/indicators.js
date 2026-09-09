@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { withCurve } from '../core/curve.js'
 import {
   mdiHelpCircle,
   mdiAlert,
@@ -117,6 +118,7 @@ export class Indicators {
 
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uFrameScale = { value: new THREE.Vector2(1 / COLS, 1 / ROWS) }
+      withCurve(shader)
       this.uniforms = shader.uniforms
 
       shader.vertexShader = shader.vertexShader
@@ -133,7 +135,7 @@ export class Indicators {
         .replace('#include <uv_vertex>', `#include <uv_vertex>\n vMapUv = uv * uFrameScale + aFrame;`)
         .replace(
           '#include <project_vertex>',
-          `vec4 mvPosition = modelViewMatrix * vec4( aCenter, 1.0 );
+          `vec4 mvPosition = viewMatrix * vec4( bcBend( ( modelMatrix * vec4( aCenter, 1.0 ) ).xyz ), 1.0 );
            float dist = -mvPosition.z;
            // Mostly-constant screen size: the linear term cancels perspective so a badge
            // stays readable when the camera is pulled right out, while the constant term

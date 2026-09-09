@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { mulberry } from './planet.js'
 import { ATLAS, CELL, atlasTexture, cellMask, part } from './kit.js'
+import { withCurve } from '../core/curve.js'
 
 /**
  * Colony buildings — one per thread, assembled out of KayKit's *Space Base Bits* (CC0) and
@@ -264,6 +265,7 @@ const KIND_IDS = Object.keys(KINDS)
 function decorate(material, uniforms) {
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
+    withCurve(shader)
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -384,6 +386,7 @@ function depthMaterial(uniforms) {
   const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
+    withCurve(shader)
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',

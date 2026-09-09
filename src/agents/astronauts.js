@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { buildFaceAtlas, FACE, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './faces.js'
 import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
+import { bendPoint, withCurve } from '../core/curve.js'
 
 /**
  * Every astronaut in the colony, drawn in seven draw calls.
@@ -311,6 +312,7 @@ export class Astronauts {
   _visorMaterial() {
     const mat = new THREE.MeshStandardMaterial({ color: 0x08090e, roughness: 0.3, metalness: 0.16 })
     mat.onBeforeCompile = (shader) => {
+      withCurve(shader)
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', `#include <common>\n varying vec2 vVisorUv;`)
         .replace('#include <begin_vertex>', `#include <begin_vertex>\n vVisorUv = uv;`)
@@ -365,6 +367,7 @@ export class Astronauts {
     mat.onBeforeCompile = (shader) => {
       shader.uniforms.uFrameScale = { value: new THREE.Vector2(1 / FRAME_COLS, 1 / FRAME_ROWS) }
       shader.uniforms.uGlow = { value: 1.85 }
+      withCurve(shader)
       this._faceUniforms = shader.uniforms
 
       shader.vertexShader = shader.vertexShader
@@ -1272,7 +1275,8 @@ export class Astronauts {
 
     for (const agent of this.agents) {
       if (agent.scale < 0.3 || agent.state === 'gone') continue
-      v.set(agent.pos.x, agent.pos.y + (this.headHeight || 0.75), agent.pos.z).project(camera)
+      // Bent the way the shader bent it, so a far astronaut is picked where it was drawn.
+      bendPoint(v.set(agent.pos.x, agent.pos.y + (this.headHeight || 0.75), agent.pos.z)).project(camera)
       if (v.z > 1) continue // behind the camera
       agent.screen.copy(v)
       const dx = (v.x - ndcX) * aspect
@@ -1293,7 +1297,7 @@ export class Astronauts {
       const size = agent.badgeSize || 0
       if (size > 0) {
         // View space, exactly as the vertex shader has it.
-        b.set(agent.pos.x, agent.badgeY, agent.pos.z).applyMatrix4(camera.matrixWorldInverse)
+        bendPoint(b.set(agent.pos.x, agent.badgeY, agent.pos.z)).applyMatrix4(camera.matrixWorldInverse)
         const scale = size * (2 + -b.z * 0.22)
         b.y += scale * 0.5
         // A second point one half-height higher gives the quad's on-screen radius without

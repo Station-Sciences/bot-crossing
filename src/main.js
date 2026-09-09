@@ -9,6 +9,10 @@ import { PLANETS } from './world/planet.js'
 import { loadKit } from './world/kit.js'
 import { crewRig, loadCrew } from './agents/crew.js'
 import { TIMES } from './world/sky.js'
+import { CURVE_FULL, bendPoint, installWorldCurve, setCurveView } from './core/curve.js'
+import { Ambience } from './audio/ambience.js'
+import { shorelinePoints } from './world/planet.js'
+import { shipPosition } from './world/plots.js'
 import {
   fetchThreads,
   fetchState,
@@ -43,7 +47,10 @@ app.insertAdjacentHTML(
 const settings = new Settings()
 if (!hasStoredSettings()) settings.applyPreset(DEFAULT_PRESET)
 
+// Before the first material compiles: the bend is patched into three's own shader chunks.
+installWorldCurve()
 const engine = new Engine(settings).mount(app)
+engine.setPlanetGrade(PLANETS[settings.get('planet')]?.grade)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
@@ -271,6 +278,15 @@ const actions = {
   },
 }
 
+/**
+ * Sound. Beds per world, things calling out on their own clocks, and positional sources
+ * for whatever is actually making noise — a site being hammered at, the lander, a drone
+ * going past — attenuated by distance from the camera, so leaning in is turning it up.
+ */
+const ambience = new Ambience(settings)
+ambience.setPlanet(colony.planet)
+colony.onSound = (name, x, y, z) => ambience.play(name, { x, y, z, kind: colony.fauna.flock?.kind })
+
 const hud = new Hud(app, settings, actions)
 // The sidebar is permanent, so the card beside an astronaut has a wall to stay clear of.
 const sideWidth = () => (window.innerWidth <= 820 ? 0 : 334)
@@ -415,7 +431,7 @@ function syncProject() {
  */
 const cardAnchor = new THREE.Vector3()
 function screenOf(agent) {
-  cardAnchor.set(agent.pos.x, agent.pos.y + 0.95, agent.pos.z).project(engine.camera)
+  bendPoint(cardAnchor.set(agent.pos.x, agent.pos.y + 0.95, agent.pos.z)).project(engine.camera)
   if (cardAnchor.z > 1) return null
   const { w, h } = engine.viewport
   return { x: (cardAnchor.x * 0.5 + 0.5) * w, y: (-cardAnchor.y * 0.5 + 0.5) * h }
@@ -530,6 +546,11 @@ window.addEventListener('keydown', (e) => {
     case 'O':
       hud.setOrbit(actions.toggleOrbit())
       break
+    case 'm':
+    case 'M':
+      settings.set('sound', !settings.get('sound'))
+      hud.hint(settings.get('sound') ? 'Sound on' : 'Muted')
+      break
     case 'Tab':
       e.preventDefault()
       actions.cyclePlanet()
@@ -619,6 +640,7 @@ function applyThreads(list) {
 
   const stats = colony.setThreads(list, archivedSet, hiddenSet, known)
   hud.setStats(stats)
+  chimeForNewWaiting(list, archivedSet, hiddenSet)
 
   legendProjects = colony.plotOrder
     .map((plot) => ({
@@ -647,6 +669,34 @@ function applyThreads(list) {
     state.plots = layout
     queueSave()
   }
+}
+
+/**
+ * The one sound that is allowed to interrupt: a thread that has just put its hand up. Once
+ * per thread per wait, never on the first roster (a reload is not news), and never more
+ * than one chime a couple of seconds apart however many arrive at once.
+ */
+const waitingBefore = new Set()
+let seenFirstRoster = false
+let lastChime = 0
+function chimeForNewWaiting(list, archivedSet, hiddenSet) {
+  const now = Date.now()
+  const waiting = new Set()
+  for (const t of list) {
+    if (archivedSet.has(t.id) || hiddenSet.has(t.project)) continue
+    if (statusFor(t, now) === 'waiting') waiting.add(t.id)
+  }
+  if (seenFirstRoster) {
+    for (const id of waiting) {
+      if (waitingBefore.has(id) || now - lastChime < 2500) continue
+      lastChime = now
+      const agent = colony.agentFor(id)
+      ambience.play('chime-attention', agent ? { x: agent.pos.x, y: agent.pos.y + 1, z: agent.pos.z, gain: 0.9 } : { gain: 0.9 })
+    }
+  }
+  seenFirstRoster = true
+  waitingBefore.clear()
+  for (const id of waiting) waitingBefore.add(id)
 }
 
 let polling = false
@@ -733,7 +783,9 @@ settings.onChange((changed, scope) => {
   state.settings = { ...settings.values }
   queueSave()
   if (scope.render || changed.has('fov')) engine.applySettings()
+  if (changed.has('planet')) engine.setPlanetGrade(PLANETS[settings.get('planet')]?.grade)
   colony.onSettingsChanged(changed, scope)
+  if (changed.has('planet')) ambience.setPlanet(colony.planet)
   if (changed.has('showFps')) hud.syncSettings()
   // Folding dormant repos away changes which threads are on the map, so the colony has to be
   // rebuilt from the list rather than merely re-rendered.
@@ -746,6 +798,9 @@ settings.onChange((changed, scope) => {
 engine.add({
   update(dt, elapsed) {
     rig.update(dt)
+    // The world bends away from wherever the camera is looking, every frame, before the
+    // colony projects anything to the screen.
+    setCurveView(rig.target, rig.azimuth, settings.get('worldCurve') * CURVE_FULL)
     colony.update(dt, elapsed, rig.target)
     // Whatever the camera is orbiting is what should be in focus.
     engine.setFocusDistance(rig.distance)
@@ -758,8 +813,56 @@ engine.add({
       else hud.placeCard(screenOf(agent))
     }
     hud.setFps(engine.perf, engine.viewport, `${colony.astronauts.visibleCount} crew · ${colony.particles.liveCount} bits`)
+    ambience.update(dt, engine.camera, soundWorld())
   },
 })
+
+// ── what the world sounds like ────────────────────────────────────────────────────────
+
+const soundSources = []
+const soundWater = { level: 0, points: [] }
+const shipSpot = shipPosition()
+/**
+ * Everything making a noise right now, as positional sources. Objects are reused between
+ * frames so the audio engine can key voices by id without anything being allocated.
+ */
+function soundWorld() {
+  let n = 0
+  const take = (id, sound, x, y, z, gain = 1) => {
+    const s = soundSources[n] || (soundSources[n] = { id: '', sound: '', x: 0, y: 0, z: 0, gain: 1 })
+    s.id = id
+    s.sound = sound
+    s.x = x
+    s.y = y
+    s.z = z
+    s.gain = gain
+    n++
+  }
+  for (const agent of colony.astronauts.agents) {
+    if (agent.state === 'at-site' && agent.status === 'working' && agent.scale > 0.5) {
+      take(`work:${agent.id}`, 'work-hammer', agent.pos.x, agent.pos.y + 0.6, agent.pos.z, 0.9)
+    }
+  }
+  take('ship', 'ship-hum', shipSpot.x, colony.ship.group.position.y + 3, shipSpot.z, 0.7)
+  colony.fauna.drones.forEach((d, i) => take(`drone:${i}`, 'drone-whine', d.x, d.y, d.z, d.busy ? 1 : 0.35))
+  soundSources.length = n
+
+  let water = null
+  if (colony.planet.water && colony.planet.audio?.shore) {
+    // The half-dozen bits of shoreline nearest the view: the whole coast is hundreds of
+    // points, and the engine only has ten voices to give out.
+    const all = shorelinePoints(colony.planet)
+    const t = rig.target
+    soundWater.points = all
+      .map((p) => ({ p, d: (p.x - t.x) * (p.x - t.x) + (p.z - t.z) * (p.z - t.z) }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, 6)
+      .map((e) => e.p)
+    soundWater.level = colony.planet.water.level
+    water = soundWater
+  }
+  return { night: colony.sky.nightFactor ?? 0, sources: soundSources, water }
+}
 
 engine.start()
 boot()

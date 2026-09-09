@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { withCurve } from '../core/curve.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
 /**
@@ -333,6 +334,7 @@ function hullMaterial() {
     shadowSide: THREE.BackSide,
   })
   mat.onBeforeCompile = (shader) => {
+    withCurve(shader)
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n attribute vec2 aSurface;\n varying vec2 vSurface;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n vSurface = aSurface;`)

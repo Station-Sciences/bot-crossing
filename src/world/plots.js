@@ -3,6 +3,7 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { DECK_TEXTURE_SCALE, KERB_UV, deckSurface, kerbSurface } from './surfaces.js'
 import { atlasTexture, hasPart, part } from './kit.js'
 import { mulberry } from './planet.js'
+import { withCurve } from '../core/curve.js'
 
 /**
  * Project plots — the fenced-off sections of the map, one per repo.
@@ -769,9 +770,12 @@ export function createLabel(text, accent, pixelRatio = 4) {
     opacity: 0,
   })
   mat.onBeforeCompile = (shader) => {
+    withCurve(shader)
     shader.vertexShader = shader.vertexShader.replace(
       '#include <project_vertex>',
-      `vec4 mvPosition = modelViewMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
+      // The anchor is bent like the ground under it, so a plate stays over its zone when the
+      // world curves away; the quad itself is then built flat in view space as before.
+      `vec4 mvPosition = viewMatrix * vec4( bcBend( ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz ), 1.0 );
        float dist = -mvPosition.z;
        mvPosition.xy += position.xy * ( 0.55 + dist * 0.03 );
        gl_Position = projectionMatrix * mvPosition;`

@@ -439,8 +439,8 @@ body {
 
 .planets {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 7px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
 }
 
 .planet {
@@ -472,8 +472,8 @@ body {
 }
 
 .planet .orb {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   box-shadow: inset -6px -5px 10px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(0, 0, 0, 0.4);
 }

@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { withCurve } from '../core/curve.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
@@ -297,6 +298,7 @@ export function frameFor(clip, time) {
 export function decorateSkinned(material, uniforms, { normals = true } = {}) {
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
+    withCurve(shader)
 
     shader.vertexShader = shader.vertexShader
       .replace(

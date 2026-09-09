@@ -1,5 +1,8 @@
 import * as THREE from 'three'
 import { PLANETS, createTerrain, createScatter, terrainHeight } from '../world/planet.js'
+import { createWater } from '../world/water.js'
+import { Fauna } from '../world/fauna.js'
+import { bendPoint } from '../core/curve.js'
 import { Sky } from '../world/sky.js'
 import {
   Plot,
@@ -146,6 +149,10 @@ export class Colony {
     this.indicators = new Indicators(scene, settings, MAX_AGENT_CAP)
     this.particles = new Particles(scene, settings)
     this.scaffolds = new Scaffolds(scene, 320)
+    // Birds, butterflies, fish and the cargo drones: the life that carries no information.
+    this.fauna = new Fauna(scene, settings)
+    /** Set by whoever owns the speakers: (name, x, y, z) for a sound the world just made. */
+    this.onSound = null
     this.nav = new Navigation()
     this.astronauts.setNavigation(this.nav)
 
@@ -180,6 +187,7 @@ export class Colony {
 
     this.terrain = createTerrain(this.planet, this.settings.get('groundDetail'))
     this.worldGroup.add(this.terrain)
+    this._buildWater()
     this._buildScatter()
 
     // The ship has legs, and legs have to reach the ground. Its landing spot is a fixed hex
@@ -189,6 +197,52 @@ export class Colony {
     this.ship.group.position.y = terrainHeight(ship.x, ship.z, this.planet)
 
     this._dustTint.set(this.planet.ground.high)
+
+    this.fauna.setPlanet(this.planet, {
+      heightAt: (x, z) => this.groundAt(x, z),
+      waterLevel: this.planet.water?.level ?? null,
+      waterHeightAt: this.water ? (x, z, t) => this.water.heightAt(x, z, t) : undefined,
+    })
+    this._syncFaunaSites()
+  }
+
+  /** Where the drones fly between: the lander, and every building with anyone at it. */
+  _syncFaunaSites() {
+    const sites = []
+    for (const [id, entry] of this.buildings) {
+      if (entry.retiring) continue
+      const p = entry.mesh.position
+      sites.push({ x: p.x, y: p.y, z: p.z, active: this._isActive(id) })
+    }
+    const pad = shipPosition()
+    pad.y = this.ship.group.position.y
+    this.fauna.setSites({ ship: this.ship.shipDoor(), pad, sites })
+  }
+
+  /**
+   * The sea, the lakes, or the lava — whatever this world has that is not ground. One plane
+   * at the planet's water level; where the terrain is lower, there is water.
+   */
+  _buildWater() {
+    if (this.water) {
+      this.worldGroup.remove(this.water.mesh)
+      this.water.dispose()
+      this.water = null
+    }
+    const detail = this.settings.get('groundDetail')
+    this.water = createWater({
+      planet: this.planet,
+      heightAt: (x, z) => terrainHeight(x, z, this.planet),
+      quality: detail === 'high' ? 'high' : detail === 'low' ? 'low' : 'medium',
+    })
+    if (this.water) this.worldGroup.add(this.water.mesh)
+  }
+
+  /** A ring on the water at a point, if there is water there. Safe to call anywhere. */
+  ripple(x, z, strength = 1) {
+    if (!this.water) return
+    if (terrainHeight(x, z, this.planet) >= this.planet.water.level) return
+    this.water.ripple(x, z, strength)
   }
 
   /**
@@ -252,6 +306,8 @@ export class Colony {
     this.sky.onSettingsChanged(changed)
     this.astronauts.onSettingsChanged(changed)
     this.particles.onSettingsChanged(changed)
+    this.fauna.onSettingsChanged(changed)
+    if (changed.has('clouds')) this.sky.setPlanet(this.planet)
     if (changed.has('showLabels')) this._syncLabels()
     if (changed.has('timeOfDay')) this.sky.setTime(this.settings.get('timeOfDay'))
   }
@@ -367,6 +423,7 @@ export class Colony {
     this.urgentPlots = urgent
     this.activePlots = active
     this._rebuildNavigation()
+    this._syncFaunaSites()
     this.stats = { ...stats, done: stats.celebrating }
     this.astronauts.setRoster(roster, this._world())
     return this.stats
@@ -453,6 +510,13 @@ export class Colony {
     const cell = worldToHex(x, z)
     if (this.deckedCells?.has(`${cell.q},${cell.r}`)) return DECK_TOP
     return terrainHeight(x, z, this.planet)
+  }
+
+  /** The surface anything floating or falling meets: the water where there is water, else the ground. */
+  surfaceAt(x, z) {
+    const ground = this.groundAt(x, z)
+    const level = this.planet.water?.level
+    return level !== undefined && ground < level ? level : ground
   }
 
   /** A stable colour per repo, probing forward on a collision so no two plots match. */
@@ -603,7 +667,8 @@ export class Colony {
     for (const plot of this.plotOrder) {
       const label = plot.label
       if (!label) continue
-      const dist = -view.copy(label.position).applyMatrix4(this.camera.matrixWorldInverse).z
+      // Bent like the shader bends the anchor, so a far plate is hit where it is drawn.
+      const dist = -bendPoint(view.copy(label.position)).applyMatrix4(this.camera.matrixWorldInverse).z
       if (dist <= 0.01 || dist >= bestDist) continue
       const geo = label.geometry.parameters
       const k = 0.55 + dist * 0.03
@@ -721,8 +786,13 @@ export class Colony {
     this.astronauts.updateRings(elapsed)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))
     this._emit(dt, elapsed)
-    this.particles.ambient(dt, this.camera, this.planet)
+    this.particles.ambient(dt, this.camera, this.planet, night, (x, z) => this.surfaceAt(x, z))
     this.particles.update(dt)
+    this.water?.update(dt, elapsed, this.camera, night, this.sky.sunDir)
+    this.fauna.update(dt, elapsed, this.camera, night, this._faunaHooks || (this._faunaHooks = {
+      ripple: (x, z, s) => this.ripple(x, z, s),
+      sound: (name, x, y, z) => this.onSound?.(name, x, y, z),
+    }))
     this._updatePlots(night, elapsed)
     this._updateScaffolds()
     this._updateLabels(dt)
@@ -866,6 +936,8 @@ export class Colony {
 
   dispose() {
     this.sky.dispose()
+    this.fauna.dispose()
+    this.water?.dispose()
     this.ship.dispose()
     this.astronauts.dispose()
     this.indicators.dispose()

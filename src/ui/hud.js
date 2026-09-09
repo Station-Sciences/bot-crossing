@@ -44,6 +44,8 @@ const ICON = {
   copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>`,
   locate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.6"/><path d="M12 1.8v2.6M12 19.6v2.6M1.8 12h2.6M19.6 12h2.6"/></svg>`,
   orbit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><ellipse cx="12" cy="12" rx="10.2" ry="4.6" transform="rotate(-24 12 12)"/><circle cx="21" cy="8.2" r="1.5" fill="currentColor" stroke="none"/></svg>`,
+  sound: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18 6.5a8 8 0 0 1 0 11"/></svg>`,
+  soundOff: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>`,
 }
 
 const STAT_DEFS = [
@@ -250,6 +252,44 @@ export class Hud {
       this._toggle('Show FPS', 'showFps')
     )
     body.appendChild(view)
+
+    // Look.
+    const look = group('Look')
+    look.append(
+      this._slider(
+        'World curve',
+        'worldCurve',
+        0,
+        1,
+        0.05,
+        (v) => `${Math.round(v * 100)}%`,
+        'How far the ground bends away toward the horizon. The point under the cursor never moves.'
+      ),
+      this._toggle('Colour grade', 'colorGrade', 'Saturation, warmth, lifted shadows and a soft vignette on the finished frame.'),
+      this._slider('Saturation', 'saturation', 0.6, 1.5, 0.05, (v) => v.toFixed(2)),
+      this._slider('Vignette', 'vignette', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
+      this._toggle('Clouds', 'clouds', 'Cumulus drifting over worlds that have weather.'),
+      this._select('Wildlife', 'fauna', [
+        ['off', 'Off'],
+        ['low', 'Some'],
+        ['full', 'Full'],
+      ])
+    )
+    body.appendChild(look)
+
+    // Sound.
+    const sound = group('Sound')
+    sound.append(
+      this._toggle(
+        'Ambient sound',
+        'sound',
+        'A bed for each world, things calling out on their own clocks, and work you can hear where it is happening. Louder as you lean in.'
+      ),
+      this._slider('Master', 'masterVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
+      this._slider('Ambience', 'ambienceVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`, 'Beds and the sounds of the world.'),
+      this._slider('Effects', 'effectsVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`, 'Hammering, drones, splashes, the chime when somebody needs you.')
+    )
+    body.appendChild(sound)
   }
 
   _row(label, hint) {
@@ -359,6 +399,7 @@ export class Hud {
     on('#btn-orbit', 'click', () => this.setOrbit(this.actions.toggleOrbit?.()))
     on('#btn-planet', 'click', () => this.actions.cyclePlanet?.())
     on('#btn-time', 'click', () => this.actions.cycleTime?.())
+    on('#btn-sound', 'click', () => this.settings.set('sound', !this.settings.get('sound')))
     on('#btn-open', 'click', () => this.actions.openThread?.())
     on('#btn-viewed', 'click', () => this.actions.markViewed?.())
     on('#btn-archive', 'click', () => this.actions.archiveThread?.())
@@ -384,6 +425,11 @@ export class Hud {
   syncSettings() {
     for (const c of this.controls) c.sync()
     this.$('.fps').classList.toggle('on', Boolean(this.settings.get('showFps')))
+    const sound = Boolean(this.settings.get('sound'))
+    const btn = this.$('#btn-sound')
+    btn.innerHTML = sound ? ICON.sound : ICON.soundOff
+    btn.setAttribute('aria-pressed', String(sound))
+    btn.title = sound ? 'Mute (M)' : 'Unmute (M)'
   }
 
   setStats(stats) {
@@ -957,6 +1003,8 @@ const TEMPLATE = `
   <button class="btn icon" id="btn-orbit" title="Orbit mode — sweep around the colony (O)" aria-pressed="false">${ICON.orbit}</button>
   <button class="btn icon" id="btn-planet" title="Change planet (Tab)">${ICON.globe}</button>
   <button class="btn icon" id="btn-time" title="Change the time of day (L)">${ICON.sun}</button>
+  <div class="sep"></div>
+  <button class="btn icon" id="btn-sound" title="Mute (M)" aria-pressed="true">${ICON.sound}</button>
 </div>
 
 <div class="settings panel closed">
@@ -1011,6 +1059,7 @@ const TEMPLATE = `
         <div class="k"><span>Orbit mode</span><kbd>O</kbd></div>
         <div class="k"><span>Change planet</span><kbd>Tab</kbd></div>
         <div class="k"><span>Time of day</span><kbd>L</kbd></div>
+        <div class="k"><span>Mute</span><kbd>M</kbd></div>
         <div class="k"><span>Deselect</span><kbd>Esc</kbd></div>
         <div class="k"><span>This sheet</span><kbd>?</kbd></div>
       </div>
