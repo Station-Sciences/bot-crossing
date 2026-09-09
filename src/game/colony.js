@@ -739,14 +739,17 @@ export class Colony {
     for (const entry of this.buildings.values()) {
       if (entry.retiring) continue
       const p = entry.mesh.position
-      const r = (entry.mesh.userData.footprint || 1.2) * 0.8 + AGENT_RADIUS
-      obstacles.push({ x: p.x, z: p.z, r })
+      const footprint = entry.mesh.userData.footprint || 1.2
+      const r = footprint * 0.8 + AGENT_RADIUS
+      // The grid blocks less than the whole footprint so the gaps stay walkable; the
+      // keep radius is where the crew is actually held to — see `Navigation.repel`.
+      obstacles.push({ x: p.x, z: p.z, r, keep: footprint * 0.92 + AGENT_RADIUS })
     }
     // Ground clutter counts too. A crate is only knee-high, but an astronaut walking
     // straight through one is exactly as wrong as one walking through a habitat.
     for (const plot of this.plotOrder) {
       for (const spot of plot.clutterSpots || []) {
-        obstacles.push({ x: plot.center.x + spot.x, z: plot.center.z + spot.z, r: spot.r + AGENT_RADIUS })
+        obstacles.push({ x: plot.center.x + spot.x, z: plot.center.z + spot.z, r: spot.r + AGENT_RADIUS, keep: spot.r + AGENT_RADIUS + 0.1 })
       }
     }
     // Ground scatter counts as well. A boulder an astronaut can walk through is the same
@@ -767,7 +770,9 @@ export class Colony {
         // sprig fences the corridors between zones — the crew walks the gaps between plots
         // to get anywhere, and scatter is placed in exactly those gaps.
         if (r < 0.55) continue
-        obstacles.push({ x: mat.elements[12], z: mat.elements[14], r: r + AGENT_RADIUS })
+        // Held to as well as routed round: a shoulder through a boulder is the same glitch
+        // as one through a wall, just smaller.
+        obstacles.push({ x: mat.elements[12], z: mat.elements[14], r: r + AGENT_RADIUS, keep: r + AGENT_RADIUS + 0.1 })
       }
     }
 

@@ -41,16 +41,19 @@ const PHONE = {
   h: 0.85, // 4:3 portrait
   t: 0.075, // one panel's thickness
   r: 0.04, // corner rounding
-  // Where it is held: up in front of the visor, turned to face it and tilted back.
-  x: 0.04,
-  y: 0.62,
-  z: 0.62,
-  tilt: 0.75,
+  // Where it sits in the left hand's own frame, in R: the half in the hand is centred here,
+  // and the Euler turns the screens toward the visor.
+  x: 0,
+  y: -0.1,
+  z: 0.1,
+  rx: 0,
+  ry: Math.PI,
+  rz: 0,
   // The check's timeline, seconds from its start.
-  out: 0.5, // drawn up from the hip
-  open: [0.5, 1.3], // flips open
-  close: [CHECK_LEN - 1.6, CHECK_LEN - 0.8], // folds shut
-  away: CHECK_LEN - 0.6, // and goes back
+  out: 0.5, // grows in the hand as the arm comes up
+  open: [0.55, 1.35], // flips open
+  close: [CHECK_LEN - 1.6, CHECK_LEN - 0.9], // folds shut
+  away: CHECK_LEN - 0.55, // and shrinks away as the arm drops
 }
 
 export class Props {
@@ -67,6 +70,8 @@ export class Props {
     this._e = new THREE.Euler()
     this._s = new THREE.Vector3()
     this._n = 0
+    /** The hold, exposed so it can be tuned live. */
+    this.tune = PHONE
     this._buildPhone()
   }
 
@@ -138,28 +143,41 @@ export class Props {
           '#include <color_fragment>',
           `#include <color_fragment>
            {
-             // A bezel round the edge, then the feed inside it.
-             vec2 inner = ( vScreenUv - 0.045 ) / 0.91;
+             // A phone screen: a thin bezel, a dark glass ground, a status bar, and a feed of
+             // rounded cards scrolling up — each a line of something being done — with a
+             // progress bar creeping along near the top. Procedural, per instance.
+             vec2 inner = ( vScreenUv - 0.04 ) / 0.92;
              if ( any( lessThan( inner, vec2( 0.0 ) ) ) || any( greaterThan( inner, vec2( 1.0 ) ) ) ) {
-               diffuseColor.rgb = vec3( 0.015, 0.016, 0.02 );
+               diffuseColor.rgb = vec3( 0.012, 0.013, 0.018 );
              } else {
-               float rows = 12.0;
-               float cols = 20.0;
-               float scroll = floor( uTime * 2.4 + vSeed * 9.0 );
-               float row = floor( inner.y * rows ) + scroll;
-               float col = floor( inner.x * cols );
-               // Each line is indented a little and runs a random length, like code.
-               float indent = floor( bcHash( row * 1.7 + vSeed ) * 3.0 );
-               float len = indent + 3.0 + floor( bcHash( row + vSeed ) * 14.0 );
-               float lit = step( indent, col ) * step( col, len );
-               // Gaps between words, and a cell-sized gap between rows.
-               lit *= step( 0.18, bcHash( row * 7.3 + col * 3.1 + vSeed ) );
-               lit *= step( 0.2, fract( inner.y * rows ) ) * step( 0.15, fract( inner.x * cols ) );
-               // The whole thing flickers a touch, and one line at a time flashes brighter.
-               float flicker = 0.8 + 0.2 * step( 0.4, bcHash( floor( uTime * 17.0 ) + vSeed ) );
-               float flash = step( 0.93, bcHash( row + floor( uTime * 5.0 ) * 0.37 + vSeed ) ) * 0.8;
-               vec3 ink = mix( vec3( 0.45, 1.0, 0.72 ), vec3( 0.95, 0.97, 1.0 ), step( 0.7, bcHash( row * 3.3 + vSeed ) ) );
-               diffuseColor.rgb = vec3( 0.02, 0.035, 0.045 ) + ink * ( lit * flicker * 1.25 + flash * lit );
+               vec3 col = mix( vec3( 0.06, 0.07, 0.12 ), vec3( 0.09, 0.10, 0.17 ), inner.y );
+               // Status bar: a time-ish blob left, three dots right.
+               float bar = step( 0.93, inner.y );
+               float pips = step( 0.04, inner.x ) * step( inner.x, 0.2 ) + step( 0.78, inner.x ) * step( 0.5, bcHash( floor( inner.x * 30.0 ) + vSeed ) ) * step( inner.x, 0.96 );
+               col = mix( col, vec3( 0.75, 0.8, 0.9 ), bar * pips * step( 0.95, inner.y ) * step( inner.y, 0.985 ) );
+               // Progress bar under the status bar, filling and resetting.
+               float prog = fract( uTime * 0.13 + vSeed );
+               float pb = step( 0.86, inner.y ) * step( inner.y, 0.895 ) * step( 0.06, inner.x ) * step( inner.x, 0.94 );
+               col = mix( col, vec3( 0.16, 0.18, 0.28 ), pb );
+               col = mix( col, vec3( 0.35, 0.75, 1.0 ), pb * step( inner.x, 0.06 + prog * 0.88 ) );
+               // The feed: cards of random width and colour, scrolling up.
+               float rows = 9.0;
+               float y = inner.y * rows + uTime * 1.1 + vSeed * 7.0;
+               float row = floor( y );
+               float fy = fract( y );
+               float w = 0.3 + bcHash( row * 3.7 + vSeed ) * 0.6;
+               float kind = bcHash( row * 5.1 + vSeed );
+               vec3 ink = kind < 0.45 ? vec3( 0.9, 0.92, 0.97 ) : kind < 0.7 ? vec3( 0.35, 0.65, 1.0 ) : kind < 0.88 ? vec3( 0.4, 0.9, 0.72 ) : vec3( 1.0, 0.72, 0.35 );
+               // Rounded card: inset on x, with a gap above and below.
+               float cx = ( inner.x - 0.06 ) / 0.88;
+               float inCard = step( 0.0, cx ) * step( cx, w ) * step( 0.18, fy ) * step( fy, 0.82 ) * step( inner.y, 0.84 );
+               // A short bright tag at the left of each card, the rest dimmer.
+               float tag = step( cx, 0.12 );
+               col = mix( col, mix( ink * 0.35, ink, tag ), inCard );
+               // Flicker: the whole panel dips a hair now and then, one card flashes.
+               float flicker = 0.9 + 0.1 * step( 0.3, bcHash( floor( uTime * 12.0 ) + vSeed ) );
+               float flash = step( 0.97, bcHash( row + floor( uTime * 4.0 ) * 0.31 + vSeed ) ) * inCard;
+               diffuseColor.rgb = col * flicker * 1.15 + ink * flash * 0.6;
              }
            }`
         )
@@ -174,20 +192,20 @@ export class Props {
   }
 
   /**
-   * Place a prop for one astronaut. `chest` is the chest bone's world matrix (root × bone),
+   * Place a prop for one astronaut. `hand` is the holding hand's world matrix (root × bone),
    * `t` is seconds since the check began.
    */
-  write(kind, chest, t) {
+  write(kind, hand, t) {
     if (this._n >= this.capacity) return
-    if (kind === 'phone') this._writePhone(chest, t)
+    if (kind === 'phone') this._writePhone(hand, t)
   }
 
-  _writePhone(chest, t) {
+  _writePhone(hand, t) {
     const R = this.R
-    const { halfA, halfB, w, h, t: thick } = this.phone
+    const { halfA, halfB, w, t: thick } = this.phone
     const i = this._n++
 
-    // Drawn up from the hip and put back down there: scale and height follow one ease.
+    // Grows in the hand as the arm comes up, shrinks away as it drops.
     let out = 1
     if (t < PHONE.out) out = smooth(t / PHONE.out)
     else if (t > PHONE.away) out = 1 - smooth((t - PHONE.away) / (CHECK_LEN - PHONE.away))
@@ -198,25 +216,19 @@ export class Props {
     else if (t > PHONE.open[0] && t < PHONE.open[1]) open = smooth((t - PHONE.open[0]) / (PHONE.open[1] - PHONE.open[0]))
     else if (t > PHONE.close[0] && t < PHONE.close[1]) open = 1 - smooth((t - PHONE.close[0]) / (PHONE.close[1] - PHONE.close[0]))
     const hinge = Math.PI * (1 - open)
-    // A little sway while reading, so it is a thing being held rather than pinned in space.
-    const sway = Math.sin(t * 1.9) * 0.05 * open
 
-    // Where the phone sits: in front of the chest, tilted back to face the visor. The half in
-    // the hand is centred on that spot, so opening swings the other half out to its left.
+    // In the hand's own frame: the half held is centred on the hold point, the other half
+    // swings out from its hinge edge.
     const e = this._e
     const q = this._q
     const v = this._v
     const root = this._m
-    // A half turn about Y puts the screens toward the astronaut and the back toward the
-    // world; the tilt then leans the screens up to meet the visor.
-    e.set(PHONE.tilt + sway, Math.PI + Math.sin(t * 1.3) * 0.04 * open, 0)
+    e.set(PHONE.rx, PHONE.ry, PHONE.rz)
     q.setFromEuler(e)
-    v.set(PHONE.x * R, (PHONE.y - (1 - out) * 0.45) * R, PHONE.z * R)
+    v.set(PHONE.x * R, PHONE.y * R, PHONE.z * R)
     root.compose(v, q, this._s.setScalar(s))
-    root.premultiply(chest)
-    // Centre half A on the hold point.
-    const centre = this._m2.makeTranslation(-w / 2, 0, -thick / 2)
-    root.multiply(centre)
+    root.premultiply(hand)
+    root.multiply(this._m2.makeTranslation(-w / 2, 0, -thick / 2))
     halfA.setMatrixAt(i, root)
 
     // Half B rotates about the hinge: the inside edge of A, at the inner face's height, so

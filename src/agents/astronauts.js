@@ -283,6 +283,7 @@ export class Astronauts {
     this.headSlot = rig.attachSlot.get('head') ?? 0
     this.chestSlot = rig.attachSlot.get('chest') ?? 0
     this.handSlot = rig.attachSlot.get('hand.r') ?? 0
+    this.handLSlot = rig.attachSlot.get('hand.l') ?? this.handSlot
 
     // Where the helmet sits above the ground at rest, in world units. The picker aims here
     // rather than at the feet, so a click lands on the part of an astronaut you are looking
@@ -571,6 +572,8 @@ export class Astronauts {
       /** Set by `_walk` on a refused step; latched per wander leg as `driftBlocked`. */
       blocked: false,
       driftBlocked: false,
+      /** Seconds spent trying to move and getting nowhere. See `_walk`. */
+      stuckFor: 0,
       // Animation state: which baked clip, how far into it, and the row of the bone table
       // that lands on. Started at a random offset so a crowd never marches in step.
       clipKey: walksOut ? 'spawn' : 'idle',
@@ -583,6 +586,7 @@ export class Astronauts {
       checkAt: 0,
       checkStart: -1,
       checkProp: null,
+      checkT: -1,
       scale: walksOut ? 0 : 1, // pops up out of the ship, or was already standing there
       alive: true,
       path: null,
@@ -768,7 +772,9 @@ export class Astronauts {
         // never be reached, and an astronaut shouldering a wall forever is worse than one
         // standing a little short of where it meant to be. It adopts the spot it got to,
         // and the next poll hands it a site that has been checked against the grid.
-        const stuck = (agent.blocked && agent.stateAge > 8) || agent.stateAge > 45
+        // Stuck for a couple of seconds gets a fresh route; stuck for longer gives up.
+        if (agent.stuckFor > 2 && agent.stuckFor < 2.05) agent.pathVersion = -1
+        const stuck = agent.stuckFor > 5 || (agent.blocked && agent.stateAge > 8) || agent.stateAge > 45
         if (dist < ARRIVE_RADIUS || stuck) {
           // Adopting the ground it reached is right for a site something got built on top of.
           // It is exactly wrong next to the ship: an astronaut still shouldering its way out
@@ -870,6 +876,7 @@ export class Astronauts {
     }
 
     const push = this._separation(agent, this._sep)
+    if (this.nav) this.nav.repel(agent.pos, push)
     const dx = (agent.vel.x + push.x) * dt
     const dz = (agent.vel.z + push.z) * dt
 
@@ -882,6 +889,15 @@ export class Astronauts {
         agent.pathVersion = -1
         agent.blocked = true
       }
+      this.nav.keepOut(agent.pos)
+      // Wanting to go somewhere and getting nowhere is being stuck. Count it, and once it
+      // has gone on for a moment stop trying: a foot shuffling against a wall flickers
+      // between the walk and the stand every frame, and whoever owns this leg reads the
+      // clock and picks somewhere else to go.
+      const wants = legDist > 0.3
+      if (wants && (agent.blocked || (agent.groundSpeed || 0) < 0.06)) agent.stuckFor += dt
+      else agent.stuckFor = 0
+      if (agent.stuckFor > 0.35) agent.vel.set(0, 0, 0)
     } else {
       agent.pos.x += dx
       agent.pos.z += dz
@@ -985,7 +1001,11 @@ export class Astronauts {
       // wall, never for being reachable — so it can run into the side of a building.
       // Give the leg up at the first refused step rather than shuffling against the wall
       // until the next wander comes due, which is several seconds of walking on the spot.
-      if (agent.blocked) agent.driftBlocked = true
+      if (agent.blocked || agent.stuckFor > 1) {
+        agent.driftBlocked = true
+        agent.stuckFor = 0
+        agent.wanderAt = elapsed + 0.5 + Math.random()
+      }
       return
     }
     // Arrived — or the spot was never far enough away to be worth crossing. Stop dead
@@ -1005,6 +1025,12 @@ export class Astronauts {
    */
   _settle(agent, dt) {
     const push = this._separation(agent, this._sep)
+    if (this.nav) {
+      this.nav.repel(agent.pos, push)
+      this.nav.keepOut(agent.pos)
+      // Built over while standing still: the grid walks it out, a step a frame.
+      if (push.x === 0 && push.z === 0 && this.nav.isBlocked(agent.pos.x, agent.pos.z)) this.nav.slide(agent.pos, 0, 0)
+    }
     if (push.x === 0 && push.z === 0) return
     const dx = push.x * dt
     const dz = push.z * dt
@@ -1053,7 +1079,11 @@ export class Astronauts {
     const d = to.length()
     if (d > DRIFT_ARRIVE && !agent.driftBlocked && agent.checkStart < 0) {
       this._walk(agent, to, d, dt, DRIFT_PACE)
-      if (agent.blocked) agent.driftBlocked = true
+      if (agent.blocked || agent.stuckFor > 1) {
+        agent.driftBlocked = true
+        agent.stuckFor = 0
+        agent.workAt = elapsed + 0.5 + Math.random()
+      }
       return
     }
     // Arrived: stop dead, turn to the work, and swing.
@@ -1070,8 +1100,10 @@ export class Astronauts {
    */
   _check(agent, elapsed) {
     if (agent.checkStart >= 0) {
-      if (elapsed - agent.checkStart < CHECK_LEN) return
+      agent.checkT = elapsed - agent.checkStart
+      if (agent.checkT < CHECK_LEN) return
       agent.checkStart = -1
+      agent.checkT = -1
       agent.checkAt = elapsed + CHECK_EVERY[0] + Math.random() * (CHECK_EVERY[1] - CHECK_EVERY[0])
       return
     }
@@ -1161,7 +1193,11 @@ export class Astronauts {
     else {
       switch (agent.status) {
         case 'working':
-          key = agent.checkStart >= 0 ? 'idle' : 'work'
+          // A check raises the arm, holds it, and lowers it, on its own clock.
+          if (agent.checkStart >= 0) {
+            const t = agent.checkT
+            key = t < 0.5 ? 'phoneUp' : t > CHECK_LEN - 0.55 ? 'phoneDown' : 'phone'
+          } else key = 'work'
           break
         case 'waiting':
           key = 'wave'
@@ -1277,9 +1313,9 @@ export class Astronauts {
           worn.multiplyMatrices(root, bone)
           setPart(child, worn, hammer, hands++, P.gripX, P.gripY, P.gripZ, P.gripRx, 0, P.gripRz)
         }
-        // And whatever a checking astronaut has got out, held in front of the chest.
-        if (agent.checkStart >= 0 && agent.clipKey === 'idle' && elapsed - agent.checkStart < CHECK_LEN) {
-          attachMatrixAt(rig, agent.frame, this.chestSlot, bone)
+        // And whatever a checking astronaut has got out, in its left hand.
+        if (agent.checkStart >= 0 && agent.clipKey.startsWith('phone') && elapsed - agent.checkStart < CHECK_LEN) {
+          attachMatrixAt(rig, agent.frame, this.handLSlot, bone)
           worn.multiplyMatrices(root, bone)
           props.write(agent.checkProp, worn, elapsed - agent.checkStart)
         }

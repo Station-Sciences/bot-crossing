@@ -476,6 +476,7 @@ function droneGeometry() {
 
 const _dummy = new THREE.Object3D()
 const _target = new THREE.Vector3()
+const _sep = { x: 0, z: 0 }
 const _color = new THREE.Color()
 const _zero = new THREE.Matrix4().makeScale(0, 0, 0)
 
@@ -1224,20 +1225,56 @@ class Fleet {
     return Math.max(this.env.heightAt(x, z), DECK) + CRUISE_CLEARANCE
   }
 
-  /** A building under construction first; failing that, anyone; failing that, nobody. */
-  _pickSite() {
+  /**
+   * A building under construction first; failing that, anyone; failing that, nobody. A site
+   * another drone is already flying to is passed over while there is any other choice, so
+   * the fleet spreads across the colony instead of stacking up over one roof.
+   */
+  _pickSite(self) {
     const sites = this.sites
     if (!sites.length) return null
-    let actives = 0
-    for (let i = 0; i < sites.length; i++) if (sites[i].active) actives++
-    if (actives) {
-      let n = Math.floor(this.rand() * actives)
-      for (let i = 0; i < sites.length; i++) {
-        if (!sites[i].active) continue
-        if (n-- === 0) return sites[i]
+    const taken = (site) => {
+      for (let i = 0; i < this.active; i++) {
+        const o = this.drones[i]
+        if (o !== self && o.state !== 'parked' && o.state !== 'land' && o.site === site) return true
       }
+      return false
     }
-    return sites[Math.floor(this.rand() * sites.length)]
+    const pick = (list) => (list.length ? list[Math.floor(this.rand() * list.length)] : null)
+    const actives = sites.filter((s) => s.active)
+    return pick(actives.filter((s) => !taken(s))) || pick(sites.filter((s) => !taken(s))) || pick(actives) || pick(sites)
+  }
+
+  /**
+   * Where over the site a drone parks to drop: somewhere on the roof, not the one exact
+   * centre every drone would otherwise share.
+   */
+  _dropSpot(d, site) {
+    const a = this.rand() * Math.PI * 2
+    const r = 0.4 + this.rand() * Math.max(0.4, (site.radius || 1.4) * 0.55)
+    d.site = site
+    d.tx = site.x + Math.cos(a) * r
+    d.ty = site.y
+    d.tz = site.z + Math.sin(a) * r
+  }
+
+  /** A shove away from any other airborne drone too close: no two hover in the same air. */
+  _separate(d, out) {
+    out.x = 0
+    out.z = 0
+    for (let i = 0; i < this.active; i++) {
+      const o = this.drones[i]
+      if (o === d || o.state === 'parked') continue
+      const dx = d.x - o.x
+      const dz = d.z - o.z
+      const d2 = dx * dx + dz * dz
+      if (d2 > 6.25 || d2 < 1e-4) continue
+      const dist = Math.sqrt(d2)
+      const k = (1 - dist / 2.5) * 2.2
+      out.x += (dx / dist) * k
+      out.z += (dz / dist) * k
+    }
+    return out
   }
 
   update(dt, elapsed, hooks, motion) {
@@ -1259,11 +1296,9 @@ class Fleet {
           wantThrottle = IDLE_THROTTLE
           d.timer -= dt
           if (d.timer <= 0) {
-            const site = this._pickSite()
+            const site = this._pickSite(d)
             if (site) {
-              d.tx = site.x
-              d.ty = site.y
-              d.tz = site.z
+              this._dropSpot(d, site)
               d.carry = 1
               d.dropped = false
               d.state = 'takeoff'
@@ -1296,13 +1331,21 @@ class Fleet {
             wantVX = (dx / dist) * v
             wantVZ = (dz / dist) * v
           }
+          const sep = this._separate(d, _sep)
+          wantVX += sep.x
+          wantVZ += sep.z
           break
         }
         case 'hover': {
           d.timer -= dt
-          // Sink a little over the site and bob while the crate goes down.
+          // Sink a little over the site and bob while the crate goes down. Each drone hangs
+          // at its own height, and holds its distance from the others, so a busy roof reads
+          // as a queue rather than one drone drawn several times.
           const t = 1 - d.timer / d.hoverT
-          wantY = this._cruiseY(d.x, d.z) - 1 - Math.sin(t * Math.PI) * 0.6
+          wantY = this._cruiseY(d.x, d.z) - 1 - Math.sin(t * Math.PI) * 0.6 + (i % 3) * 0.45
+          const sep = this._separate(d, _sep)
+          wantVX = sep.x
+          wantVZ = sep.z
           if (!d.dropped && t > 0.55) {
             d.dropped = true
             d.carry = 0

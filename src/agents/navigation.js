@@ -27,6 +27,8 @@ const HALF = 56
 const MAX_EXPANSIONS = 6000
 
 const SQRT2 = Math.SQRT2
+/** Scratch for the solid queries, so the frame loop allocates nothing. */
+const _near = []
 
 export class Navigation {
   constructor() {
@@ -48,6 +50,36 @@ export class Navigation {
     this.generation = 0
     /** Bumped on every rebuild; agents use it to notice their path is stale. */
     this.version = 0
+    /**
+     * The obstacles that are walls to lean on, not just cells to route round: buildings,
+     * with a `keep` radius the crew is pushed back out to. The grid alone cannot hold that
+     * line — its cells are blocked at 80% of a footprint so the gaps between slots stay
+     * walkable, and a half-cell of rounding on top of that lets an astronaut settle with
+     * a shoulder through the wall.
+     */
+    this.solids = []
+    /** The solids bucketed on a coarse grid, so a query only looks at its neighbourhood. */
+    this._solidBuckets = new Map()
+    this._bucket = 4
+  }
+
+  _bucketKey(bx, bz) {
+    return bx * 100003 + bz
+  }
+
+  /** Every solid whose keep circle can reach the point — its own bucket and the eight round it. */
+  _solidsNear(x, z, out) {
+    out.length = 0
+    const b = this._bucket
+    const bx = Math.floor(x / b)
+    const bz = Math.floor(z / b)
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oz = -1; oz <= 1; oz++) {
+        const list = this._solidBuckets.get(this._bucketKey(bx + ox, bz + oz))
+        if (list) for (let i = 0; i < list.length; i++) out.push(list[i])
+      }
+    }
+    return out
   }
 
   // ── grid <-> world ──────────────────────────────────────────────────────────────────
@@ -82,6 +114,26 @@ export class Navigation {
   rebuild(obstacles) {
     this.blocked.fill(0)
     const { size, cell } = this
+    this.solids = obstacles.filter((o) => o.keep > 0)
+    // Bucket them. A solid lands in every bucket its keep circle touches, so a point only
+    // ever has to look at its own bucket and its neighbours; keep radii top out at a few
+    // metres, so one bucket of slack on each side covers it.
+    this._solidBuckets.clear()
+    const b = this._bucket
+    for (const o of this.solids) {
+      const x0 = Math.floor((o.x - o.keep) / b)
+      const x1 = Math.floor((o.x + o.keep) / b)
+      const z0 = Math.floor((o.z - o.keep) / b)
+      const z1 = Math.floor((o.z + o.keep) / b)
+      for (let bx = x0; bx <= x1; bx++) {
+        for (let bz = z0; bz <= z1; bz++) {
+          const key = this._bucketKey(bx, bz)
+          let list = this._solidBuckets.get(key)
+          if (!list) this._solidBuckets.set(key, (list = []))
+          list.push(o)
+        }
+      }
+    }
 
     for (const o of obstacles) {
       const r = o.r
@@ -105,6 +157,79 @@ export class Navigation {
     }
     this.version++
     void cell
+  }
+
+  /**
+   * A shove out of any solid the point is inside the keep radius of, as a velocity added
+   * to `out`. Zero when clear. Firm enough to win against a crowd pressing inward, gentle
+   * enough at the edge that nobody bounces off a wall.
+   */
+  repel(pos, out) {
+    const solids = this._solidsNear(pos.x, pos.z, _near)
+    for (let i = 0; i < solids.length; i++) {
+      const o = solids[i]
+      const dx = pos.x - o.x
+      const dz = pos.z - o.z
+      const keep = o.keep
+      const d2 = dx * dx + dz * dz
+      if (d2 >= keep * keep) continue
+      const d = Math.sqrt(d2)
+      if (d < 1e-4) {
+        out.x += keep * 2
+        continue
+      }
+      const strength = (1 - d / keep) * 6 + 0.4
+      out.x += (dx / d) * strength
+      out.z += (dz / d) * strength
+    }
+    return out
+  }
+
+  /**
+   * The hard version of `repel`: a point inside a solid's keep radius is put back on it.
+   * Applied after every move, so a crowd pressing inward can never win against a wall.
+   */
+  keepOut(pos) {
+    const solids = this._solidsNear(pos.x, pos.z, _near)
+    for (let i = 0; i < solids.length; i++) {
+      const o = solids[i]
+      const dx = pos.x - o.x
+      const dz = pos.z - o.z
+      const keep = o.keep
+      const d2 = dx * dx + dz * dz
+      if (d2 >= keep * keep) continue
+      const d = Math.sqrt(d2)
+      if (d < 1e-4) {
+        pos.x = o.x + keep
+        continue
+      }
+      const nx = o.x + (dx / d) * keep
+      const nz = o.z + (dz / d) * keep
+      if (!this.isBlocked(nx, nz)) {
+        pos.x = nx
+        pos.z = nz
+        continue
+      }
+      // Straight out is walled off — a crate against the building, say. Look round the
+      // keep circle for the nearest open spot and edge toward it, a little a frame, so the
+      // astronaut walks out of the pocket rather than teleporting.
+      const a0 = Math.atan2(dz, dx)
+      for (let k = 1; k <= 9; k++) {
+        const da = k * 0.2
+        for (const sgn of [1, -1]) {
+          const a = a0 + sgn * da
+          const tx = o.x + Math.cos(a) * keep
+          const tz = o.z + Math.sin(a) * keep
+          if (this.isBlocked(tx, tz)) continue
+          const len = Math.hypot(tx - pos.x, tz - pos.z) || 1
+          const step = Math.min(len, 0.05)
+          pos.x += ((tx - pos.x) / len) * step
+          pos.z += ((tz - pos.z) / len) * step
+          k = 99
+          break
+        }
+      }
+    }
   }
 
   /**

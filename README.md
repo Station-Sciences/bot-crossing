@@ -344,6 +344,17 @@ Anything can throw a ring on it: a fish landing, a gull skimming, a drone passin
 are a small uniform array, so sixteen can be in flight for one draw call.
 
 
+### Staying out of the walls
+
+The navigation grid blocks a building at 80% of its footprint, so the gaps between slots
+stay walkable — which also lets an astronaut settle with a shoulder through a wall. So on
+top of the grid every building, crate and boulder carries a *keep* radius (`navigation.js`,
+`repel` and `keepOut`): a soft shove out of it while moving, and a hard put-back after every
+step, with a walk round the circle when straight out is blocked. Solids are bucketed on a
+coarse grid so the query costs the same with two hundred of them as with twenty. An
+astronaut that wants to move and gets nowhere counts the seconds (`stuckFor`); after a
+moment it stops shuffling, and whoever owns that leg picks somewhere else to go.
+
 ### Checking on it
 
 A thread that is running hammers at its building, walks round it, and hammers from another
@@ -353,6 +364,14 @@ away. The phone is the shape the folding iPhone is expected to be: a 4:3 slab th
 along its long edge into something wider than it is tall, with a pear on the back. It is
 one of what will be several such props; they live in `agents/props.js` and are picked per
 check, so more can be added and cycled without touching the astronauts.
+
+The pose is KayKit's idle with the left arm turned up to hold it, and the hammering is
+KayKit's hammering with the swing moved from the wrist to the shoulder. Both are done at
+bake time by `TWEAKS` in `agents/crew.js`: per clip, per bone, a `scale` on how far it
+strays from a reference keyframe and an `offset` Euler on top, optionally ramped in or out
+to make a raise or a lower. `window.__rebakeCrew(tweaks)` (dev only) bakes again with a
+different table, which is how the arm was posed: a small coordinate search over the six
+joint angles for a hand in front of the visor.
 
 ### Wildlife
 
