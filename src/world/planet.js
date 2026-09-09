@@ -21,6 +21,7 @@ import { atlasTexture, hasPart, kitReady, kitUsesVertexColors, part } from './ki
  *   fauna    { birds, butterflies, fish, drones }   — see fauna.js
  *   audio    { beds, events, shore }   — see audio/ambience.js
  *   grade    { saturation, warmth }   a nudge to the colour grade
+ *   grass    { root, tip, height, width, sway }   a field of wispy blades — see grass.js
  */
 
 const DRONES = { count: 3 }
@@ -92,6 +93,7 @@ export const PLANETS = {
     craters: 0,
     roughness: 0.75,
     scatter: 'flora',
+    grass: { sway: 0.6 },
     companion: { name: 'Moon', color: 0xdcd8cc, size: 3.2, glow: 0xfff6e0 },
     dust: 0.25,
     weather: [
@@ -174,6 +176,7 @@ export const PLANETS = {
     craters: 9,
     roughness: 1.0,
     scatter: 'jungle',
+    grass: { root: 0x1f5a2e, tip: 0x6fbf4c, height: [0.45, 0.95], sway: 0.45 },
     water: { level: -1.0, shallow: 0x46c8b0, deep: 0x175a62, foam: 0xe8fff4, waveHeight: 0.05, sparkle: 0.5 },
     shore: { color: 0x7a6a44, band: 0.5 },
     companion: { name: 'Moon', color: 0xdcd8cc, size: 3.2, glow: 0xfff6e0 },
@@ -221,6 +224,7 @@ export const PLANETS = {
     roughness: 0.6,
     shape: 'coast',
     scatter: 'beach',
+    grass: { sway: 0.7 },
     water: { level: -1.6, shallow: 0x52dcd4, deep: 0x1c6fba, foam: 0xffffff, waveHeight: 0.14, sparkle: 1 },
     shore: { color: 0xf3e4b4, band: 1.0 },
     companion: { name: 'Moon', color: 0xdcd8cc, size: 3.2, glow: 0xfff6e0 },
@@ -265,6 +269,7 @@ export const PLANETS = {
     roughness: 0.7,
     shape: 'island',
     scatter: 'ocean',
+    grass: { sway: 0.8 },
     water: { level: -1.7, shallow: 0x3fd4cc, deep: 0x0e4c98, foam: 0xffffff, waveHeight: 0.18, sparkle: 1 },
     shore: { color: 0xf3e6ba, band: 1.0 },
     companion: { name: 'Moon', color: 0xdcd8cc, size: 3.2, glow: 0xfff6e0 },
@@ -349,6 +354,7 @@ export const PLANETS = {
     roughness: 0.7,
     shape: 'sky',
     scatter: 'flora',
+    grass: { sway: 0.85 },
     skyIsland: { rock: 0x6e6256, soil: 0x7a5a3c, vine: 0x4f8f3a, cloud: 0xffffff, cloudLevel: -30, depth: 44 },
     companion: { name: 'Moon', color: 0xe8e4dc, size: 3.0, glow: 0xfff6e0 },
     dust: 0.15,
@@ -444,6 +450,7 @@ export const PLANETS = {
     craters: 4,
     roughness: 0.85,
     scatter: 'autumn',
+    grass: { root: 0x6a5a26, tip: 0xd8b24a, height: [0.3, 0.6], sway: 0.65 },
     water: { level: -1.05, shallow: 0x74b4a4, deep: 0x2c5c6c, foam: 0xf4f8f0, waveHeight: 0.04, sparkle: 0.6 },
     shore: { color: 0x8c7448, band: 0.5 },
     companion: { name: 'Moon', color: 0xe8dcc4, size: 3.4, glow: 0xffe8c0 },
@@ -488,6 +495,7 @@ export const PLANETS = {
     craters: 2,
     roughness: 0.7,
     scatter: 'sakura',
+    grass: { root: 0x4a8a3c, tip: 0xb8e07a, sway: 0.55 },
     water: { level: -0.95, shallow: 0x92dcdc, deep: 0x3a7cb4, foam: 0xffffff, waveHeight: 0.04, sparkle: 0.8 },
     shore: { color: 0xbcae86, band: 0.5 },
     companion: { name: 'Moon', color: 0xf0e4e0, size: 3.4, glow: 0xffe4ec },

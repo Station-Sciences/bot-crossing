@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { PLANETS, createTerrain, createScatter, terrainHeight } from '../world/planet.js'
 import { createWater } from '../world/water.js'
 import { Fauna } from '../world/fauna.js'
+import { createGrass } from '../world/grass.js'
 import { bendPoint } from '../core/curve.js'
 import { Sky } from '../world/sky.js'
 import {
@@ -277,8 +278,29 @@ export class Colony {
     this.scatterGroup = createScatter(this.planet, this.settings.get('scatterDensity'), clear)
     this.worldGroup.add(this.scatterGroup)
     this._scatterFootprint = this._plotFootprint()
+    this._buildGrass(clear)
     // The crew routes around scatter, so a new scatter is a new navigation grid.
     if (this.nav) this._rebuildNavigation()
+  }
+
+  /**
+   * The meadow, on worlds that have one. Kept clear of the same ground the scatter is, and
+   * rebuilt with it: a plot laid over grass would have blades poking up through the deck.
+   */
+  _buildGrass(clear) {
+    if (this.grass) {
+      this.grass.dispose()
+      this.grass = null
+    }
+    const detail = this.settings.get('groundDetail')
+    this.grass = createGrass({
+      planet: this.planet,
+      heightAt: (x, z) => terrainHeight(x, z, this.planet),
+      blocked: (x, z) => clear.some((p) => (x - p.x) * (x - p.x) + (z - p.z) * (z - p.z) < p.r * p.r),
+      density: this.settings.get('scatterDensity'),
+      quality: detail === 'high' ? 'high' : detail === 'low' ? 'low' : 'medium',
+    })
+    if (this.grass) this.worldGroup.add(this.grass.mesh)
   }
 
   /** What the scatter has to avoid, as one string — cheap to compare every poll. */
@@ -812,6 +834,7 @@ export class Colony {
     this.particles.ambient(dt, this.camera, this.planet, night, (x, z) => this.surfaceAt(x, z))
     this.particles.update(dt)
     this.water?.update(dt, elapsed, this.camera, night, this.sky.sunDir)
+    this.grass?.update(dt, elapsed)
     this.fauna.update(dt, elapsed, this.camera, night, this._faunaHooks || (this._faunaHooks = {
       ripple: (x, z, s) => this.ripple(x, z, s),
       sound: (name, x, y, z) => this.onSound?.(name, x, y, z),
@@ -1012,6 +1035,7 @@ export class Colony {
   dispose() {
     this.sky.dispose()
     this.fauna.dispose()
+    this.grass?.dispose()
     this.water?.dispose()
     this.ship.dispose()
     this.astronauts.dispose()
