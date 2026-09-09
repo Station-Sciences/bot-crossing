@@ -323,7 +323,8 @@ export const PLANETS = {
         { sound: 'wind-arctic', gain: 0.35, night: 0.5 },
       ],
       events: [
-        { sound: 'ice-crack', every: [20, 60], gain: 0.5, where: 'water' },
+        // A frozen lake groans now and then, from far off; it does not crunch underfoot.
+        { sound: 'ice-crack', every: [50, 140], gain: 0.35, where: 'water' },
         { sound: 'crow', every: [15, 45], gain: 0.35, when: 'day', where: 'ring' },
         { sound: 'owl', every: [30, 90], gain: 0.4, when: 'night', where: 'ring' },
         { sound: 'wind-gust', every: [12, 35], gain: 0.5, where: 'ring' },
