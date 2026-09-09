@@ -340,8 +340,69 @@ test('opencode running is bounded by the activity window and errors come from th
   }
 })
 
-test('opencode refuses untrusted refs and offers no per-thread link', async () => {
-  const { home, h } = await fakeOpencode()
+test('a turn the user stopped is not an error — denial and abort must not redden an astronaut', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'opencode-denied-'))
+  const dbFile = path.join(home, 'opencode.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const ins = db.prepare(`INSERT INTO session (id, project_id, parent_id, directory, title, agent, model, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run('ses_denied1111111111111111111111', 'global', null, '/tmp/d', 'Denied turn', 'build', null, now - 60000, now, null)
+  ins.run('ses_aborted111111111111111111111', 'global', null, '/tmp/e', 'Aborted turn', 'build', null, now - 60000, now, null)
+  ins.run('ses_failed1111111111111111111111', 'global', null, '/tmp/f', 'Failed turn', 'build', null, now - 60000, now, null)
+  const mins = db.prepare(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`)
+  mins.run('m_denied', 'ses_denied1111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, finish: 'tool-calls' }))
+  mins.run('m_aborted', 'ses_aborted111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, finish: 'stop' }))
+  mins.run('m_failed', 'ses_failed1111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, finish: 'stop' }))
+  const pins = db.prepare(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`)
+  pins.run('p_denied', 'm_denied', 'ses_denied1111111111111111111111', now, now, JSON.stringify({ type: 'tool', tool: 'bash', state: { status: 'error', error: 'The user rejected permission to use this specific tool call.' } }))
+  pins.run('p_aborted', 'm_aborted', 'ses_aborted111111111111111111111', now, now, JSON.stringify({ type: 'tool', tool: 'read', state: { status: 'error', error: 'Tool execution aborted' } }))
+  pins.run('p_failed', 'm_failed', 'ses_failed1111111111111111111111', now, now, JSON.stringify({ type: 'tool', tool: 'write', state: { status: 'error', error: 'SchemaError(Expected string, got object)' } }))
+  db.close()
+  process.env.OPENCODE_DB = dbFile
+  try {
+    const byId = new Map((await opencode.scanThreads()).map((t) => [t.id, t]))
+    assert.equal(byId.get('opencode:ses_denied1111111111111111111111').hasError, false, 'a rejected permission is the user stopping the turn, not a failure')
+    assert.equal(byId.get('opencode:ses_aborted111111111111111111111').hasError, false, 'an aborted call is a cancellation, not a failure')
+    assert.equal(byId.get('opencode:ses_failed1111111111111111111111').hasError, true, 'a genuine tool failure still reddens the astronaut')
+  } finally {
+    delete process.env.OPENCODE_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('a message-level abort is the user stopping, but a provider error is a failure', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'opencode-msgerr-'))
+  const dbFile = path.join(home, 'opencode.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const ins = db.prepare(`INSERT INTO session (id, project_id, parent_id, directory, title, agent, model, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run('ses_msgabort11111111111111111111', 'global', null, '/tmp/g', 'Aborted message', 'build', null, now - 60000, now, null)
+  ins.run('ses_msgapi1111111111111111111111', 'global', null, '/tmp/h', 'Provider failure', 'build', null, now - 60000, now, null)
+  const mins = db.prepare(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`)
+  mins.run('m_abort', 'ses_msgabort11111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, error: { name: 'MessageAbortedError' } }))
+  mins.run('m_api', 'ses_msgapi1111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, error: { name: 'APIError' } }))
+  db.close()
+  process.env.OPENCODE_DB = dbFile
+  try {
+    const byId = new Map((await opencode.scanThreads()).map((t) => [t.id, t]))
+    assert.equal(byId.get('opencode:ses_msgabort11111111111111111111').hasError, false)
+    assert.equal(byId.get('opencode:ses_msgabort11111111111111111111').running, false)
+    assert.equal(byId.get('opencode:ses_msgapi1111111111111111111111').hasError, true)
+  } finally {
+    delete process.env.OPENCODE_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('opencode refuses untrusted refs and offers no per-thread link', async () => {  const { home, h } = await fakeOpencode()
   try {
     const uuid = OPENCODE_SESSION
     assert.equal(h.openThread({ sessionId: [uuid] }).ok, false)

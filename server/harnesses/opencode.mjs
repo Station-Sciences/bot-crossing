@@ -129,6 +129,25 @@ async function firstUserText(db, sessionId) {
 /** Costly facts kept against `time_updated`, so an unchanged session is read once. */
 const factsCache = new Map()
 
+/**
+ * Whether an error-status tool part means the run failed.
+ *
+ * Seen in the wild: `The user rejected permission to use this specific tool
+ * call.` and `Tool execution aborted` — both are the user stopping the turn,
+ * not the turn failing. Only a genuine failure reddens an astronaut.
+ */
+function isRealError(raw) {
+  let text = ''
+  try {
+    const d = typeof raw === 'string' ? JSON.parse(raw) : raw
+    const state = d?.state || {}
+    text = `${state.error || ''}\n${state.output || ''}`
+  } catch {
+    return true
+  }
+  return !/user rejected permission|permission.{0,20}denied|denied.{0,20}permission|execution aborted|aborted|cancelled/i.test(text)
+}
+
 async function sessionFacts(db, sessionId, timeUpdated) {
   const hit = factsCache.get(sessionId)
   if (hit && hit.timeUpdated === timeUpdated) return hit.facts
@@ -148,19 +167,34 @@ async function sessionFacts(db, sessionId, timeUpdated) {
       const d = JSON.parse(last.data)
       const completed = d?.time?.completed
       const finished = typeof d?.finish === 'string' && d.finish
+      const msgError = typeof d?.error?.name === 'string' ? d.error.name : ''
+      const aborted = /abort/i.test(msgError)
       // A trailing user message means the model speaks next — whatever the
-      // process is doing, it is not waiting on anyone.
-      const open = d?.role === 'user' || (d?.role === 'assistant' && !completed && !finished)
+      // process is doing, it is not waiting on anyone. A turn that ended in
+      // error or abort is over too, even when it carries no finish stamp.
+      const open = d?.role === 'user' || (d?.role === 'assistant' && !completed && !finished && !msgError)
       facts.running = open && Date.now() - num(timeUpdated) < ACTIVE_WINDOW_MS
-      if (d?.role === 'assistant' && (completed || finished)) {
-        // Only the last turn counts: a historic tool error must not redden an
-        // astronaut forever.
-        const err = db
-          .prepare(
-            `SELECT 1 AS x FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 3) AND data LIKE '%"status":"error"%' LIMIT 1`
-          )
-          .get(sessionId)
-        facts.hasError = Boolean(err)
+      if (d?.role === 'assistant' && (completed || finished || msgError)) {
+        if (aborted) {
+          // The user stopped the turn. Same as pressing escape elsewhere:
+          // an abandoned turn is not a failed one.
+          facts.hasError = false
+        } else if (msgError) {
+          // The turn itself failed (provider/auth error) — that is what the
+          // red eyes are for, even when no single tool part takes the blame.
+          facts.hasError = true
+        } else {
+          // Only the last turn counts: a historic tool error must not redden
+          // an astronaut forever. And a turn the *user* stopped is not a
+          // failure — a rejected permission or an aborted call is this
+          // harness's version of pressing escape.
+          const candidates = db
+            .prepare(
+              `SELECT data FROM part WHERE message_id IN (SELECT id FROM message WHERE session_id = ? ORDER BY time_created DESC LIMIT 3) AND data LIKE '%"status":"error"%' LIMIT 5`
+            )
+            .all(sessionId)
+          facts.hasError = candidates.some((row) => isRealError(row?.data))
+        }
       }
     }
   } catch {
