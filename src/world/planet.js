@@ -341,8 +341,8 @@ export const PLANETS = {
     horizon: 0x5a2c20,
     sky: { top: 0x2c1c22, bottom: 0x9a4e30 },
     fog: { color: 0x4c3028, near: 58, far: 175 },
-    sun: { color: 0xffc890, intensity: 1.9, night: 0.12 },
-    ambient: { sky: 0x8a5a48, ground: 0x2c1a16, intensity: 0.85 },
+    sun: { color: 0xffc890, intensity: 1.9, night: 0.22 },
+    ambient: { sky: 0x8a5a48, ground: 0x3c2218, intensity: 0.95 },
     atmosphere: 0.7,
     craters: 14,
     roughness: 1.4,
@@ -624,11 +624,23 @@ function sampleHeight(x, z, field, planet) {
   for (const crater of craters) {
     const d = Math.hypot(x - crater.x, z - crater.z)
     if (d > crater.r * 1.5) continue
-    // A bowl with a raised rim — the rim is what makes it read as an impact. With water on
-    // the world, the bowls that dip below the waterline are its lakes.
+    // A bowl with a raised rim — the rim is what makes it read as an impact.
     const t = d / crater.r
-    if (t < 1) y -= (1 - t * t) * crater.depth
-    else y += (1 - Math.abs(t - 1.22) / 0.28) * crater.depth * 0.32
+    if (t < 1) {
+      if (lakes) {
+        // On a lake world the bowl is dug down to the *water*, not down from the ground:
+        // the folded hills stand anything up to nine units proud of the waterline, and a
+        // bowl measured from the ground would be a dry dent on top of a hill. The floor
+        // sits half the crater's depth under the surface and the sides run up to meet
+        // whatever ground is there, so every crater is a lake and none is a puddle.
+        const floor = planet.water.level - crater.depth * 0.5
+        y = Math.min(y, floor + (y - floor) * t * t)
+      } else {
+        y -= (1 - t * t) * crater.depth
+      }
+    } else {
+      y += (1 - Math.abs(t - 1.22) / 0.28) * crater.depth * 0.32
+    }
   }
   return y
 }

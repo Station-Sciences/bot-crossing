@@ -80,9 +80,9 @@ const SKY_FRAG = /* glsl */ `
     // and two noise samples — one nudged toward the sun — give each puff a lit side and a
     // shaded underside for the price of a second lookup.
     if ( uCloudAmount > 0.001 && d.y > 0.02 ) {
-      vec2 sheet = d.xz / ( d.y + 0.18 ) * 1.35 + vec2( uCloudTime * 0.012, uCloudTime * 0.004 );
+      vec2 sheet = d.xz / ( d.y + 0.26 ) * 1.05 + vec2( uCloudTime * 0.012, uCloudTime * 0.004 );
       float n = cloudFbm( sheet );
-      float cover = smoothstep( 1.0 - uCloudAmount * 0.72, 1.06 - uCloudAmount * 0.42, n );
+      float cover = smoothstep( 1.0 - uCloudAmount * 0.9, 1.05 - uCloudAmount * 0.5, n );
       vec2 toward = normalize( uSunDir.xz + vec2( 0.0001 ) ) * 0.09;
       float lit = clamp( ( cloudFbm( sheet + toward ) - n ) * 6.0 + 0.55, 0.0, 1.0 );
       // Bright where the sun catches them, the sky's own colour underneath; at night they
@@ -91,7 +91,7 @@ const SKY_FRAG = /* glsl */ `
       vec3 nightCloud = uTop * 0.55 + uHorizon * 0.15;
       vec3 cloud = mix( nightCloud, dayCloud, uDay );
       // Clouds near the horizon fade into the haze rather than stacking into a wall.
-      cover *= smoothstep( 0.02, 0.22, d.y );
+      cover *= smoothstep( 0.025, 0.11, d.y );
       col = mix( col, cloud, cover );
     }
 
