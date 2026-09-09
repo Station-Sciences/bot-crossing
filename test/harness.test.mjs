@@ -241,3 +241,57 @@ test('Cursor offers a folder link but never a per-thread one it cannot honour', 
   assert.equal(h.newSession('relative/path').ok, false)
   await fsp.rm(home, { recursive: true, force: true })
 })
+
+// ── Antigravity CLI, faked on disk ────────────────────────────────────────────
+
+async function fakeAntigravity(records) {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'antigravity-fixture-'))
+  const dir = path.join(home, 'brain', SESSION_ID, '.system_generated', 'logs')
+  await fsp.mkdir(dir, { recursive: true })
+  await fsp.writeFile(path.join(dir, 'transcript.jsonl'), records.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  return home
+}
+
+async function antigravityWith(home) {
+  process.env.BOT_CROSSING_ANTIGRAVITY_HOME = home
+  const mod = await import(`../server/harnesses/antigravity.mjs?${home}`)
+  return mod.default
+}
+
+test('an Antigravity transcript yields a thread with prompt and prefixed ID', async () => {
+  const home = await fakeAntigravity([
+    { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: '<USER_REQUEST>fix the login bug</USER_REQUEST>', created_at: '2026-09-08T10:00:00.000Z' },
+    { type: 'PLANNER_RESPONSE', status: 'DONE' },
+  ])
+  const h = await antigravityWith(home)
+  assert.equal(await h.detect(), true)
+  const [t] = await h.scanThreads()
+  assert.equal(t.id, `antigravity:${SESSION_ID}`)
+  assert.equal(t.title, 'fix the login bug')
+  assert.equal(t.running, false)
+  assert.equal(t.hasError, false)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an open Antigravity turn is reported as running', async () => {
+  const home = await fakeAntigravity([
+    { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'implement feature', created_at: new Date().toISOString() },
+  ])
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('Antigravity opens through antigravity:// scheme and handles invalid refs', async () => {
+  const home = await fakeAntigravity([])
+  const h = await antigravityWith(home)
+  const opened = await h.openThread({ sessionId: SESSION_ID })
+  assert.equal(opened.ok, true)
+  assert.equal(schemeOf(opened.url), 'antigravity')
+  assert.equal(opened.url, `antigravity://resume?session=${SESSION_ID}`)
+  assert.equal((await h.openThread({})).ok, false)
+  assert.equal((await h.newSession('relative/path')).ok, false)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
