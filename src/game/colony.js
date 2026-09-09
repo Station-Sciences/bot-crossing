@@ -916,6 +916,8 @@ export class Colony {
       const free = this.nav.nearestFree(site.x, site.z)
       if (free) site.set(this.nav.toWorld(free.ix), 0, this.nav.toWorld(free.iz))
     }
+    // And out of any keep circle, or the astronaut is pushed off its own site every frame.
+    this.nav?.keepOut(site)
     return site
   }
 

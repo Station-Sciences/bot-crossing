@@ -574,6 +574,8 @@ export class Astronauts {
       driftBlocked: false,
       /** Seconds spent trying to move and getting nowhere. See `_walk`. */
       stuckFor: 0,
+      /** Distance moved this frame by corrections, not by walking; kept out of the speed. */
+      corr: 0,
       // Animation state: which baked clip, how far into it, and the row of the bone table
       // that lands on. Started at a random offset so a crowd never marches in step.
       clipKey: walksOut ? 'spawn' : 'idle',
@@ -830,7 +832,8 @@ export class Astronauts {
     // apart whenever something is in the way: velocity stays high while the collision code
     // refuses the step, and an agent driven off intent alone walks on the spot against a
     // wall.
-    const moved = Math.hypot(agent.pos.x - fromX, agent.pos.z - fromZ) / Math.max(dt, 1e-4)
+    const moved = Math.max(0, Math.hypot(agent.pos.x - fromX, agent.pos.z - fromZ) - agent.corr) / Math.max(dt, 1e-4)
+    agent.corr = 0
     // Asymmetric on purpose. Setting off is picked up on the very frame it happens, so an
     // astronaut is never sliding in a standing pose; stopping decays over a tenth of a
     // second, which both stops a half-blocked step flickering the clip and lets the walk
@@ -889,7 +892,12 @@ export class Astronauts {
         agent.pathVersion = -1
         agent.blocked = true
       }
-      this.nav.keepOut(agent.pos)
+      // A step the keep-out mostly undid is a refused step too — otherwise an astronaut
+      // whose goal sits inside a keep circle is pushed back exactly as far as it walked,
+      // every frame, and runs on the spot for good.
+      const undone = this.nav.keepOut(agent.pos)
+      agent.corr += undone
+      if (undone > 0.5 * Math.hypot(dx, dz)) agent.blocked = true
       // Wanting to go somewhere and getting nowhere is being stuck. Count it, and once it
       // has gone on for a moment stop trying: a foot shuffling against a wall flickers
       // between the walk and the stand every frame, and whoever owns this leg reads the
@@ -986,7 +994,7 @@ export class Astronauts {
         const r = 0.8 + Math.random() * 2
         const wx = agent.site.x + Math.cos(a) * r
         const wz = agent.site.z + Math.sin(a) * r
-        if (this.nav?.isBlocked(wx, wz)) continue
+        if (this.nav?.isBlocked(wx, wz) || this.nav?.insideKeep(wx, wz)) continue
         if (this._crowded(wx, wz, agent)) continue
         agent.wander.set(wx, 0, wz)
         break
@@ -1025,20 +1033,30 @@ export class Astronauts {
    */
   _settle(agent, dt) {
     const push = this._separation(agent, this._sep)
+    const x0 = agent.pos.x
+    const z0 = agent.pos.z
     if (this.nav) {
-      this.nav.repel(agent.pos, push)
-      this.nav.keepOut(agent.pos)
-      // Built over while standing still: the grid walks it out, a step a frame.
-      if (push.x === 0 && push.z === 0 && this.nav.isBlocked(agent.pos.x, agent.pos.z)) this.nav.slide(agent.pos, 0, 0)
+      if (this.nav.isBlocked(x0, z0)) {
+        // Built over while standing still: the grid walks it out, a step a frame — and
+        // nothing else gets a say until it is off the blocked cell, or the two fight.
+        this.nav.slide(agent.pos, 0, 0)
+      } else {
+        this.nav.repel(agent.pos, push)
+        this.nav.keepOut(agent.pos)
+      }
     }
-    if (push.x === 0 && push.z === 0) return
-    const dx = push.x * dt
-    const dz = push.z * dt
-    if (this.nav) this.nav.slide(agent.pos, dx, dz)
-    else {
-      agent.pos.x += dx
-      agent.pos.z += dz
+    if (push.x !== 0 || push.z !== 0) {
+      const dx = push.x * dt
+      const dz = push.z * dt
+      if (this.nav) this.nav.slide(agent.pos, dx, dz)
+      else {
+        agent.pos.x += dx
+        agent.pos.z += dz
+      }
     }
+    // None of that is walking: a nudged sleeper stays in its sitting clip, and two of
+    // them being shoved apart in a pocket do not take turns jogging on the spot.
+    agent.corr += Math.hypot(agent.pos.x - x0, agent.pos.z - z0)
   }
 
   /**
@@ -1062,7 +1080,7 @@ export class Astronauts {
         const a = from + (Math.random() > 0.5 ? 1 : -1) * (1.1 + Math.random() * 1.6)
         const wx = agent.anchor.x + Math.cos(a) * radius
         const wz = agent.anchor.z + Math.sin(a) * radius
-        if (this.nav?.isBlocked(wx, wz)) continue
+        if (this.nav?.isBlocked(wx, wz) || this.nav?.insideKeep(wx, wz)) continue
         if (this._crowded(wx, wz, agent)) continue
         agent.workSpot.set(wx, 0, wz)
         break

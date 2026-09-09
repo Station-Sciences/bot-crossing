@@ -191,6 +191,8 @@ export class Navigation {
    */
   keepOut(pos) {
     const solids = this._solidsNear(pos.x, pos.z, _near)
+    const startX = pos.x
+    const startZ = pos.z
     for (let i = 0; i < solids.length; i++) {
       const o = solids[i]
       const dx = pos.x - o.x
@@ -223,13 +225,33 @@ export class Navigation {
           if (this.isBlocked(tx, tz)) continue
           const len = Math.hypot(tx - pos.x, tz - pos.z) || 1
           const step = Math.min(len, 0.05)
-          pos.x += ((tx - pos.x) / len) * step
-          pos.z += ((tz - pos.z) / len) * step
+          const sx = pos.x + ((tx - pos.x) / len) * step
+          const sz = pos.z + ((tz - pos.z) / len) * step
+          // The way there has to be open too, or this and `slide` trade the point back
+          // and forth across a blocked cell for ever.
+          if (this.isBlocked(sx, sz)) continue
+          pos.x = sx
+          pos.z = sz
           k = 99
           break
         }
       }
     }
+    // How far the point was put back, so a walk can tell a step that was undone from one
+    // that landed.
+    return Math.hypot(pos.x - startX, pos.z - startZ)
+  }
+
+  /** Whether a point is inside any solid's keep radius — no place to aim a walk at. */
+  insideKeep(x, z) {
+    const solids = this._solidsNear(x, z, _near)
+    for (let i = 0; i < solids.length; i++) {
+      const o = solids[i]
+      const dx = x - o.x
+      const dz = z - o.z
+      if (dx * dx + dz * dz < o.keep * o.keep) return true
+    }
+    return false
   }
 
   /**

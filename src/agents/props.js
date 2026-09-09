@@ -44,14 +44,14 @@ const PHONE = {
   // Where it sits in the left hand's own frame, in R: the half in the hand is centred here,
   // and the Euler turns the screens toward the visor.
   x: 0,
-  y: -0.1,
-  z: 0.1,
+  y: 0.25, // up the forearm a touch, so the bottom corner sits in the fist rather than under it
+  z: -0.1,
   rx: -0.6, // tipped up toward the visor
   ry: Math.PI,
   rz: 0,
   // Where along the phone the hand grips, as a share of its height from the middle: the
   // bottom edge sits in the palm and the body stands up out of the fist.
-  grip: 0.4,
+  grip: 0.45,
   // The check's timeline, seconds from its start.
   out: 0.5, // grows in the hand as the arm comes up
   open: [0.55, 1.35], // flips open
