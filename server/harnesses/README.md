@@ -121,8 +121,10 @@ Do not put a file handle, a class instance, or a secret in it.
 - **Never block the scan.** It runs on a poll. Cache anything expensive against file mtime —
   see `transcriptMeta` in `claude-code.mjs`, which is what keeps a 12MB transcript from being
   reparsed every few seconds.
-- **Read heads, not whole files.** `readHead` in `../lib/fsutil.mjs` pulls the first chunk and
-  drops a trailing partial line, so `JSON.parse` never sees half a record.
+- **Read ends, not whole files.** `readHead` in `../lib/fsutil.mjs` pulls the first chunk and
+  drops a trailing partial line, so `JSON.parse` never sees half a record. `readTail` does the
+  same from the other end, for a harness whose "is it working right now" answer is the last
+  record rather than the first.
 - **Expect malformed data.** A session being written *right now* is a normal thing to trip
   over. Skip that record and move on; do not throw the pass away.
 - **Never widen `id` collisions.** The colony keys its archive list and saved layout on `id`.
@@ -137,9 +139,19 @@ Verified on a real machine:
   (`%APPDATA%\Claude\claude-code-sessions\…` on Windows); CLI transcripts in
   `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`; live processes in
   `~/.claude/sessions/*.json`. Implemented in `claude-code.mjs`.
-- **Codex CLI** — transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-<iso>-<uuid>.jsonl`,
-  with records shaped `{ timestamp, type, payload }`, and what looks like an index at
-  `~/.codex/session_index.jsonl`. Not implemented yet.
+- **Codex** — one transcript per thread in
+  `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<iso>-<uuid>.jsonl` (`~/.codex` by default), records
+  shaped `{ timestamp, type, payload }`; titles in `$CODEX_HOME/session_index.jsonl`.
+  Implemented in `codex.mjs`. Two things that adapter learned the hard way, in case the next
+  transcript-shaped harness has them too:
+
+  - **Both ends, never the middle.** The head says what a thread *is* (cwd, model, first
+    prompt); the tail says what it is *doing* — an unmatched `task_started` means a turn is in
+    flight. `readTail` in `../lib/fsutil.mjs` is the mirror of `readHead` for that second half.
+  - **A resumed thread replays its history first.** The original prompt comes back as a
+    `response_item/message` with `role: user`, while the *new* prompt is an
+    `event_msg/user_message` possibly megabytes further in. Reading either shape and taking the
+    first makes `preview` the thread's own opening line rather than whatever restarted it.
 
 For anything else, the fastest way in is usually to start a throwaway session in that harness
 and watch which files change:

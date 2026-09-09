@@ -7,15 +7,43 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
-/** Read the first chunk of a file without pulling a 12MB transcript into memory. */
-export async function readHead(file, bytes) {
+/**
+ * Read the first chunk of a file without pulling a 12MB transcript into memory.
+ *
+ * `keepPartial` returns the chunk exactly as read, trailing half-record and all. Only reach
+ * for it if you have a use for the truncated tail end - a harness whose transcript can hold
+ * a single record bigger than the whole head read, say - and split it yourself.
+ */
+export async function readHead(file, bytes, { keepPartial = false } = {}) {
   const fh = await fsp.open(file, 'r')
   try {
     const buf = Buffer.allocUnsafe(bytes)
     const { bytesRead } = await fh.read(buf, 0, bytes, 0)
     const text = buf.subarray(0, bytesRead).toString('utf8')
+    if (keepPartial) return text
     // Drop a trailing partial line so JSON.parse never sees half a record.
     return bytesRead === bytes ? text.slice(0, text.lastIndexOf('\n') + 1) : text
+  } finally {
+    await fh.close()
+  }
+}
+
+/**
+ * Read the last chunk of a file, dropping a leading partial line so the caller only ever
+ * sees whole records. The mirror of `readHead`, for the harnesses whose "is it working
+ * right now" answer lives at the end of an append-only transcript rather than the start.
+ */
+export async function readTail(file, bytes) {
+  const fh = await fsp.open(file, 'r')
+  try {
+    const { size } = await fh.stat()
+    const start = Math.max(0, size - bytes)
+    const want = size - start
+    const buf = Buffer.allocUnsafe(want)
+    const { bytesRead } = await fh.read(buf, 0, want, start)
+    const text = buf.subarray(0, bytesRead).toString('utf8')
+    // Only a read that began mid-file can start mid-record.
+    return start === 0 ? text : text.slice(text.indexOf('\n') + 1)
   } finally {
     await fh.close()
   }
