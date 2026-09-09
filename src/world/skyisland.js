@@ -42,10 +42,10 @@ const QUALITY = {
 
 /** How far past the rim the rock lip sits, and how much further the belly bulges. */
 const LIP = 2
-const BELLY = 5.5
+const BELLY = 8
 /** The lip is this far under the local rim height; the belly's widest point this far above the cloud sea. */
 const LIP_DROP = 2
-const BELLY_ABOVE_SEA = 10
+const BELLY_ABOVE_SEA = 12
 /** The cloud sea is a 400-unit sheet — wider than the ground, so its fade hides the ground's corners. */
 const SEA_SIZE = 400
 
