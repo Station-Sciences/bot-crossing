@@ -52,9 +52,31 @@ let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hid
 
 /** The machine's own network block, always a well-formed object for the settings panel. */
 function network() {
-  if (!state.network || typeof state.network !== 'object') state.network = { colonyName: '', share: false, neighbors: [] }
+  if (!state.network || typeof state.network !== 'object') state.network = { colonyName: '', share: false, neighbors: [], shared: [] }
   if (!Array.isArray(state.network.neighbors)) state.network.neighbors = []
+  if (!Array.isArray(state.network.shared)) state.network.shared = []
   return state.network
+}
+
+/** The opt-in allowlist as a Set: session ids and repo names this colony hands to visitors. */
+function sharedSet() {
+  return new Set(network().shared)
+}
+
+/** Is this thread exposed to visitors — directly, or because its whole repo is shared? */
+function threadShared(thread) {
+  if (!thread) return false
+  const s = sharedSet()
+  return s.has(thread.id) || s.has(thread.project)
+}
+
+/** Add or remove one entry (a session id or a repo name) from the allowlist. */
+function toggleShared(key) {
+  const s = sharedSet()
+  if (s.has(key)) s.delete(key)
+  else s.add(key)
+  patchNetwork({ shared: [...s] })
+  applyThreads(threads)
 }
 
 /** Write a change to the network block and let the server pick it up on the save. */
@@ -304,6 +326,25 @@ const actions = {
   // ── shared colonies ────────────────────────────────────────────────────────────────
   /** The machine's own network config, for the settings panel to render. */
   getNetwork: () => ({ ...network() }),
+  /** Is this colony sharing at all — the switch that makes the share controls worth showing. */
+  sharingOn: () => Boolean(network().share),
+  /** How much is actually exposed right now: repos on the list, and live sessions it adds up to. */
+  sharedSummary: () => {
+    const s = sharedSet()
+    const repos = [...s].filter((k) => colony.plots.has(k) || threads.some((t) => t.project === k))
+    const exposed = threads.filter((t) => !t.colony && (s.has(t.id) || s.has(t.project))).length
+    return { repos: repos.length, exposed }
+  },
+  /** Whether a repo is on the allowlist by its own name. */
+  isRepoShared: (name) => sharedSet().has(name),
+  /** How a session is shared: 'repo' (via its whole repo), 'session' (on its own), or ''. */
+  sessionShareState: (id) => {
+    const thread = threads.find((t) => t.id === id)
+    if (!thread) return ''
+    if (sharedSet().has(thread.project)) return 'repo'
+    if (sharedSet().has(thread.id)) return 'session'
+    return ''
+  },
   /** Fold the live neighbour/discovery view together with the saved config. */
   fetchNeighbors: () => fetchNeighbors(),
   setShare: (on) => patchNetwork({ share: Boolean(on) }),
@@ -316,6 +357,26 @@ const actions = {
   },
   removeNeighbor: (host, port) => {
     patchNetwork({ neighbors: network().neighbors.filter((n) => !(n.host === host && n.port === port)) })
+  },
+
+  /** Toggle whether one repo, with all its sessions present and future, is shared. */
+  toggleShareRepo: (name) => {
+    if (!name) return
+    const wasShared = sharedSet().has(name)
+    toggleShared(name)
+    hud.toast(wasShared ? `${name} is no longer shared` : `Sharing ${name} with the network`)
+  },
+  /** Toggle whether one session is shared. Independent of its repo's own switch. */
+  toggleShareSession: (id) => {
+    const thread = threads.find((t) => t.id === id)
+    if (!thread) return
+    if (sharedSet().has(thread.project)) {
+      hud.toast(`This session is already shared — ${thread.project} is shared as a whole repo`)
+      return
+    }
+    const wasShared = sharedSet().has(id)
+    toggleShared(id)
+    hud.toast(wasShared ? 'Session no longer shared' : 'Sharing this session with the network')
   },
 
   // The card's bar is about the *thread*, not about how much of its building has risen —
@@ -431,6 +492,7 @@ function syncProject() {
     return
   }
   const now = Date.now()
+  const repoShared = sharedSet().has(plot.name)
   const list = [...colony.threads.values()]
     .filter((thread) => thread.project === plot.name)
     .map((thread) => ({
@@ -439,6 +501,8 @@ function syncProject() {
       worktree: thread.worktree,
       lastActivityAt: thread.lastActivityAt,
       status: statusFor(thread, now),
+      // Marked in the row so you can see at a glance what leaves this machine.
+      shared: repoShared || sharedSet().has(thread.id),
     }))
     // Whoever wants something first, then most recently touched — the same order of
     // importance the badges use above their heads.
@@ -455,6 +519,9 @@ function syncProject() {
     colony: plot.colony || '',
     colonyOnline: plot.colonyOnline !== false,
     path: plot.colony ? '' : pathForProject(plot.name),
+    // Only your own repos can be shared, and only worth offering while sharing is on.
+    sharing: !plot.colony && Boolean(network().share),
+    repoShared,
     threads: list,
     selectedId,
   })

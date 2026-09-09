@@ -76,10 +76,16 @@ function emptyNetwork() {
   } catch {
     name = os.hostname()
   }
-  return { colonyName: name || 'colony', share: false, neighbors: [] }
+  return { colonyName: name || 'colony', share: false, neighbors: [], shared: [] }
 }
 
-/** The network block as the file is allowed to describe it — bad entries fall out, not in. */
+/**
+ * The network block as the file is allowed to describe it — bad entries fall out, not in.
+ *
+ * `shared` is the opt-in allowlist: the ids of sessions, and the names of repos, that this
+ * colony hands out to visitors. Empty means nothing is shared even when `share` is on, which
+ * is the safe default — a session is never exposed until it is named here.
+ */
 function cleanNetwork(raw) {
   const base = emptyNetwork()
   const net = asObject(raw)
@@ -87,6 +93,7 @@ function cleanNetwork(raw) {
     colonyName: String(net.colonyName || base.colonyName).slice(0, 80),
     share: net.share === true,
     neighbors: asArray(net.neighbors).map(cleanNeighbor).filter(Boolean),
+    shared: [...new Set(asArray(net.shared).map(String).filter(Boolean))].slice(0, 2000),
   }
 }
 
@@ -397,9 +404,15 @@ const discovery = new Discovery()
 const guest = new GuestServer({
   instanceId: INSTANCE_ID,
   getName: () => currentNetwork.colonyName,
-  // Guests see the colony as its owner curates it: the same scan, with the same archived
-  // flags applied, minus anything actionable (the guest server strips that itself).
-  getThreads: async () => reconcileArchived(await scanThreads()),
+  // Guests see only what the owner opted to share: the same scan, archived flags applied,
+  // then filtered to the allowlist — by session id or by repo name — before anything leaves.
+  // An empty allowlist shares nothing, which is the whole point of opt-in.
+  getThreads: async () => {
+    const all = await reconcileArchived(await scanThreads())
+    const shared = new Set(currentNetwork.shared || [])
+    if (!shared.size) return []
+    return all.filter((t) => shared.has(t.id) || shared.has(t.project))
+  },
 })
 
 let currentNetwork = emptyNetwork()

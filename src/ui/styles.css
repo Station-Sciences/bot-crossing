@@ -1552,6 +1552,35 @@ kbd {
 /* Same story for the astronaut card: open, archive and viewed are gone for a visitor. */
 .thread-pop #btn-open[hidden],
 .thread-pop #btn-archive[hidden],
-.thread-pop #btn-viewed[hidden] {
+.thread-pop #btn-viewed[hidden],
+.thread-pop #btn-share-session[hidden],
+#btn-share-repo[hidden] {
   display: none !important;
 }
+
+/* A share button that is currently sharing lights up in the network teal. */
+.btn.on {
+  color: #bff3ec;
+  border-color: rgba(47, 212, 196, 0.5);
+  background: rgba(47, 212, 196, 0.14);
+}
+.btn.on svg { color: var(--teal); }
+
+/* The little broadcast mark on a shared session's row in the repo list. */
+.side .threads .thread .shared-mark {
+  display: inline-flex;
+  align-items: center;
+  color: var(--teal);
+  margin-left: 4px;
+}
+.side .threads .thread .shared-mark svg {
+  width: 13px;
+  height: 13px;
+}
+
+.group.network .net-count {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+.group.network .net-count b { color: var(--teal); font-weight: 600; }

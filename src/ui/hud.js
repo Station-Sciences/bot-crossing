@@ -44,6 +44,8 @@ const ICON = {
   copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>`,
   locate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.6"/><path d="M12 1.8v2.6M12 19.6v2.6M1.8 12h2.6M19.6 12h2.6"/></svg>`,
   orbit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><ellipse cx="12" cy="12" rx="10.2" ry="4.6" transform="rotate(-24 12 12)"/><circle cx="21" cy="8.2" r="1.5" fill="currentColor" stroke="none"/></svg>`,
+  // A broadcast mast — sharing with the network.
+  share: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="2"/><path d="M12 14v6M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M6 6a8 8 0 0 0 0 12M18 6a8 8 0 0 1 0 12"/></svg>`,
 }
 
 const STAT_DEFS = [
@@ -275,6 +277,7 @@ export class Hud {
          <div class="label"><span>Share on the network</span><span class="hint net-share-hint">Off — nobody can see this colony.</span></div>
          <button class="toggle net-share" role="switch" type="button"></button>
        </div>
+       <p class="net-count" hidden></p>
        <div class="net-block">
          <div class="net-head">Neighbours</div>
          <div class="net-list net-configured"></div>
@@ -327,6 +330,20 @@ export class Hud {
     g.querySelector('.net-share-hint').textContent = cfg.share
       ? 'On — teammates on your network can visit this colony.'
       : 'Off — nobody can see this colony.'
+
+    // What is actually exposed, so "sharing" never quietly means "sharing everything" or
+    // "sharing nothing". Only shown while sharing is on.
+    const countEl = g.querySelector('.net-count')
+    const summary = this.actions.sharedSummary?.() || { repos: 0, exposed: 0 }
+    countEl.hidden = !cfg.share
+    if (cfg.share) {
+      countEl.innerHTML =
+        summary.exposed === 0
+          ? 'Nothing shared yet — open a repo and press <b>Share with others</b>, or select a session and press <b>Share</b>.'
+          : `Sharing <b>${summary.exposed}</b> session${summary.exposed === 1 ? '' : 's'}` +
+            (summary.repos ? ` across <b>${summary.repos}</b> repo${summary.repos === 1 ? '' : 's'}` : '') +
+            '.'
+    }
 
     let live = { colonies: [], discovered: [] }
     try {
@@ -492,11 +509,13 @@ export class Hud {
     on('#btn-open', 'click', () => this.actions.openThread?.())
     on('#btn-viewed', 'click', () => this.actions.markViewed?.())
     on('#btn-archive', 'click', () => this.actions.archiveThread?.())
+    on('#btn-share-session', 'click', () => this.selected && this.actions.toggleShareSession?.(this.selected.thread.id))
     on('#btn-deselect', 'click', () => this.actions.select?.(null))
     on('#btn-new-session', 'click', () => this.actions.newConversation?.())
     on('#btn-reveal', 'click', () => this.actions.revealProject?.())
     on('#btn-copy-path', 'click', () => this.actions.copyProjectPath?.())
     on('#btn-hide-project', 'click', () => this.actions.hideProject?.())
+    on('#btn-share-repo', 'click', () => this.actions.toggleShareRepo?.(this.project?.name))
     on('#btn-hidden-toggle', 'click', () => this.toggleHiddenList())
     on('#btn-locate', 'click', () => this.actions.focusProject?.(this.project?.name))
     on('#btn-close-project', 'click', () => this.actions.closeProject?.())
@@ -664,6 +683,14 @@ export class Hud {
     this.$('#btn-reveal').disabled = visiting || !project.path
     this.$('#btn-copy-path').disabled = visiting || !project.path
     this.$('#btn-hide-project').hidden = visiting
+    // Share is offered on your own repos, only while sharing is on. Its label flips to say
+    // what the click will do, and the button lights up while the repo is being shared.
+    const shareBtn = this.$('#btn-share-repo')
+    shareBtn.hidden = !project.sharing
+    shareBtn.classList.toggle('on', Boolean(project.repoShared))
+    shareBtn.innerHTML = project.repoShared
+      ? `${ICON.share} Stop sharing`
+      : `${ICON.share} Share with others`
 
     const n = project.threads.length
     const waiting = project.threads.filter((t) => t.status === 'waiting' || t.status === 'blocked').length
@@ -684,6 +711,7 @@ export class Hud {
       b.innerHTML =
         '<i class="pip"></i>' +
         `<span class="t">${escapeHtml(t.title || 'Untitled thread')}</span>` +
+        (t.shared ? `<span class="shared-mark" title="Shared with the network">${ICON.share}</span>` : '') +
         `<span class="when">${ago(t.lastActivityAt)}</span>` +
         (t.worktree ? `<span class="wt">⑂ ${escapeHtml(t.worktree)}</span>` : '')
       b.addEventListener('click', () => this.actions.focusThread?.(t.id))
@@ -762,6 +790,19 @@ export class Hud {
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
     this.$('#btn-viewed').hidden = visiting || !thread.unread
+    // Share is offered on your own sessions while sharing is on. When the whole repo is
+    // shared the per-session switch is redundant, so it reads as a locked-on state instead.
+    const shareState = visiting ? '' : this.actions.sessionShareState?.(thread.id) || ''
+    const shareBtn = this.$('#btn-share-session')
+    shareBtn.hidden = visiting || !this.actions.sharingOn?.()
+    shareBtn.classList.toggle('on', shareState !== '')
+    shareBtn.disabled = shareState === 'repo'
+    shareBtn.innerHTML =
+      shareState === 'repo'
+        ? `${ICON.share} Shared (repo)`
+        : shareState === 'session'
+          ? `${ICON.share} Stop sharing`
+          : `${ICON.share} Share`
   }
 
   /**
@@ -1102,6 +1143,7 @@ const TEMPLATE = `
           <button class="btn" id="btn-reveal" title="Show this folder in ${FILE_MANAGER}">${ICON.folder} ${FILE_MANAGER}</button>
           <button class="btn" id="btn-copy-path" title="Copy the folder path">${ICON.copy} Copy path</button>
         </div>
+        <button class="btn" id="btn-share-repo" title="Share this repo — every session in it becomes visible to colonies visiting you" hidden>${ICON.share} Share with others</button>
         <button class="btn" id="btn-hide-project" title="Hide this repo from the colony — does not archive its threads">${ICON.eyeOff} Hide from colony</button>
       </div>
       <div class="threads-head"></div>
@@ -1138,6 +1180,7 @@ const TEMPLATE = `
   <div class="pair">
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
     <button class="btn" id="btn-viewed" title="Stop this thread asking for you until it moves on again (V)">${ICON.eye} Viewed</button>
+    <button class="btn" id="btn-share-session" title="Share this one session with the network" hidden>${ICON.share} Share</button>
     <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>
   </div>
 </div>
