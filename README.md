@@ -343,6 +343,17 @@ foam edges hide.
 Anything can throw a ring on it: a fish landing, a gull skimming, a drone passing low. Rings
 are a small uniform array, so sixteen can be in flight for one draw call.
 
+
+### Checking on it
+
+A thread that is running hammers at its building, walks round it, and hammers from another
+side. Every half-minute or so it also stops, gets a folding phone out, flips it open, reads
+it for a few seconds — rows of text scrolling by on both panels — folds it shut and puts it
+away. The phone is the shape the folding iPhone is expected to be: a 4:3 slab that opens
+along its long edge into something wider than it is tall, with a pear on the back. It is
+one of what will be several such props; they live in `agents/props.js` and are picked per
+check, so more can be added and cycled without touching the astronauts.
+
 ### Wildlife
 
 Birds, butterflies, fish and the cargo drones — the life that carries no information, and is

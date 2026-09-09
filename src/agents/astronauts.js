@@ -3,6 +3,7 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { buildFaceAtlas, FACE, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './faces.js'
 import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
 import { bendPoint, withCurve } from '../core/curve.js'
+import { Props, CHECK_LEN, CHECK_EVERY, pickProp } from './props.js'
 
 /**
  * Every astronaut in the colony, drawn in seven draw calls.
@@ -214,6 +215,9 @@ export class Astronauts {
       mesh.frustumCulled = false // one bounding volume for every agent everywhere is useless
       this.group.add(mesh)
     }
+    // What a working astronaut pulls out now and then to check on things — see props.js.
+    this.props = new Props(R, capacity)
+    for (const mesh of this.props.meshes) this.group.add(mesh)
     this._applyShadowFlags()
 
     // Ground rings for hover + selection. Two ordinary meshes, moved around as needed.
@@ -424,6 +428,7 @@ export class Astronauts {
     }
     // The body is the shadow that matters — it is the whole silhouette.
     if (this.crew) this.crew.castShadow = on
+    this.props?.setShadows(on)
   }
 
   /** The colony hands over the navigation grid once it has been built. */
@@ -573,6 +578,11 @@ export class Astronauts {
       frame: 0,
       wander: new THREE.Vector3(),
       wanderAt: 0,
+      // The check: when the next one is due, when the current one began (-1 for none), and
+      // what it gets out. See `_workRound`.
+      checkAt: 0,
+      checkStart: -1,
+      checkProp: null,
       scale: walksOut ? 0 : 1, // pops up out of the ship, or was already standing there
       alive: true,
       path: null,
@@ -616,6 +626,7 @@ export class Astronauts {
   /** Status change → new behaviour, new trim, new eye colour. */
   _applyStatus(agent, status) {
     const look = AGENT_LOOK[status] || AGENT_LOOK.idle
+    agent.checkStart = -1
     agent.trim.set(look.trim)
     agent.eye.setRGB(look.eye[0], look.eye[1], look.eye[2])
     agent.loop = FACE_LOOPS[status] || null
@@ -1033,9 +1044,14 @@ export class Astronauts {
       agent.driftBlocked = false
     }
 
+    // A check happens standing still, wherever that is — an astronaut that cannot reach
+    // its next spot stands too — and moving off ends one.
+    if (agent.groundSpeed > 0.12) agent.checkStart = -1
+    else this._check(agent, elapsed)
+
     const to = this._v.set(agent.workSpot.x - agent.pos.x, 0, agent.workSpot.z - agent.pos.z)
     const d = to.length()
-    if (d > DRIFT_ARRIVE && !agent.driftBlocked) {
+    if (d > DRIFT_ARRIVE && !agent.driftBlocked && agent.checkStart < 0) {
       this._walk(agent, to, d, dt, DRIFT_PACE)
       if (agent.blocked) agent.driftBlocked = true
       return
@@ -1044,6 +1060,27 @@ export class Astronauts {
     agent.vel.set(0, 0, 0)
     this._faceToward(agent, agent.anchor, dt)
     this._settle(agent, dt)
+  }
+
+  /**
+   * Now and then a working astronaut stops swinging, gets something out — a phone, for
+   * now — looks at it for a few seconds, and puts it away again. Its next move round the
+   * building is pushed back so it is not walked off mid-check; a status change or a walk
+   * cancels one outright.
+   */
+  _check(agent, elapsed) {
+    if (agent.checkStart >= 0) {
+      if (elapsed - agent.checkStart < CHECK_LEN) return
+      agent.checkStart = -1
+      agent.checkAt = elapsed + CHECK_EVERY[0] + Math.random() * (CHECK_EVERY[1] - CHECK_EVERY[0])
+      return
+    }
+    // The first one is not straight away: the astronaut has only just arrived.
+    if (agent.checkAt === 0) agent.checkAt = elapsed + 6 + Math.random() * (CHECK_EVERY[1] - CHECK_EVERY[0])
+    if (elapsed < agent.checkAt) return
+    agent.checkStart = elapsed
+    agent.checkProp = pickProp()
+    agent.workAt = Math.max(agent.workAt, elapsed + CHECK_LEN + 1.5)
   }
 
   _faceToward(agent, point, dt) {
@@ -1124,7 +1161,7 @@ export class Astronauts {
     else {
       switch (agent.status) {
         case 'working':
-          key = 'work'
+          key = agent.checkStart >= 0 ? 'idle' : 'work'
           break
         case 'waiting':
           key = 'wave'
@@ -1186,6 +1223,9 @@ export class Astronauts {
     let i = 0
     let hands = 0
     let staticDirty = false
+    const props = this.props
+    props.begin()
+    props.update(elapsed)
     for (const agent of this.agents) {
       // Never write past the end of the instance buffers. Going over is not a rendering
       // artefact you can squint past: WebGL refuses the whole `drawElementsInstanced` call, so
@@ -1237,6 +1277,12 @@ export class Astronauts {
           worn.multiplyMatrices(root, bone)
           setPart(child, worn, hammer, hands++, P.gripX, P.gripY, P.gripZ, P.gripRx, 0, P.gripRz)
         }
+        // And whatever a checking astronaut has got out, held in front of the chest.
+        if (agent.checkStart >= 0 && agent.clipKey === 'idle' && elapsed - agent.checkStart < CHECK_LEN) {
+          attachMatrixAt(rig, agent.frame, this.chestSlot, bone)
+          worn.multiplyMatrices(root, bone)
+          props.write(agent.checkProp, worn, elapsed - agent.checkStart)
+        }
       }
 
       // Suit and trim only change when the status does, or when an agent leaving the roster
@@ -1269,6 +1315,7 @@ export class Astronauts {
     }
 
     const n = i
+    props.end()
     // The glowing parts pulse every frame; the rest only re-upload when something moved slot.
     const animated = new Set(['tip', 'lamp'])
     for (const [name, mesh] of Object.entries(this.parts)) {
