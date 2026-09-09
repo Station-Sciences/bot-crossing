@@ -83,6 +83,11 @@ function hexToWorld(q, r, size = CELL) {
   return { x: size * 1.5 * q, z: size * Math.sqrt(3) * (r + q / 2) }
 }
 
+/** The world XZ of a cell's centre — so the colony can sample terrain height under a plot. */
+export function cellWorld(q, r) {
+  return hexToWorld(q, r)
+}
+
 /**
  * The inverse: which cell a world point falls in. Exact rather than nearest-centre, because
  * it decides whether something is standing on a plot's raised deck or on bare ground, and a
@@ -134,7 +139,7 @@ const cellsNeeded = (threadCount) =>
  * deliberate: a district you walk to reads as somebody else's settlement, not as your own
  * colony growing a lobe.
  */
-const ANCHOR_RING = 7
+const ANCHOR_RING = 5
 export function colonyAnchor(name) {
   const ring = hexRing(ANCHOR_RING)
   return ring[hashString(`colony:${name}`) % ring.length]
@@ -451,13 +456,20 @@ function hexPrism(radius, height) {
 // ── plot mesh ─────────────────────────────────────────────────────────────────────────
 
 export class Plot {
-  constructor({ id, name, index, cells, accent }) {
+  constructor({ id, name, index, cells, accent, groundY = 0 }) {
     this.id = id
     this.name = name
     this.index = index
     this.cells = cells
     this.accent = accent
     this.cellKeys = new Set(cells.map((c) => key(c.q, c.r)))
+    /**
+     * The terrain height the whole slab sits on. Near the ship this is ~0 and changes nothing,
+     * but a visiting colony's district is anchored far out where the ground rolls, and a slab
+     * pinned to y=0 there floats over a dip or is swallowed by a rise. Everything on the plot —
+     * deck, border, buildings, the crew's footing — is measured up from this.
+     */
+    this.groundY = groundY
 
     // The plot's origin is its **root** tile — the one it was seeded on and never gives up
     // — rather than the centroid of whatever cells it holds this minute. A zone that gains
@@ -491,7 +503,7 @@ export class Plot {
     this.radius = CELL * Math.sqrt(cells.length)
 
     this.group = new THREE.Group()
-    this.group.position.copy(this.center)
+    this.group.position.set(this.center.x, this.groundY, this.center.z)
     this.group.name = `plot:${id}`
 
     this._buildDeck()
@@ -715,8 +727,10 @@ export class Plot {
   }
 
   worldSlot(index, out = new THREE.Vector3()) {
+    // Buildings live in world space, not under the plot group, so the slab's own ground height
+    // has to be added back in here or a sunk district's buildings hang in the air above it.
     const s = this.slotFor(index)
-    return out.set(this.center.x + s.x, DECK_TOP, this.center.z + s.z)
+    return out.set(this.center.x + s.x, this.groundY + DECK_TOP, this.center.z + s.z)
   }
 
   /** Night lighting, plus a pulse on the border when this plot holds something urgent. */

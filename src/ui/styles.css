@@ -1584,3 +1584,36 @@ kbd {
   color: var(--dim);
 }
 .group.network .net-count b { color: var(--teal); font-weight: 600; }
+
+/* A visiting colony's own section in the repo list — a heading that separates whose world
+   is whose, with an online dot and a quiet "visiting" tag. */
+.projects .colony-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 12px 0 4px;
+  padding: 5px 8px 4px;
+  border-top: 1px solid var(--line);
+}
+.projects .colony-head .colony-name {
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.projects .colony-head .colony-tag {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--teal);
+  text-transform: uppercase;
+}
+.projects .colony-head .net-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+}

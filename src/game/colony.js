@@ -5,6 +5,7 @@ import {
   Plot,
   allocateCells,
   colonyAnchor,
+  cellWorld,
   shipPosition,
   createLabel,
   createBanner,
@@ -428,7 +429,11 @@ export class Colony {
       if (!cells?.length) return
       const visiting = colonyOf.get(name)
       const accent = this._pickAccent(name)
-      const plot = new Plot({ id: name, name, index, cells, accent })
+      // Sit the slab on the terrain under its root cell. Near the ship that is ~0; a visiting
+      // district anchored far out lands on whatever the ground does there, instead of floating.
+      const root = cellWorld(cells[0].q, cells[0].r)
+      const groundY = terrainHeight(root.x, root.z, this.planet)
+      const plot = new Plot({ id: name, name, index, cells, accent, groundY })
       plot.signature = wanted.get(name)
       // A visiting colony's plot carries its colony so the district can be banner-labelled and
       // dimmed together, and so a click knows the repo is read-only.
@@ -440,7 +445,7 @@ export class Colony {
       // the colony name, so the plate need only say which repo.
       const labelText = visiting ? name.replace(`${visiting.colony} · `, '') : name
       const label = createLabel(labelText, accent)
-      label.position.set(plot.labelAnchor.x, 3.2, plot.labelAnchor.z)
+      label.position.set(plot.labelAnchor.x, plot.groundY + 3.2, plot.labelAnchor.z)
       plot.label = label
       this.labelGroup.add(label)
     })
@@ -458,9 +463,12 @@ export class Colony {
     if (this.scatterGroup && this._plotFootprint() !== this._scatterFootprint) this._buildScatter()
     // Which hex cells are decked. Ground height is asked for once per moving agent per
     // frame, so it wants to be a lookup rather than a scan over every plot's every tile.
-    this.deckedCells = new Set()
+    // Cell → the deck's top height there, so the crew stands on a sunk district's deck rather
+    // than at a flat 0.45. Near the ship groundY is ~0, so this is the old DECK_TOP everywhere
+    // that mattered before districts existed.
+    this.deckedCells = new Map()
     for (const plot of this.plotOrder) {
-      for (const cell of plot.cells) this.deckedCells.add(`${cell.q},${cell.r}`)
+      for (const cell of plot.cells) this.deckedCells.set(`${cell.q},${cell.r}`, plot.groundY + DECK_TOP)
     }
     this._syncLabels()
   }
@@ -494,11 +502,13 @@ export class Colony {
       }
       let cx = 0
       let cz = 0
+      let cy = 0
       for (const plot of plots) {
         cx += plot.middle.x
         cz += plot.middle.z
+        cy += plot.groundY
       }
-      banner.position.set(cx / plots.length, 5.0, cz / plots.length)
+      banner.position.set(cx / plots.length, cy / plots.length + 5.0, cz / plots.length)
       banner.userData.online = plots.every((p) => p.colonyOnline !== false)
     }
   }
@@ -521,7 +531,8 @@ export class Colony {
 
   groundAt(x, z) {
     const cell = worldToHex(x, z)
-    if (this.deckedCells?.has(`${cell.q},${cell.r}`)) return DECK_TOP
+    const deck = this.deckedCells?.get(`${cell.q},${cell.r}`)
+    if (deck !== undefined) return deck
     return terrainHeight(x, z, this.planet)
   }
 

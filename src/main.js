@@ -749,7 +749,12 @@ function applyThreads(list) {
   legendProjects = colony.plotOrder
     .map((plot) => ({
       name: plot.name,
+      // A visiting repo's list row drops the "Colony · " prefix — its colony is the section
+      // heading above it, so the row need only name the repo.
+      label: plot.colony ? plot.name.replace(`${plot.colony} · `, '') : plot.name,
       accent: plot.accent,
+      colony: plot.colony || '',
+      colonyOnline: plot.colonyOnline !== false,
       count: list.filter((t) => !t.archived && !archivedSet.has(t.id) && t.project === plot.name).length,
       urgent: colony.urgentPlots?.has(plot.id) ?? false,
     }))

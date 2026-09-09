@@ -43,11 +43,22 @@ export class Discovery {
    * and where the OS still refuses, discovery is simply absent — manual adding still works,
    * so this never takes the server down.
    */
+  /** True when the listening socket is up. The reconcile tick rebinds it if it ever drops. */
+  get healthy() {
+    return Boolean(this._socket)
+  }
+
   listen() {
     if (this._socket) return
     const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true })
     socket.on('error', () => {
-      socket.close()
+      // Sleep or a network change can drop the socket. Null it so the next reconcile rebinds,
+      // rather than leaving discovery silently dead until the app restarts.
+      try {
+        socket.close()
+      } catch {
+        /* already closing */
+      }
       if (this._socket === socket) this._socket = null
     })
     socket.on('message', (buf, rinfo) => this._onMessage(buf, rinfo))

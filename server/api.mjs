@@ -438,10 +438,34 @@ function applyNetwork(network) {
   }
 }
 
+/**
+ * Keep the network sockets alive without a human toggling anything.
+ *
+ * Sleep, a Wi-Fi drop or an IP change can leave the guest listener or the discovery socket
+ * dead — and before this the only cure was switching sharing off and on, on *both* machines,
+ * because the sharer's socket had quietly died. This tick re-asserts the intended state every
+ * `RECONCILE_MS`: it rebinds discovery, heals a dropped guest listener, and re-announces, all
+ * idempotent so a healthy machine does nothing. The visitor side already recovers on its own —
+ * its neighbour poll retries every few seconds — so once the sharer's socket is back, the
+ * district returns without anyone touching a switch.
+ */
+const RECONCILE_MS = 15 * 1000
+function reconcileNetwork() {
+  if (!currentNetwork) return
+  discovery.listen() // no-op if the socket is up; rebinds if it dropped
+  if (currentNetwork.share) {
+    if (guest.needsHeal) guest.start()
+    discovery.setAnnounce(true, { name: currentNetwork.colonyName, guestPort: guest.port })
+  }
+}
+
 /** Boot wiring: read the file once, start listening for peers, honour a stored share=on. */
 export async function initNetwork() {
   discovery.listen()
   applyNetwork((await readState()).network)
+  clearInterval(reconcileNetwork._timer)
+  reconcileNetwork._timer = setInterval(reconcileNetwork, RECONCILE_MS)
+  reconcileNetwork._timer.unref?.()
 }
 
 /** Connect-style middleware: handles /api/*, passes everything else through. */

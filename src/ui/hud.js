@@ -553,7 +553,7 @@ export class Hud {
    */
   setLegend(projects, activeName = null, hidden = [], folded = []) {
     const signature =
-      projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
+      projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}:${p.colony || ''}:${p.colonyOnline}`).join('|') +
       `~${activeName}~` +
       hidden.map((p) => `${p.name}:${p.count}`).join('|') +
       `~${folded.length}`
@@ -562,21 +562,50 @@ export class Hud {
 
     const wrap = this.$('.projects')
     wrap.innerHTML = ''
-    for (const p of projects) {
+
+    const repoButton = (p) => {
       const b = document.createElement('button')
       b.type = 'button'
       b.className = 'repo'
-      b.title = `${p.count} thread${p.count === 1 ? '' : 's'} in ${p.name}`
+      b.title = `${p.count} thread${p.count === 1 ? '' : 's'} in ${p.label || p.name}`
       b.setAttribute('aria-pressed', String(p.name === activeName))
       b.innerHTML =
         `<i class="swatch" style="background:${hex(p.accent)};color:${hex(p.accent)}"></i>` +
-        `<span class="n">${escapeHtml(p.name)}</span>` +
+        `<span class="n">${escapeHtml(p.label || p.name)}</span>` +
         (p.urgent ? '<i class="alarm"></i>' : '') +
         `<span class="count">${p.count}</span>`
       b.addEventListener('click', () => this.actions.pickProject?.(p.name))
-      wrap.appendChild(b)
+      return b
     }
-    this.$('.sec-head span').textContent = `${projects.length} repo${projects.length === 1 ? '' : 's'}`
+
+    // Your own repos first; each visiting colony is its own labelled section below, so it is
+    // always clear whose world a repo belongs to.
+    const home = projects.filter((p) => !p.colony)
+    const byColony = new Map()
+    for (const p of projects) {
+      if (!p.colony) continue
+      if (!byColony.has(p.colony)) byColony.set(p.colony, [])
+      byColony.get(p.colony).push(p)
+    }
+
+    for (const p of home) wrap.appendChild(repoButton(p))
+
+    for (const [colony, repos] of byColony) {
+      const head = document.createElement('div')
+      head.className = 'colony-head'
+      const online = repos.every((r) => r.colonyOnline)
+      head.innerHTML =
+        `<i class="net-dot ${online ? 'on' : 'off'}"></i>` +
+        `<span class="colony-name">${escapeHtml(colony)}</span>` +
+        `<span class="colony-tag">visiting${online ? '' : ' · away'}</span>`
+      wrap.appendChild(head)
+      for (const p of repos) wrap.appendChild(repoButton(p))
+    }
+
+    const colonyCount = byColony.size
+    this.$('.sec-head span').textContent =
+      `${home.length} repo${home.length === 1 ? '' : 's'}` +
+      (colonyCount ? ` · ${colonyCount} visiting` : '')
 
     // The hidden list is its own block at the foot of the sidebar: collapsed by default, because
     // the whole point of hiding a repo is not to look at it.

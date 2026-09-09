@@ -66,25 +66,53 @@ export class GuestServer {
     this.getThreads = getThreads
     this.getAllowedHosts = getAllowedHosts || (() => [])
     this._server = null
+    /** True between start() and stop(): the listener is *meant* to be up, so heal it if it dies. */
+    this._wantOn = false
+    this._healTimer = null
   }
 
   get running() {
-    return Boolean(this._server)
+    return Boolean(this._server && this._server.listening)
   }
 
   start() {
+    this._wantOn = true
     if (this._server) return
     const server = http.createServer((req, res) => this._handle(req, res))
     server.on('error', () => {
-      // The port being taken (a second instance, another app) must not take the colony down;
-      // sharing is just off until the owner toggles it again.
+      // A dead listener must not take the colony down — but it must not stay dead either.
+      // Sleep, a network change or a transient bind failure can drop it, and before this the
+      // only cure was the owner toggling sharing off and on. Now it heals itself.
       if (this._server === server) this._server = null
+      this._scheduleHeal()
+    })
+    server.on('close', () => {
+      if (this._server === server) this._server = null
+      if (this._wantOn) this._scheduleHeal()
     })
     server.listen(this.port, '0.0.0.0')
     this._server = server
   }
 
+  /** Bring the listener back a moment after it dropped, as long as it is still meant to be up. */
+  _scheduleHeal() {
+    if (!this._wantOn || this._healTimer) return
+    this._healTimer = setTimeout(() => {
+      this._healTimer = null
+      if (this._wantOn && !this._server) this.start()
+    }, 3000)
+    this._healTimer.unref?.()
+  }
+
+  /** True while sharing is meant to be on but the socket is not currently listening. */
+  get needsHeal() {
+    return this._wantOn && !this.running
+  }
+
   stop() {
+    this._wantOn = false
+    clearTimeout(this._healTimer)
+    this._healTimer = null
     this._server?.close()
     this._server = null
   }
