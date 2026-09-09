@@ -4,7 +4,8 @@ import { createWater } from '../world/water.js'
 import { Fauna } from '../world/fauna.js'
 import { createGrass } from '../world/grass.js'
 import { createSkyIsland } from '../world/skyisland.js'
-import { SKY_RIM } from '../world/planet.js'
+import { SKY_MARGIN, SKY_MAX_CELLS } from '../world/planet.js'
+import { createHexIsland } from '../world/hexisland.js'
 import { bendPoint } from '../core/curve.js'
 import { Sky } from '../world/sky.js'
 import {
@@ -240,16 +241,82 @@ export class Colony {
       this.island.dispose()
       this.island = null
     }
+    if (this.rock) {
+      this.rock.dispose()
+      this.rock = null
+    }
     if (this.planet.shape !== 'sky') return
     const detail = this.settings.get('groundDetail')
+    // The cloud sea and the drifting puffs come from here; the round underside it also
+    // builds is switched off, because this island is not round — see `_syncIslandRock`.
     this.island = createSkyIsland({
       planet: this.planet,
       heightAt: (x, z) => terrainHeight(x, z, this.planet),
-      rimRadius: SKY_RIM,
+      rimRadius: this._footprintRadius() + 6,
       quality: detail === 'high' ? 'high' : detail === 'low' ? 'low' : 'medium',
     })
+    this.island.meshes.underside.visible = false
+    this.island.meshes.vines.visible = false
     this.island.setDaylight(this.sky.dayFactor ?? 1)
     this.worldGroup.add(this.island.group)
+    this._syncIslandRock()
+  }
+
+  /** Every hex cell the colony holds, plus the ship's, in world space. */
+  _footprintCells() {
+    const list = []
+    for (const plot of this.plotOrder) {
+      for (const local of plot.localCenters) list.push({ x: plot.center.x + local.x, z: plot.center.z + local.z })
+    }
+    const ship = shipPosition()
+    list.push({ x: ship.x, z: ship.z })
+    return list.slice(0, SKY_MAX_CELLS)
+  }
+
+  _footprintRadius() {
+    let r = PLOT_CELL
+    for (const c of this._footprintCells()) r = Math.max(r, Math.hypot(c.x, c.z) + PLOT_CELL)
+    return r
+  }
+
+  /**
+   * Whether a point is on the island: within a cell and its grass margin. The terrain's edge
+   * frays a little inside the margin, so this stays a touch conservative to keep grass and
+   * scatter off the frayed-away bits.
+   */
+  onIsland(x, z) {
+    if (this.planet.shape !== 'sky') return true
+    const reach = (PLOT_CELL + SKY_MARGIN) * 0.86
+    for (const c of this._footprintCells()) {
+      const dx = x - c.x
+      const dz = z - c.z
+      if (dx * dx + dz * dz < reach * reach) return true
+    }
+    return false
+  }
+
+  /**
+   * The rock under the plots, rebuilt whenever the plots change: a jagged plug per cell,
+   * so the island is exactly the colony's shape and grows and shrinks with it.
+   */
+  _syncIslandRock() {
+    if (this.planet.shape !== 'sky') return
+    if (this.rock) {
+      this.rock.dispose()
+      this.rock = null
+    }
+    const cells = this._footprintCells()
+    this.terrain.userData.setFootprint?.(cells, PLOT_CELL + SKY_MARGIN)
+    const detail = this.settings.get('groundDetail')
+    const p = this.planet.skyIsland || {}
+    this.rock = createHexIsland({
+      cells,
+      cellRadius: PLOT_CELL,
+      margin: SKY_MARGIN,
+      palette: { soil: p.soil, rock: p.rock, vine: p.vine, moss: this.planet.ground.low },
+      quality: detail === 'low' ? 'low' : 'medium',
+    })
+    this.worldGroup.add(this.rock.group)
   }
 
   /**
@@ -300,7 +367,7 @@ export class Colony {
     }
     const ship = shipPosition()
     clear.push({ x: ship.x, z: ship.z, r: 7.5 })
-    this.scatterGroup = createScatter(this.planet, this.settings.get('scatterDensity'), clear)
+    this.scatterGroup = createScatter(this.planet, this.settings.get('scatterDensity'), clear, 4242, (x, z) => this.onIsland(x, z))
     this.worldGroup.add(this.scatterGroup)
     this._scatterFootprint = this._plotFootprint()
     this._buildGrass(clear)
@@ -321,9 +388,7 @@ export class Colony {
     this.grass = createGrass({
       planet: this.planet,
       heightAt: (x, z) => terrainHeight(x, z, this.planet),
-      blocked: (x, z) =>
-        (this.planet.shape === 'sky' && x * x + z * z > (SKY_RIM - 2) * (SKY_RIM - 2)) ||
-        clear.some((p) => (x - p.x) * (x - p.x) + (z - p.z) * (z - p.z) < p.r * p.r),
+      blocked: (x, z) => !this.onIsland(x, z) || clear.some((p) => (x - p.x) * (x - p.x) + (z - p.z) * (z - p.z) < p.r * p.r),
       density: this.settings.get('scatterDensity'),
       quality: detail === 'high' ? 'high' : detail === 'low' ? 'low' : 'medium',
     })
@@ -550,8 +615,12 @@ export class Colony {
     })
 
     this.plotOrder = [...this.plots.values()]
-    // Zones that just moved, appeared or grew are zones the scatter does not know about.
-    if (this.scatterGroup && this._plotFootprint() !== this._scatterFootprint) this._buildScatter()
+    // Zones that just moved, appeared or grew are zones the scatter does not know about —
+    // nor, on a floating island, the rock under them.
+    if (this.scatterGroup && this._plotFootprint() !== this._scatterFootprint) {
+      this._buildScatter()
+      if (this.island) this._syncIslandRock()
+    }
     // Which hex cells are decked. Ground height is asked for once per moving agent per
     // frame, so it wants to be a lookup rather than a scan over every plot's every tile.
     this.deckedCells = new Set()
@@ -866,6 +935,7 @@ export class Colony {
       this.island.update(dt, elapsed, this.camera)
       this.island.setDaylight(this.sky.dayFactor ?? 1)
     }
+    this.rock?.update(dt, elapsed)
     this.fauna.update(dt, elapsed, this.camera, night, this._faunaHooks || (this._faunaHooks = {
       ripple: (x, z, s) => this.ripple(x, z, s),
       sound: (name, x, y, z) => this.onSound?.(name, x, y, z),
@@ -1068,6 +1138,7 @@ export class Colony {
     this.fauna.dispose()
     this.grass?.dispose()
     this.island?.dispose()
+    this.rock?.dispose()
     this.water?.dispose()
     this.ship.dispose()
     this.astronauts.dispose()

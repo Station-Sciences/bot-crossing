@@ -543,10 +543,10 @@ const ISLAND_RADIUS = 60
 const ISLAND_SHELF = 36
 /** How far under the sea the bed settles, on either shape. Deep enough to read as sea. */
 const SEA_DEPTH = 7
-/** The floating island: land to here, then the ground falls out of sight over this shelf. */
-export const SKY_RIM = 58
-const SKY_SHELF = 4
-const SKY_DROP = 12
+/** How far past the plots a floating island's ground reaches: a grass margin, then nothing. */
+export const SKY_MARGIN = 3.2
+/** The most hex cells the sky terrain's cut-out can be told about. */
+export const SKY_MAX_CELLS = 96
 
 /**
  * Terrain is one plane, displaced and vertex-coloured on the CPU at build time. Doing it
@@ -617,25 +617,65 @@ export function createTerrain(planet, detail, seed = 1337) {
     // is what sells "dust" rather than "plastic".
     envMapIntensity: 0.3,
   })
+  const mesh = new THREE.Mesh(geo, mat)
+  mesh.receiveShadow = true
+  mesh.name = 'terrain'
+
   if (planet.shape === 'sky') {
-    // A floating island has no ground past its rim at all. The plane still has to exist —
-    // the height field is sampled off it and the rock underside is hung from it — so the
-    // fragments out there are simply thrown away, and the rock is what you see instead.
+    // A floating island has ground exactly where the colony's hex cells are, plus a margin
+    // of grass, and nothing anywhere else. The plane still has to exist — the height field
+    // is sampled off it — so the fragments outside the footprint are thrown away instead,
+    // measured in the shader as the distance to the nearest cell centre. The footprint is
+    // handed in by the colony whenever a zone grows or shrinks; the island grows with it.
+    const cells = { value: Array.from({ length: SKY_MAX_CELLS }, () => new THREE.Vector2(1e6, 1e6)) }
+    const uniforms = { uSkyCells: cells, uSkyCellCount: { value: 0 }, uSkyReach: { value: 8 } }
     mat.onBeforeCompile = (shader) => {
       withCurve(shader)
-      shader.uniforms.uSkyRim = { value: SKY_RIM + 3 }
+      Object.assign(shader.uniforms, uniforms)
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\n varying vec2 vSkyXZ;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\n vSkyXZ = transformed.xz;')
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\n varying vec2 vSkyXZ;\n uniform float uSkyRim;')
-        .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\n if ( length( vSkyXZ ) > uSkyRim ) discard;')
+        .replace(
+          '#include <common>',
+          `#include <common>
+           varying vec2 vSkyXZ;
+           uniform vec2 uSkyCells[ ${SKY_MAX_CELLS} ];
+           uniform int uSkyCellCount;
+           uniform float uSkyReach;
+           float bcHash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }
+           float bcNoise( vec2 p ) {
+             vec2 i = floor( p ); vec2 f = fract( p ); f = f * f * ( 3.0 - 2.0 * f );
+             return mix( mix( bcHash( i ), bcHash( i + vec2( 1.0, 0.0 ) ), f.x ), mix( bcHash( i + vec2( 0.0, 1.0 ) ), bcHash( i + vec2( 1.0, 1.0 ) ), f.x ), f.y );
+           }`
+        )
+        .replace(
+          '#include <clipping_planes_fragment>',
+          `#include <clipping_planes_fragment>
+           {
+             float bcNear = 1e9;
+             for ( int i = 0; i < ${SKY_MAX_CELLS}; i++ ) {
+               if ( i >= uSkyCellCount ) break;
+               bcNear = min( bcNear, distance( vSkyXZ, uSkyCells[ i ] ) );
+             }
+             // The edge is ragged, not a run of arcs: the reach wanders with a little noise,
+             // so the grass frays over the rock lip in bites and tongues.
+             float bcFray = bcNoise( vSkyXZ * 0.55 ) * 0.7 + bcNoise( vSkyXZ * 1.7 ) * 0.3;
+             if ( bcNear > uSkyReach * ( 0.78 + 0.34 * bcFray ) ) discard;
+           }`
+        )
     }
     mat.customProgramCacheKey = () => 'bc-terrain-sky'
+    mesh.userData.setFootprint = (list, reach) => {
+      const n = Math.min(list.length, SKY_MAX_CELLS)
+      for (let i = 0; i < SKY_MAX_CELLS; i++) {
+        if (i < n) cells.value[i].set(list[i].x, list[i].z)
+        else cells.value[i].set(1e6, 1e6)
+      }
+      uniforms.uSkyCellCount.value = n
+      uniforms.uSkyReach.value = reach
+    }
   }
-  const mesh = new THREE.Mesh(geo, mat)
-  mesh.receiveShadow = true
-  mesh.name = 'terrain'
 
   // Sampler so anything placed later can sit exactly on the surface.
   mesh.userData.heightAt = (x, z) => sampleHeight(x, z, field, planet)
@@ -673,10 +713,10 @@ function sampleHeight(x, z, field, planet) {
     const wobble = fbm(noise, x * 0.02 + 7, z * 0.02 + 3, 2) * 9
     sea = THREE.MathUtils.smoothstep(along + wobble, COAST_OFFSET - 4, COAST_OFFSET + 32)
   }
-  // Nothing under a floating island's rim: the ground is dropped so far it is never seen
-  // from above, and what shows instead is the island's own underside, built separately.
-  const skyFall = planet.shape === 'sky' ? THREE.MathUtils.smoothstep(dist, SKY_RIM, SKY_RIM + SKY_SHELF) : 0
-  if (skyFall > 0) hills *= 1 - skyFall
+  // A floating island is only as big as the colony on it, and everything past that is cut
+  // away in the terrain shader (see createTerrain); the field itself stays gentle out there
+  // so the rim is level with the plots, and nothing needs to know where the edge is here.
+  if (planet.shape === 'sky') hills *= 0.15
   if (planet.shape === 'dunes') {
     // Long ridges running one way, bent by noise so they read as wind-blown rather than
     // corrugated. Faint inside the colony, tall past it.
@@ -686,10 +726,6 @@ function sampleHeight(x, z, field, planet) {
   }
 
   let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
-  if (skyFall > 0) {
-    y = y * (1 - skyFall) - SKY_DROP * skyFall
-    if (skyFall >= 1) return y // nothing else out there: no sea, no craters
-  }
   if (sea > 0) {
     // Hills sink with the land rather than poking up out of the water as pinnacles. The bed
     // falls away slowly at first and steeply later, which is what makes a beach a beach:
@@ -924,7 +960,7 @@ function fallbackShapes(isFlora) {
  * same planet always looks the same, and all kept clear of the plots, the walkways and
  * — where there is any — the water, unless a part is meant to stand in it.
  */
-export function createScatter(planet, density, keepClear = [], seed = 4242) {
+export function createScatter(planet, density, keepClear = [], seed = 4242, inside = null) {
   const group = new THREE.Group()
   group.name = 'scatter'
   const count = Math.round(SCATTER_BUDGET * THREE.MathUtils.clamp(density, 0, 1))
@@ -989,7 +1025,7 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
     const x = Math.cos(a) * d
     const z = Math.sin(a) * d
     if (keepClear.some((p) => Math.hypot(x - p.x, z - p.z) < p.r)) continue
-    if (planet.shape === 'sky' && d > SKY_RIM - 1.5) continue
+    if (inside && !inside(x, z)) continue
 
     const which = pickKind()
     const kind = kinds[which]

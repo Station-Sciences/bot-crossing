@@ -291,7 +291,7 @@ under **View → Return to isometric**.
 
 ## Planets and light
 
-Eleven worlds and a full day/night cycle you can scrub, let run, or set to **Live**, which
+Twelve worlds and a full day/night cycle you can scrub, let run, or set to **Live**, which
 follows this machine's own clock so the colony's light matches the light out of your window.
 
 | World | What it is |
@@ -305,14 +305,22 @@ follows this machine's own clock so the colony's light matches the light out of 
 | **Harvest** | Autumn: gold light, red leaves on the air, a pond |
 | **Blossom** | Cherry trees in full bloom, petals on everything |
 | **Cinder** | Ash, embers, and lava pooling in every crater |
+| **Aerie** | A floating island, exactly the colony's shape, over a sea of cloud |
 
 A planet is a bag of colours and a few switches — terrain, scatter, sky, water, weather,
-wildlife, ambience and lighting all read from the same preset, so a twelfth world is a data
+wildlife, ambience and lighting all read from the same preset, so a thirteenth world is a data
 change rather than a code change. The one structural knob is `shape`: a handful of named
 ways of bending the same height field — `island` drops the ground into the sea past a
 radius, `coast` past a line, `dunes` lays ridges over everything. Worlds with water but no
 sea get their lakes for free: the crater bowls that were already there dip below the
 waterline and fill. On Cinder the water is lava, which is the same shader with a glow.
+
+Aerie is the odd one out: its ground exists only where the colony does. Every hex cell a
+repo holds gets a jagged plug of rock hung beneath it (`world/hexisland.js`) — a hex prism
+that twists and shrinks to a point, stalactites trailing below, the big ones under the
+middle of the island — and the terrain shader throws away every fragment more than a
+frayed grass margin from any cell. Claim a tile and the island grows a tile; fold a repo
+away and a chunk of rock drops off the edge. Vines hang from whichever edges face open sky.
 
 ### Water
 
