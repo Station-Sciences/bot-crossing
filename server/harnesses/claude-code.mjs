@@ -494,16 +494,49 @@ const CLI_DIRS = [
 const cliBinary = () => findExecutable('claude', CLI_DIRS)
 
 /**
+ * The pid of the live CLI process behind a session, if any. Same registry and same caveat as
+ * `scanLiveSessions`: files outlive their pids, so the pid is probed before it counts.
+ */
+async function liveSessionPid(sessionId) {
+  for (const file of await listFiles(CLI_LIVE, (n) => n.endsWith('.json'))) {
+    let record
+    try {
+      record = JSON.parse(await fsp.readFile(file, 'utf8'))
+    } catch {
+      continue
+    }
+    if (record.sessionId !== sessionId || !record.pid) continue
+    try {
+      process.kill(record.pid, 0)
+      return record.pid
+    } catch {
+      /* process is gone */
+    }
+  }
+  return 0
+}
+
+/**
  * Hands the thread back to Claude Code. `epitaxy/<local_…>` *navigates* the desktop app
  * to a thread it already has; `resume` *imports* the transcript, which spawns a second
  * untitled session and rewrites the .jsonl — so it is only ever the fallback for threads
  * the app has never seen. Ids are pattern-checked before they reach the opener.
+ *
+ * A terminal-started thread that is still running gets its live pid handed along too: it
+ * already has a window somewhere on this machine, and fronting that window is a better answer
+ * than `resume` importing the transcript into the desktop app as a second, untitled session.
+ * Whether and how to front it is the server's call — see `server/lib/windows.mjs`.
  */
 async function openThread(ref) {
   const { desktopSessionId, cliSessionId, cwd } = ref || {}
   let url = ''
   if (isDesktopId(desktopSessionId)) url = `claude://claude.ai/epitaxy/${desktopSessionId}`
   else if (isCliId(cliSessionId)) url = `claude://resume?session=${cliSessionId}`
+
+  // Only threads the desktop app has never seen: for the rest the deep link navigates to the
+  // tab the app already has, which is exactly the right window to front.
+  let pid = 0
+  if (!isDesktopId(desktopSessionId) && isCliId(cliSessionId)) pid = await liveSessionPid(cliSessionId)
 
   let command
   if (process.platform === 'linux' && isCliId(cliSessionId)) {
@@ -512,7 +545,7 @@ async function openThread(ref) {
   }
 
   if (!url && !command) return { ok: false, error: 'No openable session id on that thread' }
-  return { ok: true, url, command }
+  return { ok: true, url, command, pid }
 }
 
 /**

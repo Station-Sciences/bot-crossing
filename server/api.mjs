@@ -4,6 +4,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { openInTerminal, schemeHasHandler, schemeOf } from './lib/xdg.mjs'
+import { focusWindowOfPid } from './lib/windows.mjs'
 import {
   defaultHarness,
   harnessStatus,
@@ -175,8 +176,15 @@ async function resolveFolder(folder) {
 }
 
 /**
- * Show a harness's answer to "open this" — `{ ok, url, command }` — and say truthfully whether
- * anything happened.
+ * Show a harness's answer to "open this" — `{ ok, url, command, pid }` — and say truthfully
+ * whether anything happened.
+ *
+ * A `pid` names a live process whose thread already has a window on this machine — a session
+ * running in a terminal right now. Fronting that window is tried before anything else, because
+ * the URL fallback for exactly these threads is `resume`, which imports the transcript into the
+ * desktop app as a second, untitled session. Only when no window can be found (the terminal is
+ * on another desktop, the process is detached, the walk found only the Claude app itself) does
+ * the URL run as before.
  *
  * macOS and Windows hand the URL to the opener exactly as before: a scheme the harness's app
  * registers is always answered there, so nothing is probed. Linux is the platform where the URL
@@ -193,6 +201,8 @@ async function resolveFolder(folder) {
 async function present(result) {
   // Only the reason reaches the page: a failure may still carry the adapter's command.
   if (!result || !result.ok) return { ok: false, error: result?.error || 'Nothing to open' }
+
+  if (result.pid && (await focusWindowOfPid(result.pid))) return { ok: true, focused: true }
 
   if (process.platform !== 'linux') {
     if (!result.url) return { ok: false, error: 'That harness has no deep link to open on this platform' }
