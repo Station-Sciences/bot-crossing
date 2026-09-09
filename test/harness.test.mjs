@@ -13,6 +13,7 @@ import path from 'node:path'
 import { HARNESSES } from '../server/harnesses/index.mjs'
 import codex from '../server/harnesses/codex.mjs'
 import claudeCode from '../server/harnesses/claude-code.mjs'
+import kilocode from '../server/harnesses/kilocode.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
 import { schemeOf, openInTerminal } from '../server/lib/xdg.mjs'
 
@@ -240,4 +241,155 @@ test('Cursor offers a folder link but never a per-thread one it cannot honour', 
   assert.ok(opened.url.includes('%20'), 'a space in the path is escaped, not left raw')
   assert.equal(h.newSession('relative/path').ok, false)
   await fsp.rm(home, { recursive: true, force: true })
+})
+
+// ── Kilo Code, faked on disk ────────────────────────────────────────────
+
+const KILO_SESSION = 'ses_aaaabbbbccccddddeeeeffff0000'
+
+async function fakeKilocode() {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'kilocode-fixture-'))
+  const dbFile = path.join(home, 'kilo.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, workspace_id TEXT, parent_id TEXT, directory TEXT NOT NULL, path TEXT, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const ins = db.prepare(`INSERT INTO session (id, project_id, workspace_id, parent_id, directory, path, title, agent, model, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run(KILO_SESSION, 'proj1', null, null, 'C:/Users/test/demo', '', 'Fix the thing', 'orchestrator', JSON.stringify({ id: 'anthropic/claude-opus', providerID: 'kilo', variant: 'xhigh' }), now - 60000, now, null)
+  ins.run('ses_child1111111111111111111111', 'proj1', null, KILO_SESSION, 'C:/Users/test/demo', '', 'Do subtask (@general subagent)', 'general', null, now - 50000, now, null)
+  const mins = db.prepare(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`)
+  mins.run('msg_user1', KILO_SESSION, now - 60000, now - 60000, JSON.stringify({ role: 'user', time: { created: now - 60000 } }))
+  mins.run('msg_asst1', KILO_SESSION, now - 59000, now - 58000, JSON.stringify({ role: 'assistant', time: { created: now - 59000, completed: now - 58000 }, finish: 'stop' }))
+  const pins = db.prepare(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`)
+  pins.run('prt_user1', 'msg_user1', KILO_SESSION, now - 60000, now - 60000, JSON.stringify({ type: 'text', text: '  ship   the thing  ' }))
+  pins.run('prt_asst1', 'msg_asst1', KILO_SESSION, now - 59000, now - 58000, JSON.stringify({ type: 'text', text: 'done' }))
+  db.close()
+  process.env.KILO_DB = dbFile
+  return { home, h: kilocode }
+}
+
+test('kilocode lists only top-level sessions with mapped fields', async () => {
+  const { home, h } = await fakeKilocode()
+  try {
+    assert.equal(await h.detect(), true)
+    const threads = await h.scanThreads()
+    assert.equal(threads.length, 1)
+    const [t] = threads
+    assert.equal(t.id, `kilocode:${KILO_SESSION}`)
+    assert.equal(t.project, 'demo')
+    assert.equal(t.projectPath, 'C:/Users/test/demo')
+    assert.equal(t.cwd, 'C:/Users/test/demo')
+    assert.equal(t.worktree, '')
+    assert.equal(t.title, 'Fix the thing')
+    assert.equal(t.preview, 'ship the thing')
+    assert.equal(t.model, 'anthropic/claude-opus')
+    assert.equal(t.canOpen, true, 'the thread opens as its repo folder in VS Code')
+    assert.deepEqual(t.ref, { sessionId: KILO_SESSION, cwd: 'C:/Users/test/demo' })
+    assert.ok(t.sizeBytes > 0, 'sizeBytes is transcript bytes, not a token count')
+  } finally {
+    delete process.env.KILO_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('an absent kilocode is simply not detected', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'kilocode-empty-'))
+  process.env.KILO_DB = path.join(home, 'missing.db')
+  try {
+    assert.equal(await kilocode.detect(), false)
+    assert.deepEqual(await kilocode.scanThreads(), [])
+  } finally {
+    delete process.env.KILO_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('kilocode running is bounded by the activity window and errors come from the last turn only', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'kilocode-status-'))
+  const dbFile = path.join(home, 'kilo.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, workspace_id TEXT, parent_id TEXT, directory TEXT NOT NULL, path TEXT, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const ins = db.prepare(`INSERT INTO session (id, project_id, workspace_id, parent_id, directory, path, title, agent, model, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run('ses_kilorun11111111111111111111', 'p', null, null, '/tmp/a', '', 'Running now', 'orchestrator', null, now - 60000, now, null)
+  ins.run('ses_kilostale1111111111111111111', 'p', null, null, '/tmp/b', '', 'Stale open turn', 'orchestrator', null, now - 6 * 60 * 60 * 1000, now - 6 * 60 * 60 * 1000, null)
+  ins.run('ses_kiloerr111111111111111111111', 'p', null, null, '/tmp/c', '', 'Failed turn', 'orchestrator', null, now - 60000, now, null)
+  const mins = db.prepare(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`)
+  mins.run('m_run', 'ses_kilorun11111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000 } }))
+  mins.run('m_stale', 'ses_kilostale1111111111111111111', now - 6 * 60 * 60 * 1000, now - 6 * 60 * 60 * 1000, JSON.stringify({ role: 'assistant', time: { created: now - 6 * 60 * 60 * 1000 } }))
+  mins.run('m_err', 'ses_kiloerr111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, finish: 'stop' }))
+  const pins = db.prepare(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`)
+  pins.run('p_run', 'm_run', 'ses_kilorun11111111111111111111', now, now, JSON.stringify({ type: 'step-start' }))
+  pins.run('p_err', 'm_err', 'ses_kiloerr111111111111111111111', now, now, JSON.stringify({ type: 'tool', tool: 'bash', state: { status: 'error' } }))
+  db.close()
+  process.env.KILO_DB = dbFile
+  try {
+    const byId = new Map((await kilocode.scanThreads()).map((t) => [t.id, t]))
+    assert.equal(byId.get('kilocode:ses_kilorun11111111111111111111').running, true)
+    assert.equal(byId.get('kilocode:ses_kilostale1111111111111111111').running, false, 'an open turn from hours ago is not still running')
+    assert.equal(byId.get('kilocode:ses_kiloerr111111111111111111111').hasError, true)
+    assert.equal(byId.get('kilocode:ses_kilorun11111111111111111111').hasError, false)
+  } finally {
+    delete process.env.KILO_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('a turn the user stopped is not an error for kilocode either', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'kilocode-denied-'))
+  const dbFile = path.join(home, 'kilo.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, workspace_id TEXT, parent_id TEXT, directory TEXT NOT NULL, path TEXT, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const ins = db.prepare(`INSERT INTO session (id, project_id, workspace_id, parent_id, directory, path, title, agent, model, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run('ses_kilodenied11111111111111111', 'p', null, null, '/tmp/d', '', 'Denied turn', 'orchestrator', null, now - 60000, now, null)
+  ins.run('ses_kiloabort1111111111111111111', 'p', null, null, '/tmp/e', '', 'Aborted turn', 'orchestrator', null, now - 60000, now, null)
+  const mins = db.prepare(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`)
+  mins.run('m_denied', 'ses_kilodenied11111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, finish: 'tool-calls' }))
+  mins.run('m_abort', 'ses_kiloabort1111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, error: { name: 'MessageAbortedError' } }))
+  const pins = db.prepare(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`)
+  pins.run('p_denied', 'm_denied', 'ses_kilodenied11111111111111111', now, now, JSON.stringify({ type: 'tool', tool: 'bash', state: { status: 'error', error: 'The user rejected permission to use this specific tool call.' } }))
+  db.close()
+  process.env.KILO_DB = dbFile
+  try {
+    const byId = new Map((await kilocode.scanThreads()).map((t) => [t.id, t]))
+    assert.equal(byId.get('kilocode:ses_kilodenied11111111111111111').hasError, false, 'a rejected permission is the user stopping the turn, not a failure')
+    assert.equal(byId.get('kilocode:ses_kiloabort1111111111111111111').hasError, false, 'an aborted message is a cancellation, not a failure')
+  } finally {
+    delete process.env.KILO_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('kilocode refuses untrusted refs and opens the repo folder in VS Code', async () => {
+  const { home, h } = await fakeKilocode()
+  try {
+    assert.equal(h.openThread({ sessionId: [KILO_SESSION] }).ok, false)
+    assert.equal(h.openThread({ sessionId: { toString: () => KILO_SESSION } }).ok, false)
+    assert.equal(h.openThread({ sessionId: KILO_SESSION }).ok, false)
+    assert.equal(h.openThread(null).ok, false)
+    assert.equal(h.openThread({}).ok, false)
+    assert.equal(h.openThread({ sessionId: KILO_SESSION, cwd: 'relative/path' }).ok, false)
+    // No per-session link exists, so the thread opens as its folder — the
+    // Kilo sidebar and its session list are one click from there.
+    const opened = h.openThread({ sessionId: KILO_SESSION, cwd: 'C:/Users/test/demo' })
+    assert.equal(opened.ok, true)
+    assert.equal(schemeOf(opened.url), 'vscode')
+    const created = h.newSession('/tmp/some repo')
+    assert.equal(created.ok, true)
+    assert.equal(schemeOf(created.url), 'vscode')
+    assert.ok(created.url.includes('%20'), 'a space in the path is escaped, not left raw')
+    assert.equal(h.newSession('relative/path').ok, false)
+  } finally {
+    delete process.env.KILO_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
 })
