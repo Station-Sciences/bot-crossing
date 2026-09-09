@@ -15,9 +15,9 @@
  * be worse than leaving it out and saying so.
  *
  * Read-only, without exception, and no subprocess anywhere. The extension
- * registers no URI handler for a single session, so opening a thread is
- * honestly refused and starting one reveals the repo folder in VS Code,
- * where the Kilo sidebar lives.
+ * registers no URI handler for a single session, so opening a thread reveals
+ * its repo folder in VS Code — where the Kilo sidebar and its session list
+ * live — and starting one does the same for a fresh folder.
  */
 import path from 'node:path'
 import os from 'node:os'
@@ -274,7 +274,10 @@ async function scanThreads() {
         // taller than Claude ones for the same work.
         sizeBytes: facts.sizeBytes,
         source: typeof r.agent === 'string' ? r.agent : '',
-        canOpen: false,
+        // No per-session link exists, but the repo folder opens in VS Code —
+        // where the Kilo sidebar and its session list live — so the button
+        // stays live and does the most useful true thing instead of greying out.
+        canOpen: true,
         ref: { sessionId: r.id, cwd }
       })
     }
@@ -291,9 +294,10 @@ async function scanThreads() {
 }
 
 /**
- * The extension registers no URI handler for a single session — inventing a
- * route would be a link that silently does nothing. Revealing the session
- * list is the honest offer, and the UI greys the button and shows this instead.
+ * The extension registers no URI handler for a single session, so the thread
+ * is handed back as its repo folder in VS Code — the same `vscode://file/`
+ * offer as `newSession`. The Kilo sidebar and its session list are one click
+ * from there, which beats a greyed-out button that only explains itself.
  */
 function openThread(ref) {
   const id = ref?.sessionId
@@ -302,10 +306,11 @@ function openThread(ref) {
   if (typeof id !== 'string' || !id) {
     return { ok: false, error: 'No openable Kilo Code session id on that thread' }
   }
-  return {
-    ok: false,
-    error: 'Kilo Code has no link to a single session — open the repo and pick it from the session list.'
+  const cwd = ref?.cwd
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) {
+    return { ok: false, error: 'That thread has no folder on record to open' }
   }
+  return { ok: true, url: `vscode://file/${encodeURI(cwd.replace(/\\/g, '/'))}` }
 }
 
 /**

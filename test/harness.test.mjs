@@ -285,7 +285,7 @@ test('kilocode lists only top-level sessions with mapped fields', async () => {
     assert.equal(t.title, 'Fix the thing')
     assert.equal(t.preview, 'ship the thing')
     assert.equal(t.model, 'anthropic/claude-opus')
-    assert.equal(t.canOpen, false)
+    assert.equal(t.canOpen, true, 'the thread opens as its repo folder in VS Code')
     assert.deepEqual(t.ref, { sessionId: KILO_SESSION, cwd: 'C:/Users/test/demo' })
     assert.ok(t.sizeBytes > 0, 'sizeBytes is transcript bytes, not a token count')
   } finally {
@@ -369,7 +369,7 @@ test('a turn the user stopped is not an error for kilocode either', async () => 
   }
 })
 
-test('kilocode refuses untrusted refs and offers a folder link for new sessions', async () => {
+test('kilocode refuses untrusted refs and opens the repo folder in VS Code', async () => {
   const { home, h } = await fakeKilocode()
   try {
     assert.equal(h.openThread({ sessionId: [KILO_SESSION] }).ok, false)
@@ -377,10 +377,16 @@ test('kilocode refuses untrusted refs and offers a folder link for new sessions'
     assert.equal(h.openThread({ sessionId: KILO_SESSION }).ok, false)
     assert.equal(h.openThread(null).ok, false)
     assert.equal(h.openThread({}).ok, false)
-    const opened = h.newSession('/tmp/some repo')
+    assert.equal(h.openThread({ sessionId: KILO_SESSION, cwd: 'relative/path' }).ok, false)
+    // No per-session link exists, so the thread opens as its folder — the
+    // Kilo sidebar and its session list are one click from there.
+    const opened = h.openThread({ sessionId: KILO_SESSION, cwd: 'C:/Users/test/demo' })
     assert.equal(opened.ok, true)
     assert.equal(schemeOf(opened.url), 'vscode')
-    assert.ok(opened.url.includes('%20'), 'a space in the path is escaped, not left raw')
+    const created = h.newSession('/tmp/some repo')
+    assert.equal(created.ok, true)
+    assert.equal(schemeOf(created.url), 'vscode')
+    assert.ok(created.url.includes('%20'), 'a space in the path is escaped, not left raw')
     assert.equal(h.newSession('relative/path').ok, false)
   } finally {
     delete process.env.KILO_DB
