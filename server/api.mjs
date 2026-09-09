@@ -1,4 +1,5 @@
 import fsp from 'node:fs/promises'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
@@ -450,11 +451,38 @@ function applyNetwork(network) {
  * district returns without anyone touching a switch.
  */
 const RECONCILE_MS = 15 * 1000
-function reconcileNetwork() {
+
+/**
+ * Actually connect to a local TCP port, briefly, to prove it still accepts connections.
+ * `server.listening` lies after the machine sleeps — the socket claims to be up while nothing
+ * reaches it — so the only honest check is to open a connection and see if it lands. Resolves
+ * true on connect, false on error or timeout.
+ */
+function probePort(port, timeout = 1000) {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port })
+    let done = false
+    const finish = (ok) => {
+      if (done) return
+      done = true
+      socket.destroy()
+      resolve(ok)
+    }
+    socket.setTimeout(timeout)
+    socket.once('connect', () => finish(true))
+    socket.once('timeout', () => finish(false))
+    socket.once('error', () => finish(false))
+  })
+}
+
+async function reconcileNetwork() {
   if (!currentNetwork) return
   discovery.listen() // no-op if the socket is up; rebinds if it dropped
   if (currentNetwork.share) {
+    // A dropped listener heals; a listener that only *looks* alive (post-sleep) is caught by
+    // probing the port for real and force-restarting when nothing answers.
     if (guest.needsHeal) guest.start()
+    else if (guest.running && !(await probePort(guest.port))) guest.restart()
     discovery.setAnnounce(true, { name: currentNetwork.colonyName, guestPort: guest.port })
   }
 }

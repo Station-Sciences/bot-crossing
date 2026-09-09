@@ -117,6 +117,18 @@ export class GuestServer {
     this._server = null
   }
 
+  /**
+   * Tear the listener down and stand it back up, keeping `_wantOn`. Unlike waiting for the
+   * heal timer, this is unconditional — the caller has decided the socket is no good even if
+   * it still claims to be listening, which is exactly the state a socket can be left in after
+   * the machine sleeps: `listening` is true, but nothing actually reaches it.
+   */
+  restart() {
+    const wanted = this._wantOn
+    this.stop()
+    if (wanted) this.start()
+  }
+
   async _handle(req, res) {
     const send = (status, body) => {
       const json = JSON.stringify(body)
