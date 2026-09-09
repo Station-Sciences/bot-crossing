@@ -46,9 +46,12 @@ const PHONE = {
   x: 0,
   y: -0.1,
   z: 0.1,
-  rx: 0,
+  rx: -0.6, // tipped up toward the visor
   ry: Math.PI,
   rz: 0,
+  // Where along the phone the hand grips, as a share of its height from the middle: the
+  // bottom edge sits in the palm and the body stands up out of the fist.
+  grip: 0.4,
   // The check's timeline, seconds from its start.
   out: 0.5, // grows in the hand as the arm comes up
   open: [0.55, 1.35], // flips open
@@ -202,7 +205,7 @@ export class Props {
 
   _writePhone(hand, t) {
     const R = this.R
-    const { halfA, halfB, w, t: thick } = this.phone
+    const { halfA, halfB, w, h, t: thick } = this.phone
     const i = this._n++
 
     // Grows in the hand as the arm comes up, shrinks away as it drops.
@@ -228,7 +231,7 @@ export class Props {
     v.set(PHONE.x * R, PHONE.y * R, PHONE.z * R)
     root.compose(v, q, this._s.setScalar(s))
     root.premultiply(hand)
-    root.multiply(this._m2.makeTranslation(-w / 2, 0, -thick / 2))
+    root.multiply(this._m2.makeTranslation(-w / 2, PHONE.grip * h, -thick / 2))
     halfA.setMatrixAt(i, root)
 
     // Half B rotates about the hinge: the inside edge of A, at the inner face's height, so
