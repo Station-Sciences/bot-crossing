@@ -13,6 +13,7 @@ import path from 'node:path'
 import { HARNESSES } from '../server/harnesses/index.mjs'
 import codex from '../server/harnesses/codex.mjs'
 import claudeCode from '../server/harnesses/claude-code.mjs'
+import opencode from '../server/harnesses/opencode.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
 import { schemeOf, openInTerminal } from '../server/lib/xdg.mjs'
 
@@ -240,4 +241,182 @@ test('Cursor offers a folder link but never a per-thread one it cannot honour', 
   assert.ok(opened.url.includes('%20'), 'a space in the path is escaped, not left raw')
   assert.equal(h.newSession('relative/path').ok, false)
   await fsp.rm(home, { recursive: true, force: true })
+})
+
+// ── OpenCode, faked on disk ─────────────────────────────────────────────────
+
+const OPENCODE_SESSION = 'ses_eeeeddddccccbbbbaaaa00000000'
+
+async function fakeOpencode() {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'opencode-fixture-'))
+  const dbFile = path.join(home, 'opencode.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const ins = db.prepare(`INSERT INTO session (id, project_id, parent_id, directory, title, agent, model, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run(OPENCODE_SESSION, 'global', null, '/tmp/demo', 'Fix the thing', 'build', JSON.stringify({ id: 'muse-spark', providerID: 'opencode-go', variant: 'xhigh' }), now - 60000, now, null)
+  ins.run('ses_child11111111111111111111111', 'global', OPENCODE_SESSION, '/tmp/demo', 'Do subtask (@general subagent)', 'general', null, now - 50000, now, null)
+  const mins = db.prepare(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`)
+  mins.run('msg_user1', OPENCODE_SESSION, now - 60000, now - 60000, JSON.stringify({ role: 'user', time: { created: now - 60000 } }))
+  mins.run('msg_asst1', OPENCODE_SESSION, now - 59000, now - 58000, JSON.stringify({ role: 'assistant', time: { created: now - 59000, completed: now - 58000 }, finish: 'stop' }))
+  const pins = db.prepare(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`)
+  pins.run('prt_user1', 'msg_user1', OPENCODE_SESSION, now - 60000, now - 60000, JSON.stringify({ type: 'text', text: '  ship   the thing  ' }))
+  pins.run('prt_asst1', 'msg_asst1', OPENCODE_SESSION, now - 59000, now - 58000, JSON.stringify({ type: 'text', text: 'done' }))
+  db.close()
+  process.env.OPENCODE_DB = dbFile
+  return { home, h: opencode }
+}
+
+test('opencode lists only top-level sessions with mapped fields', async () => {
+  const { home, h } = await fakeOpencode()
+  try {
+    assert.equal(await h.detect(), true)
+    const threads = await h.scanThreads()
+    assert.equal(threads.length, 1)
+    const [t] = threads
+    assert.equal(t.id, `opencode:${OPENCODE_SESSION}`)
+    assert.equal(t.project, 'demo')
+    assert.equal(t.projectPath, '/tmp/demo')
+    assert.equal(t.cwd, '/tmp/demo')
+    assert.equal(t.worktree, '')
+    assert.equal(t.title, 'Fix the thing')
+    assert.equal(t.preview, 'ship the thing')
+    assert.equal(t.model, 'muse-spark')
+    assert.equal(t.canOpen, false)
+    assert.deepEqual(t.ref, { sessionId: OPENCODE_SESSION, cwd: '/tmp/demo' })
+    assert.ok(t.sizeBytes > 0, 'sizeBytes is transcript bytes, not a token count')
+  } finally {
+    delete process.env.OPENCODE_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('an absent opencode is simply not detected', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'opencode-empty-'))
+  process.env.OPENCODE_DB = path.join(home, 'missing.db')
+  try {
+    assert.equal(await opencode.detect(), false)
+    assert.deepEqual(await opencode.scanThreads(), [])
+  } finally {
+    delete process.env.OPENCODE_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('opencode running is bounded by the activity window and errors come from the last turn only', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'opencode-status-'))
+  const dbFile = path.join(home, 'opencode.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const ins = db.prepare(`INSERT INTO session (id, project_id, parent_id, directory, title, agent, model, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run('ses_running1111111111111111111111', 'global', null, '/tmp/a', 'Running now', 'build', null, now - 60000, now, null)
+  ins.run('ses_stale11111111111111111111111', 'global', null, '/tmp/b', 'Stale open turn', 'build', null, now - 6 * 60 * 60 * 1000, now - 6 * 60 * 60 * 1000, null)
+  ins.run('ses_error111111111111111111111111', 'global', null, '/tmp/c', 'Failed turn', 'build', null, now - 60000, now, null)
+  const mins = db.prepare(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`)
+  mins.run('m_run', 'ses_running1111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000 } }))
+  mins.run('m_stale', 'ses_stale11111111111111111111111', now - 6 * 60 * 60 * 1000, now - 6 * 60 * 60 * 1000, JSON.stringify({ role: 'assistant', time: { created: now - 6 * 60 * 60 * 1000 } }))
+  mins.run('m_err', 'ses_error111111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, finish: 'stop' }))
+  const pins = db.prepare(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`)
+  pins.run('p_run', 'm_run', 'ses_running1111111111111111111111', now, now, JSON.stringify({ type: 'step-start' }))
+  pins.run('p_err', 'm_err', 'ses_error111111111111111111111111', now, now, JSON.stringify({ type: 'tool', tool: 'bash', state: { status: 'error' } }))
+  db.close()
+  process.env.OPENCODE_DB = dbFile
+  try {
+    const byId = new Map((await opencode.scanThreads()).map((t) => [t.id, t]))
+    assert.equal(byId.get('opencode:ses_running1111111111111111111111').running, true)
+    assert.equal(byId.get('opencode:ses_stale11111111111111111111111').running, false, 'an open turn from hours ago is not still running')
+    assert.equal(byId.get('opencode:ses_error111111111111111111111111').hasError, true)
+    assert.equal(byId.get('opencode:ses_running1111111111111111111111').hasError, false)
+  } finally {
+    delete process.env.OPENCODE_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('a turn the user stopped is not an error — denial and abort must not redden an astronaut', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'opencode-denied-'))
+  const dbFile = path.join(home, 'opencode.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const ins = db.prepare(`INSERT INTO session (id, project_id, parent_id, directory, title, agent, model, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run('ses_denied1111111111111111111111', 'global', null, '/tmp/d', 'Denied turn', 'build', null, now - 60000, now, null)
+  ins.run('ses_aborted111111111111111111111', 'global', null, '/tmp/e', 'Aborted turn', 'build', null, now - 60000, now, null)
+  ins.run('ses_failed1111111111111111111111', 'global', null, '/tmp/f', 'Failed turn', 'build', null, now - 60000, now, null)
+  const mins = db.prepare(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`)
+  mins.run('m_denied', 'ses_denied1111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, finish: 'tool-calls' }))
+  mins.run('m_aborted', 'ses_aborted111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, finish: 'stop' }))
+  mins.run('m_failed', 'ses_failed1111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, finish: 'stop' }))
+  const pins = db.prepare(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`)
+  pins.run('p_denied', 'm_denied', 'ses_denied1111111111111111111111', now, now, JSON.stringify({ type: 'tool', tool: 'bash', state: { status: 'error', error: 'The user rejected permission to use this specific tool call.' } }))
+  pins.run('p_aborted', 'm_aborted', 'ses_aborted111111111111111111111', now, now, JSON.stringify({ type: 'tool', tool: 'read', state: { status: 'error', error: 'Tool execution aborted' } }))
+  pins.run('p_failed', 'm_failed', 'ses_failed1111111111111111111111', now, now, JSON.stringify({ type: 'tool', tool: 'write', state: { status: 'error', error: 'SchemaError(Expected string, got object)' } }))
+  db.close()
+  process.env.OPENCODE_DB = dbFile
+  try {
+    const byId = new Map((await opencode.scanThreads()).map((t) => [t.id, t]))
+    assert.equal(byId.get('opencode:ses_denied1111111111111111111111').hasError, false, 'a rejected permission is the user stopping the turn, not a failure')
+    assert.equal(byId.get('opencode:ses_aborted111111111111111111111').hasError, false, 'an aborted call is a cancellation, not a failure')
+    assert.equal(byId.get('opencode:ses_failed1111111111111111111111').hasError, true, 'a genuine tool failure still reddens the astronaut')
+  } finally {
+    delete process.env.OPENCODE_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('a message-level abort is the user stopping, but a provider error is a failure', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'opencode-msgerr-'))
+  const dbFile = path.join(home, 'opencode.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const ins = db.prepare(`INSERT INTO session (id, project_id, parent_id, directory, title, agent, model, time_created, time_updated, time_archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run('ses_msgabort11111111111111111111', 'global', null, '/tmp/g', 'Aborted message', 'build', null, now - 60000, now, null)
+  ins.run('ses_msgapi1111111111111111111111', 'global', null, '/tmp/h', 'Provider failure', 'build', null, now - 60000, now, null)
+  const mins = db.prepare(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`)
+  mins.run('m_abort', 'ses_msgabort11111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, error: { name: 'MessageAbortedError' } }))
+  mins.run('m_api', 'ses_msgapi1111111111111111111111', now - 60000, now, JSON.stringify({ role: 'assistant', time: { created: now - 60000, completed: now }, error: { name: 'APIError' } }))
+  db.close()
+  process.env.OPENCODE_DB = dbFile
+  try {
+    const byId = new Map((await opencode.scanThreads()).map((t) => [t.id, t]))
+    assert.equal(byId.get('opencode:ses_msgabort11111111111111111111').hasError, false)
+    assert.equal(byId.get('opencode:ses_msgabort11111111111111111111').running, false)
+    assert.equal(byId.get('opencode:ses_msgapi1111111111111111111111').hasError, true)
+  } finally {
+    delete process.env.OPENCODE_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
+test('opencode refuses untrusted refs and offers no per-thread link', async () => {  const { home, h } = await fakeOpencode()
+  try {
+    const uuid = OPENCODE_SESSION
+    assert.equal(h.openThread({ sessionId: [uuid] }).ok, false)
+    assert.equal(h.openThread({ sessionId: { toString: () => uuid } }).ok, false)
+    assert.equal(h.openThread({ sessionId: uuid }).ok, false)
+    assert.equal(h.openThread(null).ok, false)
+    assert.equal(h.openThread({}).ok, false)
+    const opened = await h.newSession('/tmp/some repo')
+    assert.equal(opened.ok, true)
+    assert.equal(schemeOf(opened.url), 'opencode')
+    assert.ok(opened.url.includes('directory='), 'the directory rides along')
+    assert.equal((await h.newSession('relative/path')).ok, false)
+  } finally {
+    delete process.env.OPENCODE_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
 })
