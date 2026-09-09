@@ -442,6 +442,26 @@ export class Hud {
     const on = (sel, ev, fn) => this.$(sel).addEventListener(ev, fn)
 
     on('#btn-settings', 'click', () => this.toggleSettings())
+    // On a phone the sidebar is a sheet: a tap on its brand row (not on its buttons) pulls
+    // it up or lets it drop, and a drag on the row does the same by direction.
+    const brandbar = this.$('.side .brandbar')
+    const grab = this.$('.side .grab')
+    let dragY = null
+    const startDrag = (e) => {
+      if (!this.isPhone() || e.target.closest('.btn')) return
+      dragY = e.clientY
+    }
+    const endDrag = (e) => {
+      if (dragY === null) return
+      const dy = e.clientY - dragY
+      dragY = null
+      if (Math.abs(dy) > 24) this.toggleSheet(dy < 0)
+      else if (!e.target.closest('.btn')) this.toggleSheet()
+    }
+    for (const el of [brandbar, grab]) {
+      el.addEventListener('pointerdown', startDrag)
+      el.addEventListener('pointerup', endDrag)
+    }
     on('#btn-close-settings', 'click', () => this.toggleSettings(false))
     on('#btn-hide', 'click', () => this.toggleUi())
     on('#btn-help', 'click', () => this.toggleHelp())
@@ -597,10 +617,14 @@ export class Hud {
       if (this._last.project === null) return
       this._last.project = null
       panel.classList.remove('drilled')
+      panel.classList.remove('open')
       return
     }
 
     this.project = project
+    // On a phone, opening a repo pulls the sheet up so its threads are in view — unless an
+    // astronaut was just picked, whose card wants the room above the sheet's peek.
+    if (this.isPhone() && !this.selected) panel.classList.add('open')
     // The minute is part of the signature because `ago()` is: without it a repo where
     // nothing is happening keeps whatever "4m ago" it was first drawn with, for as long as
     // you leave the panel open.
@@ -681,6 +705,8 @@ export class Hud {
     }
     this.selected = { agent, thread }
     card.classList.add('on')
+    // On a phone the card docks above the sheet's peek, so the sheet drops to make room.
+    if (this.isPhone()) this.toggleSheet(false)
 
     this.$('.thread-pop .title').textContent = thread.title || 'Untitled thread'
     const status = STATUS_LABEL[agent.status] || agent.status
@@ -725,6 +751,14 @@ export class Hud {
       if (this._cardOn) {
         this._cardOn = false
         el.classList.remove('on')
+      }
+      return
+    }
+    // On a phone the card is docked above the sheet by the stylesheet; nothing to place.
+    if (this.isPhone()) {
+      if (!this._cardOn) {
+        this._cardOn = true
+        el.classList.add('on')
       }
       return
     }
@@ -852,6 +886,19 @@ export class Hud {
   /** Reflect orbit mode on the rail button. */
   setOrbit(on) {
     this.$('#btn-orbit').setAttribute('aria-pressed', String(Boolean(on)))
+  }
+
+  /** Whether the layout is the phone one: the sheet, the docked card, the top rail. */
+  isPhone() {
+    return window.matchMedia('(max-width: 600px)').matches
+  }
+
+  /** Pull the sidebar sheet up over the colony, or let it drop to its peek. Phone only. */
+  toggleSheet(force) {
+    const side = this.$('.side')
+    const open = force ?? !side.classList.contains('open')
+    side.classList.toggle('open', open)
+    return open
   }
 
   toggleSettings(force) {
@@ -1004,6 +1051,7 @@ function ago(ts) {
 
 const TEMPLATE = `
 <aside class="side panel">
+  <div class="grab"></div>
   <header class="brandbar">
     <div class="brand"><i class="dot"></i>Bot Crossing</div>
     <button class="btn icon ghost" id="btn-shot" title="Screenshot (P)">${ICON.camera}</button>

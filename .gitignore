@@ -25,3 +25,4 @@ recordings
 # use in a work, not for redistribution on their own.
 public/audio/*
 !public/audio/README.md
+public/dev-mobile.html

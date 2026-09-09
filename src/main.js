@@ -46,7 +46,11 @@ app.insertAdjacentHTML(
 )
 
 const settings = new Settings()
-if (!hasStoredSettings()) settings.applyPreset(DEFAULT_PRESET)
+// A phone gets the light preset the first time: a retina panel at full scale with bloom
+// and shadows is more than its GPU wants to do at sixty, and the governor only ever finds
+// that out by stuttering first.
+const phoneLike = window.matchMedia('(max-width: 600px)').matches || (window.matchMedia('(pointer: coarse)').matches && window.innerWidth < 900)
+if (!hasStoredSettings()) settings.applyPreset(phoneLike ? 'low' : DEFAULT_PRESET)
 
 // Before the first material compiles: the bend is patched into three's own shader chunks.
 installWorldCurve()

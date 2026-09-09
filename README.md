@@ -344,6 +344,17 @@ Anything can throw a ring on it: a fish landing, a gull skimming, a drone passin
 are a small uniform array, so sixteen can be in flight for one draw call.
 
 
+### On a phone
+
+Below 600px the sidebar is a sheet along the bottom: it peeks its brand row and counts,
+and a tap or a drag on that row pulls it up over the colony. Opening a repo pulls it up;
+picking an astronaut drops it, and the thread card docks above the peek instead of chasing
+its astronaut round a screen that small. The rail becomes a strip along the top, settings
+and help fill the screen, everything keeps clear of the safe area, and a first run on a
+phone starts on the Low preset. One finger drags the ground, two pinch to zoom.
+`public/dev-mobile.html` (untracked) frames the app at phone size for checking this in a
+desktop browser.
+
 ### Staying out of the walls
 
 The navigation grid blocks a building at 80% of its footprint, so the gaps between slots
