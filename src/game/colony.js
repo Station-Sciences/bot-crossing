@@ -776,6 +776,17 @@ export class Colony {
       }
     }
 
+    // Scaffold poles. They stand just outside the building's own keep radius, exactly
+    // where its builder stands, so without these the builder works with a pole through it.
+    for (const site of this._scaffoldSites()) {
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + 0.78
+        const x = site.x + Math.cos(a) * site.radius
+        const z = site.z + Math.sin(a) * site.radius
+        obstacles.push({ x, z, r: 0.14 + AGENT_RADIUS, keep: 0.14 + AGENT_RADIUS + 0.12 })
+      }
+    }
+
     const ship = shipPosition()
     obstacles.push({ x: ship.x, z: ship.z, r: 3.4 + AGENT_RADIUS })
     this.nav.rebuild(obstacles)
@@ -1106,7 +1117,8 @@ export class Colony {
     for (const plot of this.plotOrder) plot.setNight(night, urgent?.has(plot.id) ?? false, elapsed)
   }
 
-  _updateScaffolds() {
+  /** Which buildings have scaffolding up right now, and where its poles stand. */
+  _scaffoldSites() {
     const sites = []
     for (const [id, entry] of this.buildings) {
       // Scaffolding says a thread is running here — the README's own promise. It used to be
@@ -1116,6 +1128,7 @@ export class Colony {
       if (!this._isActive(id)) continue
       const p = entry.mesh.position
       sites.push({
+        id,
         x: p.x,
         z: p.z,
         y: p.y,
@@ -1123,7 +1136,19 @@ export class Colony {
         height: Math.max(0.6, entry.mesh.userData.height * entry.progress + 0.5),
       })
     }
+    return sites
+  }
+
+  _updateScaffolds() {
+    const sites = this._scaffoldSites()
     this.scaffolds.update(sites)
+    // The poles are things to walk round, so a scaffold going up or coming down is a
+    // change to the ground — but only then; the grid is not rebuilt for a building growing.
+    const signature = sites.map((s) => s.id).join('|')
+    if (signature !== this._scaffoldSignature) {
+      this._scaffoldSignature = signature
+      if (this.nav) this._rebuildNavigation()
+    }
   }
 
   // ── interaction ─────────────────────────────────────────────────────────────────────
