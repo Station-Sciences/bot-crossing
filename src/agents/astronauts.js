@@ -26,6 +26,11 @@ import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
  * size these characters render.
  */
 
+/** Attention order for the roster clamp: an astronaut that wants something from you outranks
+ *  a quiet one for a rendering slot. Mirrors the status precedence in game/colony.js. */
+const URGENCY = { blocked: 0, waiting: 1, working: 2, celebrating: 3, spawning: 4, idle: 5, sleeping: 6, leaving: 7 }
+const URGENCY_RANK = (s) => (s in URGENCY ? URGENCY[s] : 9)
+
 const SUIT_TONES = [0xf3f1ec, 0xe8e4dc, 0xf7f4ee, 0xdfe4e8, 0xf1e9df]
 
 /** Trim + eye colour per behaviour. Eyes are pushed past 1.0 so the bloom pass catches them. */
@@ -471,7 +476,17 @@ export class Astronauts {
     // for them. Without this the clamp above would quietly drop whoever sorted last, which is
     // better than an empty planet but still not what the scan said.
     const leaving = this.agents.reduce((n, a) => n + (a.state === 'leaving' ? 1 : 0), 0)
-    const wanted = entries.slice(0, Math.max(1, cap - leaving))
+    // ...and whoever sorts last must not be the one astronaut holding a `?`. The clamp is a
+    // frame budget and stays, but it spends its slots on the crew that want something from
+    // you first: blocked, then waiting, then working, and the quiet ones last. Stable within
+    // a status, so a roster at the cap does not churn between polls, and placement is
+    // untouched because every entry carries its own site and anchor.
+    //
+    // Measured on a real colony: 151 live threads against a 90 cap, four of them unread. The
+    // panel read "4 need you" while pressing N answered "nobody is waiting on you right now",
+    // because all three waiting astronauts sorted past the slice and were never drawn.
+    const byUrgency = [...entries].sort((a, b) => URGENCY_RANK(a.status) - URGENCY_RANK(b.status))
+    const wanted = byUrgency.slice(0, Math.max(1, cap - leaving))
     const seen = new Set()
 
     // The ramp is one door and the ship is a solid obstacle around it, so an entrance is a

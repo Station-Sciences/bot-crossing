@@ -48,6 +48,8 @@ const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
 let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
+/** Guards queueSave: nothing is written until fetchState() has replaced the empty state above. */
+let stateLoaded = false
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -666,6 +668,20 @@ async function poll() {
 }
 
 function queueSave() {
+  // Nothing may be written before the file has been read. `state` above starts with an EMPTY
+  // archive list and is replaced by fetchState() during boot; a save queued inside that window
+  // PUTs the empty list and erases every archive on disk.
+  //
+  // The optimistic-concurrency guard does not cover this, by design: `baseUpdatedAt` is 0 until
+  // adoptBase() runs, and the server treats a zero base as a first write and allows it. That is
+  // right for a fresh install and wrong for a tab that simply has not finished loading.
+  //
+  // The damage is invisible, which is what makes it worth a guard rather than a comment:
+  // reconcileArchived re-asserts every thread that ALSO carries isArchived in its harness's own
+  // records, so a wiped file comes back looking populated rather than empty. Measured twice in
+  // a row while archiving 49 threads — an archive list of 50 read back as 11, which is exactly
+  // the number with a Claude Code desktop record.
+  if (!stateLoaded) return
   clearTimeout(pendingSave)
   pendingSave = setTimeout(async () => {
     try {
@@ -689,6 +705,7 @@ async function boot() {
     fetchState()
       .then((s) => {
         state = s
+        stateLoaded = true
         // Before the first roster: zones come back to the ground they were on last time.
         colony.restoreLayout(state.plots)
         // And the settings, but only for a browser that has none of its own — an explicit
@@ -696,7 +713,11 @@ async function boot() {
         if (!hasStoredSettings() && state.settings) settings.applyAll(state.settings)
       })
       .catch(() => {
-        /* first run, or the file is gone — an empty colony state is a valid one */
+        // Not "first run, or the file is gone": the server answers a missing file with an
+        // empty state rather than an error, so a rejection means it could not be reached and
+        // we do not know what is on disk. Saves stay off for this session and say so, because
+        // an archive that silently fails to persist is worse than one that refuses.
+        hud.toast('Could not read the saved colony — archiving is off until you reload', 'err')
       }),
     settle(loadKit()),
     settle(loadCrew()),
