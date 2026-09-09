@@ -868,7 +868,7 @@ engine.start()
 boot()
 
 // Handy for poking at the running colony from the console.
-window.botCrossing = { engine, rig, colony, settings, hud, poll, get threads() { return threads } }
+window.botCrossing = { engine, rig, colony, settings, hud, ambience, poll, get threads() { return threads } }
 
 /** `execCommand('copy')` over a throwaway textarea — the copy that predates permissions. */
 function copyFallback(text) {

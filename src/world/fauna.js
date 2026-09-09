@@ -1380,7 +1380,11 @@ export class Fauna {
     faunaUniforms.uTime.value = elapsed
     const motion = this.motion
     this.flock?.update(dt, night, hooks, motion)
-    this.meadow?.update(dt, camera, motion)
+    // Butterflies roost after dark; the fireflies take the night shift.
+    if (this.meadow) {
+      this.meadow.mesh.visible = night < 0.6
+      if (this.meadow.mesh.visible) this.meadow.update(dt, camera, motion)
+    }
     this.shoal?.update(dt, elapsed, hooks, motion)
     this.fleet?.update(dt, elapsed, hooks, motion)
   }
