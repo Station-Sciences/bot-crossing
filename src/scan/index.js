@@ -160,6 +160,22 @@ export class LocalScanner {
     this.folders.delete(harness)
     this._status()
     await this.scan()
+    // Removing the last folder is a request to stop showing those sessions anywhere, so the
+    // server's copy goes too; otherwise the planet would fall back to the snapshot it just
+    // stopped reading, on this computer and on every other one.
+    if (!this.folders.size && this.publish) {
+      this.lastSignature = ''
+      await this.publish(this._snapshot([])).catch(() => {})
+    }
+  }
+
+  _snapshot(threads) {
+    return {
+      threads: threads.map(({ ref, openHint, ...t }) => t),
+      harnesses: this.harnesses,
+      scannedAt: this.lastScanAt,
+      machine: { label: navigator.platform || 'computer', platform: navigator.platform || '' },
+    }
   }
 
   async scan() {
@@ -208,12 +224,7 @@ export class LocalScanner {
     if (signature === this.lastSignature) return
     this.lastSignature = signature
     try {
-      await this.publish({
-        threads: this.threads.map(({ ref, openHint, ...t }) => t),
-        harnesses: this.harnesses,
-        scannedAt: this.lastScanAt,
-        machine: { label: navigator.platform || 'computer', platform: navigator.platform || '' },
-      })
+      await this.publish(this._snapshot(this.threads))
     } catch {
       // The planet still renders from the live scan; the snapshot is only for other devices.
       this.lastSignature = ''

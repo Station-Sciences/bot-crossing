@@ -298,7 +298,11 @@ export class Colony {
     }
     this.dormantProjects = dormant
 
+    // Agents that live in the workspace itself come first: the roster is capped, and a crew of
+    // one would otherwise be the first thing a busy machine's threads push off the map.
+    const hosted = (list) => list.some((t) => t.harness === 'emrabot')
     const projects = [...byProject.entries()].sort((a, b) => {
+      if (hosted(a[1]) !== hosted(b[1])) return hosted(a[1]) ? -1 : 1
       if (b[1].length !== a[1].length) return b[1].length - a[1].length
       return a[0].localeCompare(b[0])
     })

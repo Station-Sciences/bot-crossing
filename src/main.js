@@ -679,8 +679,13 @@ function applyThreads(list) {
  * only ever be staler than the live one, so it is left out whenever a folder is being read.
  */
 function mergedThreads() {
-  if (!scanner?.active.length) return serverThreads
-  return [...scanner.threads, ...serverThreads.filter((t) => t.harness === 'emrabot')]
+  const crew = serverThreads.filter((t) => t.harness === 'emrabot')
+  if (scanner?.active.length) return [...scanner.threads, ...crew]
+  // No folder granted. A computer that could read one but has none is showing exactly what the
+  // person asked for — the crew and nothing else; only a device that cannot read folders at all,
+  // or one whose grant merely lapsed, borrows the last snapshot.
+  const lapsed = scanner && scanner.folders.size > 0
+  return scanner?.supported && !lapsed ? crew : serverThreads
 }
 
 let polling = false
