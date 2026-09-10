@@ -1611,8 +1611,36 @@ kbd {
     width: auto;
   }
 
-  /* 34px is a comfortable mouse target and a poor thumb one. Everything that can be tapped
-     goes up to 44, the smallest square a finger hits reliably. */
+  .stat {
+    height: 32px;
+    padding: 0 11px;
+  }
+
+  /* The card is placed in screen space by `placeCard`, which clamps to the window — but it
+     can only clamp a width that fits in the first place. */
+  .thread-pop {
+    width: min(284px, calc(100vw - 24px));
+  }
+  .thread-pop .pair {
+    flex-wrap: wrap;
+  }
+
+  /* One wide target beats a small one tucked in a corner, on the one control whose whole
+     job is getting out of this sheet. */
+  .help .help-actions .btn {
+    width: 100%;
+  }
+}
+
+/* ── tap targets ──────────────────────────────────────────────────────────────────── */
+
+/* 34px is a comfortable mouse target and a poor thumb one. Everything that can be tapped
+   goes up to 44, the smallest square a finger hits reliably.
+
+   Keyed on the pointer rather than on width, because a thumb is the same size on a tablet.
+   A width rule would leave a 768px iPad — a touch device by any measure, and one where the
+   sidebar is a full list of tappable rows — on targets picked for a mouse it does not have. */
+@media (hover: none) and (pointer: coarse) {
   .btn {
     height: 40px;
     min-width: 40px;
@@ -1633,10 +1661,6 @@ kbd {
   .rail .btn {
     width: 44px;
     height: 44px;
-  }
-  .stat {
-    height: 32px;
-    padding: 0 11px;
   }
   .side .repo,
   .side .hidden-toggle,
@@ -1668,21 +1692,6 @@ kbd {
   }
   .slider {
     height: 30px;
-  }
-
-  /* The card is placed in screen space by `placeCard`, which clamps to the window — but it
-     can only clamp a width that fits in the first place. */
-  .thread-pop {
-    width: min(284px, calc(100vw - 24px));
-  }
-  .thread-pop .pair {
-    flex-wrap: wrap;
-  }
-
-  /* One wide target beats a small one tucked in a corner, on the one control whose whole
-     job is getting out of this sheet. */
-  .help .help-actions .btn {
-    width: 100%;
   }
 }
 
