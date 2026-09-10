@@ -56,6 +56,9 @@ const emptyState = () => ({
   seen: {},
   hiddenProjects: [],
   viewedAt: {},
+  // Display-name overrides, keyed by the real project name. Cosmetic only — every lookup
+  // that actually finds a repo's threads still keys on the real name, never this one.
+  projectNames: {},
   settings: null,
   updatedAt: 0,
 })
@@ -75,6 +78,7 @@ async function readState() {
       seen: asObject(raw.seen),
       hiddenProjects: asArray(raw.hiddenProjects).map(String).filter(Boolean),
       viewedAt: asObject(raw.viewedAt),
+      projectNames: asObject(raw.projectNames),
       settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : null,
       updatedAt: Number(raw.updatedAt) || 0,
     }
@@ -110,6 +114,7 @@ async function writeState(next) {
     seen: asObject(next.seen),
     hiddenProjects: asArray(next.hiddenProjects).map(String).filter(Boolean),
     viewedAt: asObject(next.viewedAt),
+    projectNames: asObject(next.projectNames),
     settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
     updatedAt: Date.now(),
   }

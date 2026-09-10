@@ -9,8 +9,9 @@
 import claudeCode from './claude-code.mjs'
 import codex from './codex.mjs'
 import cursor from './cursor.mjs'
+import businessTasks from './business-tasks.mjs'
 
-export const HARNESSES = [claudeCode, codex, cursor]
+export const HARNESSES = [claudeCode, codex, cursor, businessTasks]
 
 export const harnessById = (id) => HARNESSES.find((h) => h.id === id) || null
 

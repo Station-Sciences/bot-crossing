@@ -4,10 +4,7 @@
     {
       "name": "bot-crossing",
       "runtimeExecutable": "npm",
-      "runtimeArgs": [
-        "run",
-        "dev"
-      ],
+      "runtimeArgs": ["run", "dev"],
       "port": 5274,
       "autoPort": true
     }

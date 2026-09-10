@@ -44,6 +44,7 @@ const ICON = {
   copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>`,
   locate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.6"/><path d="M12 1.8v2.6M12 19.6v2.6M1.8 12h2.6M19.6 12h2.6"/></svg>`,
   orbit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><ellipse cx="12" cy="12" rx="10.2" ry="4.6" transform="rotate(-24 12 12)"/><circle cx="21" cy="8.2" r="1.5" fill="currentColor" stroke="none"/></svg>`,
+  edit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>`,
 }
 
 const STAT_DEFS = [
@@ -367,6 +368,17 @@ export class Hud {
     on('#btn-reveal', 'click', () => this.actions.revealProject?.())
     on('#btn-copy-path', 'click', () => this.actions.copyProjectPath?.())
     on('#btn-hide-project', 'click', () => this.actions.hideProject?.())
+    on('#btn-rename-project', 'click', () => this.startRenameProject())
+    on('.side .name-edit', 'keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        this.commitRenameProject(true)
+      } else if (e.key === 'Escape') {
+        e.preventDefault()
+        this.commitRenameProject(false)
+      }
+    })
+    on('.side .name-edit', 'blur', () => this.commitRenameProject(true))
     on('#btn-hidden-toggle', 'click', () => this.toggleHiddenList())
     on('#btn-locate', 'click', () => this.actions.focusProject?.(this.project?.name))
     on('#btn-close-project', 'click', () => this.actions.closeProject?.())
@@ -404,7 +416,7 @@ export class Hud {
    */
   setLegend(projects, activeName = null, hidden = [], folded = []) {
     const signature =
-      projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
+      projects.map((p) => `${p.name}:${p.displayName}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
       `~${activeName}~` +
       hidden.map((p) => `${p.name}:${p.count}`).join('|') +
       `~${folded.length}`
@@ -414,14 +426,15 @@ export class Hud {
     const wrap = this.$('.projects')
     wrap.innerHTML = ''
     for (const p of projects) {
+      const label = p.displayName || p.name
       const b = document.createElement('button')
       b.type = 'button'
       b.className = 'repo'
-      b.title = `${p.count} thread${p.count === 1 ? '' : 's'} in ${p.name}`
+      b.title = `${p.count} thread${p.count === 1 ? '' : 's'} in ${label}`
       b.setAttribute('aria-pressed', String(p.name === activeName))
       b.innerHTML =
         `<i class="swatch" style="background:${hex(p.accent)};color:${hex(p.accent)}"></i>` +
-        `<span class="n">${escapeHtml(p.name)}</span>` +
+        `<span class="n">${escapeHtml(label)}</span>` +
         (p.urgent ? '<i class="alarm"></i>' : '') +
         `<span class="count">${p.count}</span>`
       b.addEventListener('click', () => this.actions.pickProject?.(p.name))
@@ -507,7 +520,8 @@ export class Hud {
     // nothing is happening keeps whatever "4m ago" it was first drawn with, for as long as
     // you leave the panel open.
     const signature =
-      `${project.name}~${project.path}~${project.accent}~${project.selectedId}~${Math.floor(Date.now() / 60000)}~` +
+      `${project.name}~${project.displayName}~${project.path}~${project.accent}~${project.selectedId}~` +
+      `${Math.floor(Date.now() / 60000)}~` +
       project.threads.map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}`).join('|')
     panel.classList.add('drilled')
     if (this._last.project === signature) return
@@ -516,7 +530,7 @@ export class Hud {
     const swatch = this.$('.side .who .swatch')
     swatch.style.background = hex(project.accent)
     swatch.style.color = hex(project.accent) // the halo is `currentColor`
-    this.$('.side .name').textContent = project.name
+    this.$('.side .name').textContent = project.displayName || project.name
     const path = this.$('.side .path')
     path.textContent = project.path ? shortPath(project.path) : 'folder unknown'
     path.title = project.path || ''
@@ -565,6 +579,26 @@ export class Hud {
     }
     list.scrollTop = scroll
     if (!project.selectedId) this._scrolledTo = null
+  }
+
+  /** Swap the name plate for a text field pre-filled with what it currently shows. */
+  startRenameProject() {
+    if (!this.project) return
+    const input = this.$('.side .name-edit')
+    input.value = this.$('.side .name').textContent
+    this.$('.side .name').hidden = true
+    input.hidden = false
+    input.focus()
+    input.select()
+  }
+
+  /** `save` false (Escape) discards the edit; true (Enter, or losing focus) applies it. */
+  commitRenameProject(save) {
+    const input = this.$('.side .name-edit')
+    if (input.hidden) return // Enter already committed before blur fired for the same edit.
+    input.hidden = true
+    this.$('.side .name').hidden = false
+    if (save && this.project) this.actions.renameProject?.(this.project.name, input.value)
   }
 
   /**
@@ -932,8 +966,10 @@ const TEMPLATE = `
         <i class="swatch"></i>
         <div class="text">
           <div class="name"></div>
+          <input class="name-edit" type="text" maxlength="80" hidden />
           <div class="path"></div>
         </div>
+        <button class="btn icon ghost" id="btn-rename-project" title="Rename this repo (display only)">${ICON.edit}</button>
         <button class="btn icon ghost" id="btn-locate" title="Fly to this zone">${ICON.locate}</button>
       </div>
       <div class="project-actions">

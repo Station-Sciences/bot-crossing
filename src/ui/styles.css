@@ -986,6 +986,33 @@ body {
   white-space: nowrap;
 }
 
+.side .name-edit {
+  display: block;
+  width: 100%;
+  font: inherit;
+  font-weight: 650;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 1px 6px;
+  margin: -2px 0;
+}
+
+/* `display: block` above outranks the UA `[hidden]{display:none}` rule on specificity
+   alone (two classes beat one attribute selector) — without this, `input.hidden = true`
+   stops hiding anything the moment the block rule above exists. */
+.side .name-edit[hidden] {
+  display: none;
+}
+
+.side .name-edit:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .side .path {
   font-size: 11px;
   color: var(--dim);
