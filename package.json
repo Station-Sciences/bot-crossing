@@ -37,7 +37,8 @@
     "start": "vite build && node server/serve.mjs",
     "serve": "node server/serve.mjs",
     "assets": "node tools/build-assets.mjs",
-    "test": "node --test \"test/**/*.test.mjs\""
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "build:hosted": "npm run assets --silent && BOT_CROSSING_HOSTED=1 vite build"
   },
   "dependencies": {
     "@mdi/js": "^7.4.47",

@@ -1,7 +1,26 @@
 import { mergeState } from './merge-state.js'
 
+/**
+ * Hosted or local. Local is `npm run dev`: the API lives in the Vite server on this machine
+ * and does the scanning itself. Hosted is the same page served by a workspace: the scanning
+ * happens in the page (see `src/scan/`), the server only keeps the colony file and a snapshot,
+ * and every request carries the workspace's sign-in cookie.
+ */
+export const HOSTED = import.meta.env.VITE_HOSTED === '1'
+const API = import.meta.env.VITE_API_BASE || '/api'
+
+/** Where the workspace's sign-in lives; it comes back to this page afterwards. */
+function signInRedirect() {
+  const next = window.location.pathname + window.location.search
+  window.location.assign(`/?next=${encodeURIComponent(next)}`)
+}
+
 async function req(url, options) {
-  const res = await fetch(url, options)
+  const res = await fetch(url, { credentials: 'same-origin', ...options })
+  if (HOSTED && res.status === 401) {
+    signInRedirect()
+    throw new Error('Sign in to see your planet')
+  }
   const body = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`)
   return body
@@ -14,7 +33,7 @@ const post = (url, payload) =>
     body: JSON.stringify(payload),
   })
 
-export const fetchThreads = () => req('/api/threads')
+export const fetchThreads = () => req(`${API}/threads`)
 
 /**
  * The colony file, and the base every later save is measured against.
@@ -35,7 +54,7 @@ function adoptBase(state, updatedAt) {
 }
 
 export const fetchState = async () => {
-  const state = await req('/api/state')
+  const state = await req(`${API}/state`)
   adoptBase(state)
   return state
 }
@@ -58,11 +77,16 @@ const SAVE_TRIES = 3
 export async function saveState(state) {
   let local = state
   for (let attempt = 0; attempt < SAVE_TRIES; attempt++) {
-    const res = await fetch('/api/state', {
+    const res = await fetch(`${API}/state`, {
       method: 'PUT',
+      credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...local, baseUpdatedAt }),
     })
+    if (HOSTED && res.status === 401) {
+      signInRedirect()
+      throw new Error('Sign in to see your planet')
+    }
     const body = await res.json().catch(() => ({}))
 
     if (res.status === 409) {
@@ -82,13 +106,40 @@ export async function saveState(state) {
 /**
  * Hand a thread back to whichever harness owns it — the desktop app comes forward on its own.
  *
- * `ref` is opaque here on purpose: it is whatever that harness's adapter needs to find the
- * thread again, and the browser only ever passes it straight back. Nothing in the UI knows
- * what a Claude Code session id, or a Codex rollout id, actually looks like.
+ * Locally the server hands the harness's deep link to the OS opener. Hosted, the page *is* on
+ * the machine that runs the harness, so it navigates to the deep link itself and the browser
+ * asks the OS to open it. `ref` stays opaque either way: whatever the harness's adapter needs
+ * to find the thread again.
  */
-export const openThread = (thread) => post('/api/open', { harness: thread.harness, ref: thread.ref })
+export const openThread = (thread) => {
+  if (!HOSTED) return post(`${API}/open`, { harness: thread.harness, ref: thread.ref })
+  if (!thread.canOpen || !thread.openUrl) {
+    throw new Error(thread.openHint || 'That thread cannot be opened from here')
+  }
+  return openDeepLink(thread.openUrl)
+}
+
+/** Navigate to a `harness://` link. The page stays put; the OS hands the link to its app. */
+export function openDeepLink(url) {
+  window.location.assign(url)
+  return Promise.resolve({ ok: true, url })
+}
 
 /** A brand new thread in a repo, via that harness's own new-session deep link. */
-export const newSession = (folder, harness) => post('/api/new-session', { folder, harness })
+export const newSession = (folder, harness) => post(`${API}/new-session`, { folder, harness })
 
-export const revealFolder = (folder) => post('/api/reveal', { folder })
+export const revealFolder = (folder) => {
+  if (HOSTED) return Promise.reject(new Error('Not available on a hosted planet — the folder is on your computer'))
+  return post(`${API}/reveal`, { folder })
+}
+
+/** Hosted only: what the in-page scanner saw, so the planet shows from another device too. */
+export const putSnapshot = async (snapshot) => {
+  const res = await fetch(`${API}/snapshot`, {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(snapshot),
+  })
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+}

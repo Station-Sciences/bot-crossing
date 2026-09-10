@@ -1418,3 +1418,129 @@ kbd {
   }
 }
 .bot-crossing-canvas { cursor: grab; }
+
+/* ── crew: how a hosted planet gets its astronauts ───────────────────────────────── */
+
+.crew-chip {
+  position: fixed;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: min(92vw, 640px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.crew-chip::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dim);
+  flex: none;
+}
+.crew-chip[data-kind='on']::before { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.crew-chip[data-kind='warn']::before { background: var(--amber); }
+.crew-chip:hover { border-color: var(--line-strong); }
+.hud.hidden ~ .crew .crew-chip { display: none; }
+
+.crew-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 5, 8, 0.55);
+  backdrop-filter: blur(6px);
+}
+.crew-overlay[hidden] { display: none; }
+.crew-dialog {
+  position: relative;
+  width: min(100%, 760px);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  padding: 26px 26px 22px;
+}
+.crew-dialog h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+.crew-sub {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 13.5px;
+  max-width: 60ch;
+}
+.crew-close { position: absolute; top: 14px; right: 14px; }
+.crew-cards {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 640px) { .crew-cards { grid-template-columns: 1fr; } }
+.crew-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.025);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.crew-card h3 { margin: 0; font-size: 15px; }
+.crew-card p { margin: 0; color: var(--muted); font-size: 13px; }
+.crew-card code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  color: var(--text);
+}
+.crew-hint { color: var(--dim); font-size: 12px; }
+.crew-hint:empty { display: none; }
+.crew-price { color: var(--text); font-weight: 600; }
+.crew-add { display: flex; flex-wrap: wrap; gap: 8px; }
+.crew-add:empty { display: none; }
+.crew-drop {
+  border: 1px dashed var(--line-strong);
+  border-radius: 10px;
+  padding: 12px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+.crew-drop.over { border-color: var(--accent); color: var(--text); }
+.crew-folders { display: flex; flex-direction: column; gap: 6px; }
+.crew-folders:empty { display: none; }
+.crew-folder {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12.5px;
+}
+.crew-folder .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+.crew-folder.granted .dot { background: var(--green); }
+.crew-folder.prompt .dot { background: var(--amber); }
+.crew-folder.denied .dot { background: var(--red); }
+.crew-folder-name { flex: 1 1 auto; }
+.crew-folder-state { color: var(--muted); }
+.crew-unsupported { color: var(--amber); }
+.crew-skip { margin-top: 14px; }

@@ -10,14 +10,19 @@ import { loadKit } from './world/kit.js'
 import { crewRig, loadCrew } from './agents/crew.js'
 import { TIMES } from './world/sky.js'
 import {
+  HOSTED,
   fetchThreads,
   fetchState,
   saveState,
   openThread,
+  openDeepLink,
   newSession,
+  putSnapshot,
   revealFolder,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
+import { LocalScanner } from './scan/index.js'
+import { CrewPanel } from './ui/crew.js'
 
 /**
  * Boot and the outer game loop.
@@ -35,7 +40,7 @@ app.insertAdjacentHTML(
   'beforeend',
   `<div class="boot"><div class="inner">
      <h1>Bot Crossing</h1>
-     <p>Scanning for agent threads…</p>
+     <p>${HOSTED ? 'Loading your planet…' : 'Scanning for agent threads…'}</p>
      <div class="bar"><i></i></div>
    </div></div>`
 )
@@ -49,6 +54,11 @@ const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer
 
 let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
 let threads = []
+/** Hosted only: the page's own scanner and the panel that manages what it reads. */
+let scanner = null
+let crew = null
+/** What the server answered last — on a hosted planet, its snapshot plus the workspace's own agents. */
+let serverThreads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
 /** The zone layout as last written to the colony file, so an unchanged map is not re-saved. */
@@ -148,7 +158,14 @@ const actions = {
     }
     try {
       const harness = harnessForProject(name)
-      await newSession(folder, harness)
+      if (HOSTED) {
+        // The page is on the machine that runs the harness, so it opens the deep link itself.
+        const url = scanner?.newSessionUrl(harness, folder)
+        if (!url) throw new Error('That harness has no new-thread link from here')
+        await openDeepLink(url)
+      } else {
+        await newSession(folder, harness)
+      }
       hud.toast(`New thread in ${name} — opening ${harnessLabel(harness)}`)
       // It lands as an astronaut walking down the ramp, once it has a record to scan.
       setTimeout(poll, 6000)
@@ -649,13 +666,24 @@ function applyThreads(list) {
   }
 }
 
+/**
+ * Hosted: what this page scanned, plus whatever the workspace itself runs. The server also
+ * holds a copy of our own scan — the snapshot it shows on a phone — but here that copy would
+ * only ever be staler than the live one, so it is left out whenever a folder is being read.
+ */
+function mergedThreads() {
+  if (!scanner?.active.length) return serverThreads
+  return [...scanner.threads, ...serverThreads.filter((t) => t.harness === 'emrabot')]
+}
+
 let polling = false
 async function poll() {
   if (polling) return
   polling = true
   try {
     const res = await fetchThreads()
-    applyThreads(res.threads || [])
+    serverThreads = res.threads || []
+    applyThreads(HOSTED ? mergedThreads() : serverThreads)
     hud.removeBoot()
   } catch (err) {
     hud.toast(err.message || 'Could not reach the thread scanner', 'err')
@@ -708,6 +736,18 @@ async function boot() {
   colony.astronauts.setRig(crewRig())
   if (!kitError) colony.onAssetsReady()
 
+  if (HOSTED) {
+    scanner = new LocalScanner({
+      onThreads: () => applyThreads(mergedThreads()),
+      onStatus: (status) => crew?.setStatus(status),
+      publish: putSnapshot,
+    })
+    crew = new CrewPanel(app, { scanner, toast: (message, kind) => hud.toast(message, kind) })
+    await scanner.init()
+    scanner.start(POLL_MS)
+    window.addEventListener('focus', () => scanner.scan())
+  }
+
   await poll()
   setInterval(poll, POLL_MS)
   window.addEventListener('focus', poll)
@@ -716,7 +756,12 @@ async function boot() {
     if (!document.hidden) poll()
   })
 
-  if (!localStorage.getItem('botcrossing.seen-help')) {
+  // A hosted planet with nothing on it yet asks how it should be crewed, and that question
+  // takes the place of the help card on a first visit — two dialogs at once is one too many.
+  const needsCrew = HOSTED && !scanner.active.length && !threads.length
+  if (needsCrew) crew.open()
+
+  if (!needsCrew && !localStorage.getItem('botcrossing.seen-help')) {
     hud.toggleHelp(true)
     localStorage.setItem('botcrossing.seen-help', '1')
   } else {
