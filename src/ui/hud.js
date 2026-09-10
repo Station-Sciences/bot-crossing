@@ -678,7 +678,8 @@ export class Hud {
   updateAvatar(faceAtlasCanvas) {
     if (!this.selected || !faceAtlasCanvas) return
     const agent = this.selected.agent
-    const frame = agent.faceFrame ?? FACE.idle
+    // Shifted into the agent's species block, so an alien's card wears the alien's face.
+    const frame = (agent.faceFrame ?? FACE.idle) + (agent.faceBase ?? 0)
     const color = agent.eye
     const css = cssFromGlow(color)
     if (this._avatarState.frame === frame && this._avatarState.color === css) return

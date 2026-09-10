@@ -1,7 +1,8 @@
 import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
-import { buildFaceAtlas, FACE, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './faces.js'
+import { buildFaceAtlas, FACE, FACE_COUNT, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './faces.js'
 import { attachMatrixAt, decorateSkinned, frameFor } from './crew.js'
+import { hash, SPECIES, speciesFor } from './species.js'
 
 /**
  * Every astronaut in the colony, drawn in seven draw calls.
@@ -508,6 +509,12 @@ export class Astronauts {
       ? new THREE.Vector3(door.x + jitter(), 0, door.z + jitter())
       : new THREE.Vector3(site.x + jitter(), 0, site.z + jitter())
 
+    // Everything an astronaut is born as comes out of one hash of its id, each trait from
+    // its own bit window so no trait is welded to another.
+    const h = hash(entry.id)
+    const species = SPECIES[speciesFor(h)]
+    const suit = SUIT_TONES[(h >>> 3) % SUIT_TONES.length]
+
     const agent = {
       id: entry.id,
       thread: entry.thread,
@@ -532,7 +539,15 @@ export class Astronauts {
       faceFrame: FACE.boot,
       faceTimer: 0,
       faceIndex: 0,
-      suit: SUIT_TONES[(hash(entry.id) >>> 3) % SUIT_TONES.length],
+      // The helmet keeps the colony's suit palette for every species — the crew reads as
+      // one crew that way — while the body carries the skin, so an alien is a coloured
+      // figure inside standard-issue kit rather than a differently painted astronaut.
+      suit,
+      skin: species.tones ? species.tones[(h >>> 7) % species.tones.length] : suit,
+      // Species stature plus a little personal jitter, so a species is a range, not a rank.
+      height: species.height + (((h >>> 9) % 7) - 3) * 0.01,
+      // Which four-row block of the face atlas this astronaut's expressions come from.
+      faceBase: species.faceLayout * FACE_COUNT,
       eye: new THREE.Color(1, 1, 1),
       trim: new THREE.Color(0xffffff),
       hop: 0,
@@ -1172,11 +1187,12 @@ export class Astronauts {
       if (s <= 0.001) continue
 
       // Root transform for the whole character. The rig is authored at 2.2 units tall, so
-      // CREW_SCALE rides along here and everything downstream inherits it.
+      // CREW_SCALE rides along here and everything downstream inherits it — including the
+      // species height, which is why a tall astronaut's helmet fits without a second knob.
       e.set(0, agent.yaw, 0)
       q.setFromEuler(e)
       v.set(agent.pos.x, agent.pos.y, agent.pos.z)
-      root.compose(v, q, one.setScalar(s * CREW_SCALE))
+      root.compose(v, q, one.setScalar(s * CREW_SCALE * agent.height))
       one.setScalar(1)
 
       if (crew) {
@@ -1214,7 +1230,7 @@ export class Astronauts {
       const c = this._color
       if (agent.index !== i || agent.colorDirty) {
         agent.colorDirty = false
-        crew?.setColorAt(i, c.setHex(agent.suit))
+        crew?.setColorAt(i, c.setHex(agent.skin))
         helmet.setColorAt(i, c.setHex(agent.suit))
         pack.setColorAt(i, agent.trim)
         face.setColorAt(i, agent.eye)
@@ -1229,8 +1245,8 @@ export class Astronauts {
       tip.setColorAt(i, c.copy(agent.eye).multiplyScalar(0.6 + pulse * 1.1))
       lamp.setColorAt(i, c.copy(agent.trim).multiplyScalar(0.7 + pulse * 1.6))
 
-      // Atlas frame for the face.
-      const f = agent.faceFrame
+      // Atlas frame for the face — the expression, shifted into this species' row block.
+      const f = agent.faceFrame + agent.faceBase
       frames[i * 2] = (f % FRAME_COLS) / FRAME_COLS
       frames[i * 2 + 1] = 1 - (Math.floor(f / FRAME_COLS) + 1) / FRAME_ROWS
 
@@ -1272,7 +1288,9 @@ export class Astronauts {
 
     for (const agent of this.agents) {
       if (agent.scale < 0.3 || agent.state === 'gone') continue
-      v.set(agent.pos.x, agent.pos.y + (this.headHeight || 0.75), agent.pos.z).project(camera)
+      // The species height scales the whole rig, head included — without it here a click
+      // aimed at a tall astronaut's helmet lands over a short one's shoulder.
+      v.set(agent.pos.x, agent.pos.y + (this.headHeight || 0.75) * agent.height, agent.pos.z).project(camera)
       if (v.z > 1) continue // behind the camera
       agent.screen.copy(v)
       const dx = (v.x - ndcX) * aspect
@@ -1489,13 +1507,3 @@ function ring(inner, outer, color, opacity) {
   return mesh
 }
 
-function hash(str) {
-  let h = 2166136261
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-  }
-  return h >>> 0
-}
-
-export { hash }

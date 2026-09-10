@@ -4,16 +4,21 @@ import * as THREE from 'three'
  * The little digital faces.
  *
  * Every astronaut's visor is a tiny screen showing one of sixteen expressions. They are all
- * drawn once into a single 4×4 canvas atlas as a white-on-black *mask*, never as finished
- * artwork — the colour arrives per-astronaut at draw time, so one 512px texture gives every
+ * drawn once into a single canvas atlas as a white-on-black *mask*, never as finished
+ * artwork — the colour arrives per-astronaut at draw time, so one texture gives every
  * agent its own eye colour without a second byte of memory.
  *
  * The mask is read out of the red channel and used to blend between the dark screen and the
  * astronaut's glow colour, which is why the atlas is deliberately pure black and pure white.
+ *
+ * Each species is a four-row block of the same sixteen expressions, redrawn with its own
+ * eye layout — the drawing routines below take the layout as a parameter, so a new species
+ * is a line in EYE_LAYOUTS, never sixteen hand-drawn frames. An agent selects its block by
+ * adding `faceBase` (layout × FACE_COUNT) to the frame index; the row-major index math the
+ * consumers already do then lands in the right block untouched.
  */
 
 export const FRAME_COLS = 4
-export const FRAME_ROWS = 4
 
 /** Frame ids, in atlas order. The index is what gets pushed to the GPU per instance. */
 export const FACE = {
@@ -35,6 +40,30 @@ export const FACE = {
   sad: 15,
 }
 
+export const FACE_COUNT = Object.keys(FACE).length
+
+/**
+ * One entry per species face: where the eyes sit in the unit cell, and `s`, a size factor
+ * every eye-shaped stroke is multiplied by. Layout 0 is the human face and its numbers are
+ * load-bearing: they are the constants the sixteen expressions were originally authored
+ * against, and with s = 1 every multiply below is exact — so the human rows come out
+ * bit-identical to the pre-species atlas.
+ *
+ * Eyes are ordered left-to-right because a couple of expressions are handed (the wink is
+ * always the first eye; chevrons and brows point toward the face's middle).
+ */
+export const EYE_LAYOUTS = [
+  { eyes: [[0.31, 0.42], [0.69, 0.42]], s: 1 },
+  // One big eye. Oversized on purpose: a lone human-sized eye reads as a smudge.
+  { eyes: [[0.5, 0.42]], s: 1.4 },
+  // Three eyes, smaller so the extra one fits above without touching the mouth work.
+  { eyes: [[0.31, 0.44], [0.69, 0.44], [0.5, 0.28]], s: 0.8 },
+  // Wide-set.
+  { eyes: [[0.22, 0.4], [0.78, 0.4]], s: 0.92 },
+]
+
+export const FRAME_ROWS = (FACE_COUNT / FRAME_COLS) * EYE_LAYOUTS.length
+
 /** Little loops the agent code plays instead of picking single frames. */
 export const FACE_LOOPS = {
   thinking: [FACE.think1, FACE.think2, FACE.think3, FACE.think2],
@@ -47,27 +76,33 @@ export const FACE_LOOPS = {
 
 export function buildFaceAtlas(size = 512) {
   const canvas = document.createElement('canvas')
-  canvas.width = size
-  canvas.height = size
-  const ctx = canvas.getContext('2d')
   const cell = size / FRAME_COLS
+  // Taller, not denser: the species blocks stack below the human one, so a cell keeps the
+  // pixels it always had and the human rows land at exactly their old coordinates.
+  canvas.width = size
+  canvas.height = cell * FRAME_ROWS
+  const ctx = canvas.getContext('2d')
 
   ctx.fillStyle = '#000'
-  ctx.fillRect(0, 0, size, size)
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  for (const [name, index] of Object.entries(FACE)) {
-    const cx = (index % FRAME_COLS) * cell
-    const cy = Math.floor(index / FRAME_COLS) * cell
-    ctx.save()
-    ctx.translate(cx, cy)
-    // Every drawing routine works in a 0..1 box, so the atlas can change size freely.
-    ctx.scale(cell, cell)
-    ctx.fillStyle = '#fff'
-    ctx.strokeStyle = '#fff'
-    ctx.lineCap = 'round'
-    ctx.lineJoin = 'round'
-    DRAW[name](ctx)
-    ctx.restore()
+  for (let l = 0; l < EYE_LAYOUTS.length; l++) {
+    const layout = EYE_LAYOUTS[l]
+    for (const [name, index] of Object.entries(FACE)) {
+      const f = l * FACE_COUNT + index
+      const cx = (f % FRAME_COLS) * cell
+      const cy = Math.floor(f / FRAME_COLS) * cell
+      ctx.save()
+      ctx.translate(cx, cy)
+      // Every drawing routine works in a 0..1 box, so the atlas can change size freely.
+      ctx.scale(cell, cell)
+      ctx.fillStyle = '#fff'
+      ctx.strokeStyle = '#fff'
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      DRAW[name](ctx, layout)
+      ctx.restore()
+    }
   }
 
   const texture = new THREE.CanvasTexture(canvas)
@@ -83,9 +118,12 @@ export function buildFaceAtlas(size = 512) {
 
 // ── drawing helpers, all in a 0..1 unit box ────────────────────────────────────────────
 
-const EYE_L = 0.31
-const EYE_R = 0.69
-const EYE_Y = 0.42
+/**
+ * Which way a feature that has a direction should point, given where its eye sits. The
+ * face's middle is the reference, not "left eye / right eye" — a centred eye has to pick a
+ * side, and it picks the left form so a one-eyed cheer still reads as squeezed shut.
+ */
+const inward = (x) => (x <= 0.5 ? -1 : 1)
 
 function dot(ctx, x, y, r) {
   ctx.beginPath()
@@ -184,69 +222,66 @@ function zzz(ctx) {
   z(0.93, 0.33, 0.03)
 }
 
+/**
+ * The sixteen expressions, each drawn for whatever eye layout `L` it is handed. Eye
+ * shapes, their offsets and their highlights scale by `L.s`; mouths, blush and the boot
+ * screen do not — they are the part of an expression every species shares, which is what
+ * keeps a status readable no matter who is showing it.
+ */
 const DRAW = {
-  idle(ctx) {
-    eye(ctx, EYE_L, EYE_Y, 0.17, 0.22)
-    eye(ctx, EYE_R, EYE_Y, 0.17, 0.22)
+  idle(ctx, L) {
+    for (const [x, y] of L.eyes) eye(ctx, x, y, 0.17 * L.s, 0.22 * L.s)
     smile(ctx, 0.66, 0.26, 0.13)
   },
 
-  blink(ctx) {
-    arcEye(ctx, EYE_L, EYE_Y, 0.19, false)
-    arcEye(ctx, EYE_R, EYE_Y, 0.19, false)
+  blink(ctx, L) {
+    for (const [x, y] of L.eyes) arcEye(ctx, x, y, 0.19 * L.s, false)
     smile(ctx, 0.66, 0.26, 0.13)
   },
 
-  happy(ctx) {
-    arcEye(ctx, EYE_L, EYE_Y, 0.21, true, 0.06)
-    arcEye(ctx, EYE_R, EYE_Y, 0.21, true, 0.06)
+  happy(ctx, L) {
+    for (const [x, y] of L.eyes) arcEye(ctx, x, y, 0.21 * L.s, true, 0.06)
     grin(ctx, 0.62, 0.3, 0.12)
     blush(ctx, 0.54)
   },
 
   // Focused: eyes squashed to a determined squint, mouth set in a small line.
-  work(ctx) {
-    eye(ctx, EYE_L, EYE_Y + 0.01, 0.19, 0.12)
-    eye(ctx, EYE_R, EYE_Y + 0.01, 0.19, 0.12)
+  work(ctx, L) {
+    for (const [x, y] of L.eyes) eye(ctx, x, y + 0.01 * L.s, 0.19 * L.s, 0.12 * L.s)
     smile(ctx, 0.68, 0.16, 0.03)
   },
 
-  think1(ctx) {
-    thinking(ctx, 1)
+  think1(ctx, L) {
+    thinking(ctx, L, 1)
   },
-  think2(ctx) {
-    thinking(ctx, 2)
+  think2(ctx, L) {
+    thinking(ctx, L, 2)
   },
-  think3(ctx) {
-    thinking(ctx, 3)
+  think3(ctx, L) {
+    thinking(ctx, L, 3)
   },
 
   // Waiting on you: wide open eyes with a highlight, small patient `o`.
-  wait(ctx) {
-    eye(ctx, EYE_L, EYE_Y, 0.2, 0.26)
-    eye(ctx, EYE_R, EYE_Y, 0.2, 0.26)
+  wait(ctx, L) {
+    for (const [x, y] of L.eyes) eye(ctx, x, y, 0.2 * L.s, 0.26 * L.s)
     ctx.save()
     ctx.globalCompositeOperation = 'destination-out'
-    dot(ctx, EYE_L + 0.045, EYE_Y - 0.06, 0.032)
-    dot(ctx, EYE_R + 0.045, EYE_Y - 0.06, 0.032)
+    for (const [x, y] of L.eyes) dot(ctx, x + 0.045 * L.s, y - 0.06 * L.s, 0.032 * L.s)
     ctx.restore()
     openMouth(ctx, 0.69, 0.1, 0.1)
   },
 
-  alert(ctx) {
-    eye(ctx, EYE_L, EYE_Y, 0.23, 0.29)
-    eye(ctx, EYE_R, EYE_Y, 0.23, 0.29)
+  alert(ctx, L) {
+    for (const [x, y] of L.eyes) eye(ctx, x, y, 0.23 * L.s, 0.29 * L.s)
     ctx.save()
     ctx.globalCompositeOperation = 'destination-out'
-    dot(ctx, EYE_L + 0.05, EYE_Y - 0.07, 0.036)
-    dot(ctx, EYE_R + 0.05, EYE_Y - 0.07, 0.036)
+    for (const [x, y] of L.eyes) dot(ctx, x + 0.05 * L.s, y - 0.07 * L.s, 0.036 * L.s)
     ctx.restore()
     openMouth(ctx, 0.71, 0.15, 0.13)
   },
 
-  error(ctx) {
-    crossEye(ctx, EYE_L, EYE_Y, 0.17)
-    crossEye(ctx, EYE_R, EYE_Y, 0.17)
+  error(ctx, L) {
+    for (const [x, y] of L.eyes) crossEye(ctx, x, y, 0.17 * L.s)
     // A wobbly mouth — three little humps.
     ctx.lineWidth = 0.05
     ctx.beginPath()
@@ -256,42 +291,44 @@ const DRAW = {
     ctx.stroke()
   },
 
-  sleep(ctx) {
-    arcEye(ctx, EYE_L, EYE_Y, 0.19, false)
-    arcEye(ctx, EYE_R, EYE_Y, 0.19, false)
+  sleep(ctx, L) {
+    for (const [x, y] of L.eyes) arcEye(ctx, x, y, 0.19 * L.s, false)
     openMouth(ctx, 0.69, 0.09, 0.11)
     zzz(ctx)
   },
 
-  wink(ctx) {
-    arcEye(ctx, EYE_L, EYE_Y, 0.2, true, 0.06)
-    eye(ctx, EYE_R, EYE_Y, 0.17, 0.22)
+  wink(ctx, L) {
+    // The first eye winks, whoever it belongs to; the rest stay open.
+    L.eyes.forEach(([x, y], i) => {
+      if (i === 0) arcEye(ctx, x, y, 0.2 * L.s, true, 0.06)
+      else eye(ctx, x, y, 0.17 * L.s, 0.22 * L.s)
+    })
     smile(ctx, 0.66, 0.28, 0.15)
     blush(ctx, 0.54)
   },
 
-  love(ctx) {
-    heartEye(ctx, EYE_L, EYE_Y, 0.15)
-    heartEye(ctx, EYE_R, EYE_Y, 0.15)
+  love(ctx, L) {
+    for (const [x, y] of L.eyes) heartEye(ctx, x, y, 0.15 * L.s)
     grin(ctx, 0.63, 0.26, 0.1)
   },
 
-  cheer(ctx) {
-    // `> <` squeezed-shut delight.
+  cheer(ctx, L) {
+    // `> <` squeezed-shut delight, each chevron pointing in at the face's middle.
     ctx.lineWidth = 0.055
     ctx.beginPath()
-    ctx.moveTo(EYE_L - 0.09, EYE_Y - 0.08)
-    ctx.lineTo(EYE_L + 0.04, EYE_Y)
-    ctx.lineTo(EYE_L - 0.09, EYE_Y + 0.08)
-    ctx.moveTo(EYE_R + 0.09, EYE_Y - 0.08)
-    ctx.lineTo(EYE_R - 0.04, EYE_Y)
-    ctx.lineTo(EYE_R + 0.09, EYE_Y + 0.08)
+    for (const [x, y] of L.eyes) {
+      const out = inward(x)
+      ctx.moveTo(x + out * 0.09 * L.s, y - 0.08 * L.s)
+      ctx.lineTo(x - out * 0.04 * L.s, y)
+      ctx.lineTo(x + out * 0.09 * L.s, y + 0.08 * L.s)
+    }
     ctx.stroke()
     grin(ctx, 0.6, 0.34, 0.16)
     blush(ctx, 0.52)
   },
 
-  // Booting up: a scanning bar, shown for the first moment out of the ship.
+  // Booting up: a scanning bar, shown for the first moment out of the ship. The screen is
+  // the same for every species — nobody's eyes are open yet.
   boot(ctx) {
     ctx.globalAlpha = 0.55
     for (let i = 0; i < 4; i++) ctx.fillRect(0.16, 0.3 + i * 0.06, 0.68, 0.022)
@@ -301,29 +338,27 @@ const DRAW = {
     ctx.fillRect(0.56, 0.62, 0.28, 0.055)
   },
 
-  sad(ctx) {
-    eye(ctx, EYE_L, EYE_Y + 0.02, 0.16, 0.19)
-    eye(ctx, EYE_R, EYE_Y + 0.02, 0.16, 0.19)
+  sad(ctx, L) {
+    for (const [x, y] of L.eyes) eye(ctx, x, y + 0.02 * L.s, 0.16 * L.s, 0.19 * L.s)
     // Droopy brows.
     ctx.lineWidth = 0.045
     ctx.beginPath()
-    ctx.moveTo(EYE_L - 0.1, EYE_Y - 0.17)
-    ctx.lineTo(EYE_L + 0.08, EYE_Y - 0.12)
-    ctx.moveTo(EYE_R + 0.1, EYE_Y - 0.17)
-    ctx.lineTo(EYE_R - 0.08, EYE_Y - 0.12)
+    for (const [x, y] of L.eyes) {
+      const out = inward(x)
+      ctx.moveTo(x + out * 0.1 * L.s, y - 0.17 * L.s)
+      ctx.lineTo(x - out * 0.08 * L.s, y - 0.12 * L.s)
+    }
     ctx.stroke()
     smile(ctx, 0.72, 0.24, -0.11)
   },
 }
 
 /** Eyes rolled up and to the side, with a growing run of dots. */
-function thinking(ctx, dots) {
-  eye(ctx, EYE_L, EYE_Y - 0.03, 0.16, 0.19)
-  eye(ctx, EYE_R, EYE_Y - 0.03, 0.16, 0.19)
+function thinking(ctx, L, dots) {
+  for (const [x, y] of L.eyes) eye(ctx, x, y - 0.03 * L.s, 0.16 * L.s, 0.19 * L.s)
   ctx.save()
   ctx.globalCompositeOperation = 'destination-out'
-  dot(ctx, EYE_L - 0.03, EYE_Y - 0.09, 0.045)
-  dot(ctx, EYE_R - 0.03, EYE_Y - 0.09, 0.045)
+  for (const [x, y] of L.eyes) dot(ctx, x - 0.03 * L.s, y - 0.09 * L.s, 0.045 * L.s)
   ctx.restore()
   for (let i = 0; i < dots; i++) dot(ctx, 0.38 + i * 0.12, 0.69, 0.032)
 }
