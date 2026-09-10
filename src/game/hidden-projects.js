@@ -13,6 +13,8 @@
  * same trade — so both are wrong in the same direction, which is at least predictable.
  */
 
+import { projectKey } from './roster.js'
+
 export function hideProject(hidden, name) {
   const id = String(name || '')
   if (!id || hidden.includes(id)) return [...hidden]
@@ -28,7 +30,7 @@ export function unhideProject(hidden, name) {
 export function liveThreadsForColony(threads, archivedIds, hiddenProjects) {
   const archived = archivedIds instanceof Set ? archivedIds : new Set(archivedIds)
   const hidden = hiddenProjects instanceof Set ? hiddenProjects : new Set(hiddenProjects)
-  return threads.filter((t) => !t.archived && !archived.has(t.id) && !hidden.has(t.project || 'unknown'))
+  return threads.filter((t) => !t.archived && !archived.has(t.id) && !hidden.has(projectKey(t)))
 }
 
 /**
@@ -39,6 +41,6 @@ export function hiddenCatalog(hidden, threads) {
   const names = [...new Set(hidden.map(String).filter(Boolean))].sort((a, b) => a.localeCompare(b))
   return names.map((name) => ({
     name,
-    count: threads.filter((t) => !t.archived && (t.project || 'unknown') === name).length,
+    count: threads.filter((t) => !t.archived && projectKey(t) === name).length,
   }))
 }

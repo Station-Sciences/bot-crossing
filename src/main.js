@@ -3,7 +3,8 @@ import './ui/styles.css'
 import { DEFAULT_PRESET, Settings, hasStoredSettings } from './core/settings.js'
 import { Engine } from './core/engine.js'
 import { CameraRig } from './core/camera.js'
-import { Colony, STATUS_LABEL, STATUS_ORDER, statusFor, transcriptProgress } from './game/colony.js'
+import { Colony, STATUS_LABEL, statusFor, transcriptProgress } from './game/colony.js'
+import { projectKey, statusRank } from './game/roster.js'
 import { Hud } from './ui/hud.js'
 import { PLANETS } from './world/planet.js'
 import { loadKit } from './world/kit.js'
@@ -105,8 +106,28 @@ const actions = {
   /** Fly to the next astronaut in a given state, cycling through them on repeat presses. */
   focusStatus: (status) => {
     const key = status === 'agents' ? null : status
-    const pool = colony.astronauts.agents.filter((a) => (key ? a.status === key : true))
+    // Leavers keep their status for the walk to the ship; flying to one parks the camera
+    // on an astronaut mid-despawn.
+    const pool = colony.astronauts.agents.filter((a) => a.state !== 'leaving' && (key ? a.status === key : true))
     if (!pool.length) {
+      // Counted in the chips but capped out of the crew: the zone card still lists every
+      // thread, so open the project instead of dead-ending on a hint. Threads group under
+      // 'unknown' when they carry no project, same as the colony does. Shares the cursor
+      // with the pool path so repeat presses cycle here too.
+      const names = key
+        ? [
+            ...new Set(
+              [...colony.threads.values()]
+                .filter((t) => statusFor(t) === key)
+                .map((t) => projectKey(t))
+                .filter((name) => colony.plots.has(name))
+            ),
+          ]
+        : []
+      if (names.length) {
+        selectProject(names[statusCursor++ % names.length], { fly: true })
+        return
+      }
       hud.hint(key ? `Nobody is ${(STATUS_LABEL[key] || key).toLowerCase()} right now` : 'No crew on the surface')
       return
     }
@@ -193,7 +214,7 @@ const actions = {
     // If the open thread belonged to the repo that just left, nothing is selected any more.
     if (selectedId) {
       const thread = threads.find((t) => t.id === selectedId)
-      if (thread?.project === name) select(null, {})
+      if (thread && projectKey(thread) === name) select(null, {})
     }
     selectedProject = null
     applyThreads(threads)
@@ -293,7 +314,8 @@ function select(id, { fly = false } = {}) {
   const thread = threads.find((t) => t.id === id) || agent.thread
   hud.setSelection(agent, thread)
   // Picking somebody is also picking the zone they are standing on: the sidebar follows.
-  if (thread?.project && colony.plots.has(thread.project)) selectedProject = thread.project
+  const zone = thread ? projectKey(thread) : null
+  if (zone && colony.plots.has(zone)) selectedProject = zone
   syncProject()
   if (fly) {
     rig.focus(new THREE.Vector3(agent.pos.x, 0, agent.pos.z), { distance: Math.min(rig.desiredDistance, 26) })
@@ -305,7 +327,7 @@ function selectProject(name, { fly = false } = {}) {
   if (!name || !colony.plots.has(name)) return
   selectedProject = name
   const current = threads.find((t) => t.id === selectedId)
-  if (current && current.project !== name) select(null, {})
+  if (current && projectKey(current) !== name) select(null, {})
   else syncProject()
   if (fly) actions.focusProject(name)
 }
@@ -331,7 +353,7 @@ function harnessLabel(id) {
 function harnessForProject(name) {
   const counts = new Map()
   for (const thread of colony.threads.values()) {
-    if (thread.project !== name || !thread.harness) continue
+    if (projectKey(thread) !== name || !thread.harness) continue
     counts.set(thread.harness, (counts.get(thread.harness) ?? 0) + 1)
   }
   let best = ''
@@ -347,7 +369,7 @@ function harnessForProject(name) {
 function pathForProject(name) {
   const counts = new Map()
   for (const thread of colony.threads.values()) {
-    if (thread.project !== name) continue
+    if (projectKey(thread) !== name) continue
     const dir = thread.projectPath || thread.cwd
     if (!dir) continue
     counts.set(dir, (counts.get(dir) ?? 0) + 1)
@@ -377,7 +399,8 @@ function syncProject() {
   }
   const now = Date.now()
   const list = [...colony.threads.values()]
-    .filter((thread) => thread.project === plot.name)
+    // Same grouping the colony uses, or the 'unknown' zone's card would list nothing.
+    .filter((thread) => projectKey(thread) === plot.name)
     .map((thread) => ({
       id: thread.id,
       title: thread.title,
@@ -388,7 +411,7 @@ function syncProject() {
     // Whoever wants something first, then most recently touched — the same order of
     // importance the badges use above their heads.
     .sort((a, b) => {
-      const rank = STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status)
+      const rank = statusRank(a.status) - statusRank(b.status)
       return rank || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)
     })
 
@@ -624,7 +647,7 @@ function applyThreads(list) {
     .map((plot) => ({
       name: plot.name,
       accent: plot.accent,
-      count: list.filter((t) => !t.archived && !archivedSet.has(t.id) && t.project === plot.name).length,
+      count: list.filter((t) => !t.archived && !archivedSet.has(t.id) && projectKey(t) === plot.name).length,
       urgent: colony.urgentPlots?.has(plot.id) ?? false,
     }))
     .sort((a, b) => b.count - a.count)
