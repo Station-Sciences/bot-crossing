@@ -12,6 +12,7 @@ import {
   PLOT_PALETTE,
   PLOT_CELL,
 } from '../world/plots.js'
+import { translateCells } from '../world/plot-move.js'
 import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
@@ -646,6 +647,48 @@ export class Colony {
 
   setHoveredPlot(plot) {
     this.hoveredPlot = plot || null
+  }
+
+  /** The zones actually on the map, name → cells — what a drag validates against. */
+  visibleLayout() {
+    const out = new Map()
+    for (const [name, plot] of this.plots) out.set(name, plot.cells)
+    return out
+  }
+
+  /**
+   * Translate one zone's remembered footprint. Deliberately nothing but the bookkeeping:
+   * the caller re-runs the roster pass, and the signature diff in `_syncPlots` is what
+   * tears the old plot down and raises it on the new ground — moving the group directly
+   * would leave every world coordinate baked into it (centres, slots, label) pointing at
+   * where the zone used to be.
+   */
+  movePlot(name, dq, dr) {
+    const cells = this.plotCells.get(name)
+    if (!cells || (!dq && !dr)) return
+    this.plotCells.set(name, translateCells(cells, dq, dr))
+  }
+
+  /**
+   * Cosmetic lift while a zone is being dragged. Safe to fake with a raw y-offset because
+   * nothing consults it — the real move is a rebuild on drop, and a cancelled drag sets it
+   * back to zero. Buildings ride along by position: they live in the world group, not the
+   * plot's, so raising the group alone would leave them standing on air.
+   */
+  setPlotLift(name, dy) {
+    const plot = this.plots.get(name)
+    if (!plot) return
+    plot.group.position.y = dy
+    if (plot.label) plot.label.position.y = 3.2 + dy
+    const faded = dy > 0
+    plot.group.traverse((o) => {
+      if (!o.isMesh) return
+      o.material.transparent = faded
+      o.material.opacity = faded ? 0.55 : 1
+    })
+    for (const entry of this.buildings.values()) {
+      if (entry.plot === name) entry.mesh.position.y = DECK_TOP + dy
+    }
   }
 
   /**
