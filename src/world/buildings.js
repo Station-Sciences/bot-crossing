@@ -1,12 +1,12 @@
 import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { mulberry } from './planet.js'
-import { ATLAS, CELL, atlasTexture, cellMask, part } from './kit.js'
+import { ATLAS, CELL, DESERT_CELL, atlasTexture, cellMask, part } from './kit.js'
 
 /**
- * Colony buildings — one per thread, assembled out of KayKit's *Space Base Bits* (CC0) and
- * seeded from the thread's own id, so a given session always builds the same structure on
- * every reload and on every planet.
+ * Colony buildings — one per thread, assembled out of KayKit's *Space Base Bits* (CC0), or
+ * out of the desert outpost kit on a planet that declares one, and seeded from the thread's
+ * own id, so a given session always builds the same structure on every reload.
  *
  * The pack is a modular one, which is the whole reason the ten kinds below can stay short:
  * a habitat is a base module with a roof module on it, a workshop is the garage variant
@@ -34,6 +34,15 @@ export const buildingUniforms = {
   uNight: { value: 0 },
   /** Seconds, for anything that turns. One write drives every rotor in the colony. */
   uTime: { value: 0 },
+  /**
+   * A planet's colour on the hull. The neutral structural swatches lean toward this when
+   * the amount is up, and because it is shared, switching planet re-themes every standing
+   * building with two writes and no rebuild. Amount 0 is a true no-op, so worlds without a
+   * tint cost nothing — and a planet with its own kit (Karak's adobe) skips it entirely:
+   * its kit's tint mask is empty, and swapping kits is a rebuild anyway.
+   */
+  uPlanetTint: { value: new THREE.Color(1, 1, 1) },
+  uPlanetTintAmount: { value: 0 },
 }
 
 /**
@@ -72,16 +81,48 @@ const SURFACE = {
   [CELL.SOLAR_B]: [0.16, 0.7],
 }
 
-const CELL_COUNT = ATLAS.cols * ATLAS.rows
-const ROUGHNESS = new Float32Array(CELL_COUNT).fill(0.6)
-const METALNESS = new Float32Array(CELL_COUNT).fill(0.0)
-for (const [cell, [r, m]] of Object.entries(SURFACE)) {
-  ROUGHNESS[cell] = r
-  METALNESS[cell] = m
+/** The desert kit's surfaces are mostly mineral: rough plaster and clay, no sheen at all. */
+const DESERT_SURFACE = {
+  [DESERT_CELL.PLASTER]: [0.85, 0.0],
+  [DESERT_CELL.CLAY]: [0.9, 0.0],
+  [DESERT_CELL.SHADE]: [0.75, 0.0],
+  [DESERT_CELL.METAL]: [0.45, 0.35], // masts and machine housings — the one hard surface
+  [DESERT_CELL.TRIM]: [0.55, 0.04], // terracotta, matte like the rest
+  [DESERT_CELL.GLASS]: [0.16, 0.7], // canopies and solar cells, same recipe as SOLAR_A
 }
 
-/** The one swatch the accent repaints, and the one that lights up after dark. */
-const ACCENT_MASK = cellMask([CELL.TRIM])
+const CELL_COUNT = ATLAS.cols * ATLAS.rows
+function bakeSurface(surface) {
+  // Defaults are Kay's own (roughness 0.6, metalness 0) so an unlisted swatch still looks right.
+  const roughness = new Float32Array(CELL_COUNT).fill(0.6)
+  const metalness = new Float32Array(CELL_COUNT).fill(0.0)
+  for (const [cell, [r, m]] of Object.entries(surface)) {
+    roughness[cell] = r
+    metalness[cell] = m
+  }
+  return { roughness, metalness }
+}
+
+/**
+ * Everything cell-indexed, per kit: surface response, the one swatch the accent repaints
+ * (and that lights up after dark), and the swatches the planet tint may touch.
+ *
+ * The base kit tints its neutral hull greys — everything with a colour of its own keeps it,
+ * or the repaint flattens a building into a single-tone lump. The desert kit tints nothing:
+ * it is natively adobe, and clay-on-clay only muddies it.
+ */
+const KIT_STYLE = {
+  base: {
+    ...bakeSurface(SURFACE),
+    accent: cellMask([CELL.TRIM]),
+    planetTint: cellMask([CELL.WHITE, CELL.GREY, CELL.SLATE]),
+  },
+  desertbase: {
+    ...bakeSurface(DESERT_SURFACE),
+    accent: cellMask([DESERT_CELL.TRIM]),
+    planetTint: cellMask([]),
+  },
+}
 
 // ── composition ───────────────────────────────────────────────────────────────────────
 
@@ -90,7 +131,8 @@ const ACCENT_MASK = cellMask([CELL.TRIM])
  * each carrying a per-vertex emissive flag, so the whole lot merges into one buffer.
  */
 class Composer {
-  constructor() {
+  constructor(kit = 'base') {
+    this.kit = kit
     this.parts = []
   }
 
@@ -99,7 +141,7 @@ class Composer {
    * @param {object} [o]   `x`/`y`/`z` offset, `ry` yaw, `s` uniform scale, `emissive` 0..1
    */
   add(name, o = {}) {
-    const geo = part(name, 'base', { solo: o.solo })
+    const geo = part(name, this.kit, { solo: o.solo })
     const s = o.s ?? 1
     if (s !== 1) geo.scale(s, s, s)
     if (o.ry) geo.rotateY(o.ry)
@@ -249,7 +291,128 @@ const KINDS = {
   },
 }
 
+/**
+ * The desert catalogue — same contract as `KINDS`, composed out of the desert kit's parts.
+ * Adobe houses, a dome, masts and a hangar; the launch pad is the one skyline-breaker.
+ */
+const DESERT_KINDS = {
+  dome(c, rand) {
+    c.add('GeodesicDome')
+    // The entry corridor pokes out from under the dome's rim.
+    c.add('Connector', { x: 1.25 })
+    if (rand() > 0.5) c.add('barrels', { x: -1.35, z: 1.05, ry: rand() * 6.28 })
+    return 'Dome habitat'
+  },
+
+  pod(c, rand) {
+    // The stilt houses, put back on the platform they were authored to stand on.
+    c.add('House_Single_Support')
+    c.add(pick(rand, ['House_Single', 'House_Open']), { y: 0.42, ry: rand() > 0.5 ? Math.PI / 2 : 0 })
+    c.add('Ramp', { x: 1.35, ry: Math.PI / 2 })
+    if (rand() > 0.55) c.add('SolarPanel_Ground', { x: -1.5, z: 0.9, ry: rand() * 6.28 })
+    return 'Pod house'
+  },
+
+  longhouse(c, rand) {
+    c.add(pick(rand, ['House_Long', 'Building_L']), { ry: rand() > 0.5 ? Math.PI / 2 : 0 })
+    c.add(rand() > 0.5 ? 'SolarPanel_Ground' : 'SolarPanel_Structure', { x: 1.55, z: 1.15, ry: rand() * 6.28 })
+    if (rand() > 0.5) c.add('barrel', { x: -1.6, z: 0.95 })
+    return 'Long house'
+  },
+
+  roundhouse(c, rand) {
+    c.add('House_Cylinder')
+    c.add('Stairs', { x: 1.55, ry: Math.PI / 2 })
+    if (rand() > 0.45) c.add('machine_wireless', { x: -1.5, z: 0.9, ry: rand() * 6.28, emissive: 0.4 })
+    return 'Round house'
+  },
+
+  vaporator(c, rand) {
+    // Three uprights in a tight triangle read as a lattice mast; one alone is a flagpole.
+    for (let i = 0; i < 3; i++) {
+      const a = (i / 3) * Math.PI * 2
+      c.add('MetalSupport', { x: Math.cos(a) * 0.22, z: Math.sin(a) * 0.22, ry: a })
+    }
+    // No `spin` on the head: botSpin turns about Z through the pivot, which is right for a
+    // turbine rotor facing along Z and a tumble for a dish that should sweep about Y.
+    c.add(rand() > 0.5 ? 'Roof_Antenna' : 'Roof_Radar', { y: 2.25, s: 0.75 })
+    c.add('machine_generator', { x: 0.85, z: 0.55, ry: rand() * 6.28 })
+    if (rand() > 0.5) c.add('barrel', { x: -0.8, z: 0.6 })
+    return 'Moisture rig'
+  },
+
+  hangar(c, rand) {
+    c.add(
+      pick(rand, [
+        'hangar_roundA',
+        'hangar_roundB',
+        'hangar_roundGlass',
+        'hangar_smallA',
+        'hangar_smallB',
+        'hangar_largeA',
+        'hangar_largeB',
+      ]),
+      { ry: rand() > 0.5 ? Math.PI / 2 : 0 }
+    )
+    c.add('barrels', { x: 1.75, z: 0.85, ry: rand() * 6.28 })
+    if (rand() > 0.5) c.add('rover', { x: -1.75, z: 1.0, ry: rand() * 6.28 })
+    else c.add('satelliteDish', { x: -1.7, z: -0.95, ry: rand() * 6.28 })
+    return 'Hangar bay'
+  },
+
+  dish(c, rand) {
+    c.add('satelliteDish_large', { ry: rand() * 6.28 })
+    c.add(rand() > 0.5 ? 'machine_wirelessCable' : 'satelliteDish_detailed', {
+      x: 1.35,
+      z: 0.6,
+      ry: rand() * 6.28,
+      emissive: 0.5,
+    })
+    if (rand() > 0.4) c.add('barrel', { x: -1.3, z: 0.85 })
+    return 'Comms dish'
+  },
+
+  launchpad(c, rand) {
+    // The rocket stands beside the service structure, not on it: Base_Large is a terraced
+    // building with no flat deck, and a rocket floating on its roofline reads as a bug.
+    c.add('Base_Large', { x: -0.6, s: 0.75, ry: rand() > 0.5 ? Math.PI : 0 })
+    const x = 1.25
+    c.add('rocket_baseA', { x })
+    c.add('rocket_sidesA', { x, y: 1.36 })
+    c.add('rocket_fuelA', { x, y: 2.21 })
+    c.add('rocket_topA', { x, y: 2.63 })
+    return 'Launch pad'
+  },
+
+  workshop(c, rand) {
+    c.add('machine_generatorLarge')
+    c.add('chimney_detailed', { x: 0.95, z: -0.6 })
+    c.add('machine_generator', { x: -1.15, z: 0.7, ry: rand() * 6.28 })
+    if (rand() > 0.4) c.add('barrels', { x: 0.95, z: 1.1, ry: rand() * 6.28 })
+    return 'Workshop'
+  },
+
+  speeder(c, rand) {
+    c.add(pick(rand, ['craft_speederA', 'craft_speederD', 'craft_miner']), { x: 0.55, ry: rand() * 6.28 })
+    c.add(pick(rand, ['gate_simple', 'gate_complex']), { x: -1.2, ry: Math.PI / 2 })
+    c.add('barrel', { x: -0.9, z: 1.05 })
+    if (rand() > 0.5) c.add('rover', { x: 0.2, z: -1.35, ry: rand() * 6.28 })
+    return 'Speeder yard'
+  },
+}
+
 const KIND_IDS = Object.keys(KINDS)
+/**
+ * Ids may repeat, and the pick is uniform over the list — so listing the houses twice makes
+ * the launch pad the rare skyline-breaker rather than one building in ten.
+ */
+const DESERT_KIND_IDS = [...Object.keys(DESERT_KINDS), 'dome', 'pod', 'longhouse', 'roundhouse']
+
+/** Catalogue and style per kit — what `createBuilding` swaps when a planet brings its own kit. */
+const CATALOGUE = {
+  base: { kinds: KINDS, ids: KIND_IDS },
+  desertbase: { kinds: DESERT_KINDS, ids: DESERT_KIND_IDS },
+}
 
 // ── the reveal shader ─────────────────────────────────────────────────────────────────
 
@@ -323,7 +486,10 @@ function decorate(material, uniforms) {
          uniform float uMinY;
          uniform vec3 uAccent;
          uniform float uNight;
+         uniform vec3 uPlanetTint;
+         uniform float uPlanetTintAmount;
          uniform float uCellAccent[ ${CELL_COUNT} ];
+         uniform float uCellPlanetTint[ ${CELL_COUNT} ];
          uniform float uCellRoughness[ ${CELL_COUNT} ];
          uniform float uCellMetalness[ ${CELL_COUNT} ];
 
@@ -350,6 +516,13 @@ function decorate(material, uniforms) {
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
+         // The planet's own colour on the neutral hull swatches, before the accent gets
+         // its say — same luminance trick, so panels keep their shading as they change.
+         float tintAmount = uCellPlanetTint[ cell ] * uPlanetTintAmount;
+         if ( tintAmount > 0.0 ) {
+           float tintLum = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
+           diffuseColor.rgb = mix( diffuseColor.rgb, uPlanetTint * clamp( tintLum * 1.9, 0.3, 1.5 ), tintAmount );
+         }
          float accentAmount = uCellAccent[ cell ];
          if ( accentAmount > 0.0 ) {
            float lum = dot( diffuseColor.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
@@ -430,16 +603,20 @@ function depthMaterial(uniforms) {
 
 /**
  * Build one structure. `seed` is derived from the thread id, so the same session always
- * gets the same building; `kind` can be forced, otherwise the seed picks it.
+ * gets the same building; `kind` can be forced, otherwise the seed picks it. `kit` selects
+ * a whole catalogue — a planet that brings its own architecture swaps it here.
  *
  * Requires `loadKit()` to have resolved — boot awaits it before the first roster arrives.
  */
-export function createBuilding({ seed = 1, accent = 0xc96442, kind = null } = {}) {
+export function createBuilding({ seed = 1, accent = 0xc96442, kind = null, kit = 'base' } = {}) {
+  if (!CATALOGUE[kit]) kit = 'base'
+  const { kinds, ids } = CATALOGUE[kit]
+  const style = KIT_STYLE[kit]
   const rand = mulberry(seed)
-  const chosen = kind && KINDS[kind] ? kind : KIND_IDS[Math.floor(rand() * KIND_IDS.length)]
+  const chosen = kind && kinds[kind] ? kind : ids[Math.floor(rand() * ids.length)]
 
-  const c = new Composer()
-  const label = KINDS[chosen](c, rand, accent)
+  const c = new Composer(kit)
+  const label = kinds[chosen](c, rand, accent)
   const geo = c.finish()
   // Trimmed to fit a slot: the catalogue is authored on the pack's module grid and scaled
   // once here, so tuning the plot lattice never means re-tuning ten recipes.
@@ -469,14 +646,17 @@ export function createBuilding({ seed = 1, accent = 0xc96442, kind = null } = {}
     uAccent: { value: new THREE.Color(accent) },
     uNight: buildingUniforms.uNight,
     uTime: buildingUniforms.uTime,
-    uCellAccent: { value: ACCENT_MASK },
-    uCellRoughness: { value: ROUGHNESS },
-    uCellMetalness: { value: METALNESS },
+    uPlanetTint: buildingUniforms.uPlanetTint,
+    uPlanetTintAmount: buildingUniforms.uPlanetTintAmount,
+    uCellAccent: { value: style.accent },
+    uCellPlanetTint: { value: style.planetTint },
+    uCellRoughness: { value: style.roughness },
+    uCellMetalness: { value: style.metalness },
   }
 
   const material = decorate(
     new THREE.MeshStandardMaterial({
-      map: atlasTexture(),
+      map: atlasTexture(kit),
       // Roughness and metalness arrive per atlas cell; these are only the fallback values.
       roughness: 0.6,
       metalness: 0,

@@ -3,8 +3,10 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
 /**
- * The model kits — KayKit's *Space Base Bits* and *Forest Nature Pack* (both CC0), each
- * packed into one glb by `tools/build-kit.mjs` and loaded exactly once here.
+ * The model kits — KayKit's *Space Base Bits* and *Forest Nature Pack*, plus a desert
+ * outpost kit assembled from Kenney's *Space Kit* and Quaternius' *Ultimate Space Kit*
+ * (all CC0), each packed into one glb by the tools under `tools/` and loaded exactly
+ * once here.
  *
  * Their shared design is what makes them worth building on: every model in a pack UVs into
  * a single 1024px gradient atlas and therefore shares a single material, so a colony
@@ -18,8 +20,8 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
  * repaint one swatch — the gold trim band, cell 11 — into each repo's accent colour without
  * touching a texture or splitting the mesh.
  *
- * The two kits keep separate part registries because they have separate atlases: a geometry
- * can only carry one material, so a habitat and a fir tree can never merge into one mesh.
+ * Kits keep separate part registries because they have separate atlases: a geometry can
+ * only carry one material, so a habitat and a fir tree can never merge into one mesh.
  */
 
 /** Columns and rows in the gradient atlas. */
@@ -44,6 +46,21 @@ export const CELL = {
   SOLAR_B: 29,
 }
 
+/**
+ * The desert kit's cells. Its atlas is *generated* — `tools/build-desert-kit.mjs` paints
+ * these swatches and rewrites every model's UVs into them, so the two definitions must
+ * stay in step. TRIM and GLASS sit in the base kit's TRIM and SOLAR_A slots on purpose:
+ * the two atlases read alike, and TRIM is the accent/night-glow cell in both.
+ */
+export const DESERT_CELL = {
+  PLASTER: 1,
+  CLAY: 2,
+  SHADE: 3,
+  METAL: 4,
+  TRIM: 11,
+  GLASS: 28,
+}
+
 // Served straight out of `public/`, not bundled — a glb is opaque to Vite and there is
 // nothing to gain from hashing a file the loader fetches by hand anyway.
 const KITS = {
@@ -51,6 +68,8 @@ const KITS = {
   base: { file: 'spacebase.glb', parts: new Map(), solo: new Map(), atlas: null },
   /** Forest Nature Pack: trees, bushes, grass, and the boulders on every world. */
   forest: { file: 'forest.glb', parts: new Map(), solo: new Map(), atlas: null },
+  /** The desert outpost kit — Kenney + Quaternius models repainted adobe at build time. */
+  desertbase: { file: 'desertbase.glb', parts: new Map(), solo: new Map(), atlas: null },
 }
 
 let loading = null

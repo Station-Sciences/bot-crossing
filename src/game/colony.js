@@ -113,6 +113,7 @@ export class Colony {
     this.renderer = renderer
 
     this.planet = PLANETS[settings.get('planet')] || PLANETS.moon
+    this._applyPlanetTint()
     this.sky = new Sky(scene, settings, renderer)
     this.sky.setPlanet(this.planet)
     // Push the stored time in explicitly. `settings.set` is a no-op when the value has not
@@ -240,9 +241,42 @@ export class Colony {
   setPlanet(id) {
     const planet = PLANETS[id]
     if (!planet || planet === this.planet) return
+    const kitChanged = (planet.buildingKit || 'base') !== (this.planet.buildingKit || 'base')
     this.planet = planet
+    this._applyPlanetTint()
     this.sky.setPlanet(planet)
     this._buildTerrain()
+    // A tint re-themes standing buildings in place, but a *kit* is baked into their
+    // geometry and material — crossing that line means building the colony again.
+    if (kitChanged) this._rebuildBuildings()
+  }
+
+  /**
+   * Tear every building down and let the roster pass raise it again in the current kit.
+   *
+   * Removal is immediate rather than the retiring sink — the ground itself just changed
+   * under them, and the new buildings rise from nothing exactly like a fresh colony's.
+   * Re-running `setThreads` with the live set is what recreates them: plots keep their
+   * ground (same projects, same cells), ids match, so scaffolds and astronauts carry over
+   * without doubling up.
+   */
+  _rebuildBuildings() {
+    for (const [id, entry] of this.buildings) {
+      entry.progress = 0 // force _removeBuilding down its immediate-removal path
+      this._removeBuilding(id, entry)
+    }
+    const threads = [...this.threads.values()]
+    if (threads.length) this.setThreads(threads, undefined, undefined, new Set(this.threads.keys()))
+  }
+
+  /**
+   * The buildings' shared planet-tint uniforms. Shared is the point: every standing
+   * building re-themes on a planet switch without a single rebuild.
+   */
+  _applyPlanetTint() {
+    const tint = this.planet.buildingTint
+    buildingUniforms.uPlanetTint.value.set(tint ?? 0xffffff)
+    buildingUniforms.uPlanetTintAmount.value = tint != null ? 1 : 0
   }
 
   onSettingsChanged(changed, scope) {
@@ -474,7 +508,13 @@ export class Colony {
     const target = 1
 
     if (!entry) {
-      const mesh = createBuilding({ seed: hashString(thread.id), accent: plot.accent })
+      const mesh = createBuilding({
+        seed: hashString(thread.id),
+        accent: plot.accent,
+        // The planet picks the architecture; a world with no kit of its own builds in the
+        // base kit and takes the planet tint instead.
+        kit: this.planet.buildingKit || 'base',
+      })
       const pos = plot.worldSlot(index)
       mesh.position.copy(pos)
       mesh.rotation.y = ((hashString(thread.id) >>> 8) % 360) * (Math.PI / 180)

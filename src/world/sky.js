@@ -87,6 +87,13 @@ const SUN_AXIS = 0.72 // which way the sun tracks across the sky
  * the horizontal term is zero and the direction normalises to straight up regardless.
  */
 const SUN_APEX = 0.95
+/**
+ * How far a `sunTwin` companion trails the sun, in radians of azimuth — about 13°. Close
+ * enough to read as a pair, far enough that the two discs never merge into one blob.
+ * Azimuthal on purpose: rotating about the vertical keeps the twin's elevation equal to
+ * the sun's, so the pair rises and sets as one.
+ */
+const TWIN_SPREAD = 0.23
 /** Half-width of the shadow camera, in metres, centred on whatever you are looking at. */
 const SHADOW_EXTENT = 30
 /**
@@ -95,6 +102,8 @@ const SHADOW_EXTENT = 30
  * the frustum edge for edges that hold still.
  */
 const SHADOW_SNAP = 2
+
+const UP = new THREE.Vector3(0, 1, 0)
 
 export class Sky {
   constructor(scene, settings, renderer) {
@@ -355,9 +364,10 @@ export class Sky {
     this.companionBody.material.emissiveIntensity = 0.35
     this.companionHalo.material.uniforms.uColor.value.set(comp.glow)
     this.companion.scale.setScalar(comp.size)
-    // Parked high and off to one side, well away from where the sun tracks.
-    const dir = new THREE.Vector3(-0.55, 0.5, -0.66).normalize()
-    this.companion.position.copy(dir.multiplyScalar(300))
+    // Parked high and off to one side, well away from where the sun tracks. A `sunTwin`
+    // ignores the parking spot — `setTime` moves it onto the sun's own arc every frame.
+    this._companionOffset().set(-0.55, 0.5, -0.66).normalize().multiplyScalar(300)
+    this.companion.position.copy(this._compOff)
     this.companionHalo.scale.setScalar(2.2)
 
     this._envDirty = true
@@ -442,8 +452,21 @@ export class Sky {
     this.stars.material.uniforms.uOpacity.value = Math.pow(1 - day, 1.6) * (1 - planet.atmosphere * 0.35)
     this.stars.visible = this.settings.get('stars') && this.stars.material.uniforms.uOpacity.value > 0.01
 
-    this.companionHalo.material.uniforms.uStrength.value = 0.35 + (1 - day) * 0.65
-    this.companionBody.material.emissiveIntensity = 0.25 + (1 - day) * 0.55
+    if (planet.companion.sunTwin) {
+      // The twin lives on the sun's arc, a fixed azimuth behind it, so the two cross the
+      // sky as a pair. It shines *with* the day rather than against it, and fades across
+      // the horizon on the same ramp as the sun's disc — a second sun visible after its
+      // own sunset would give the game away.
+      this._companionOffset().copy(this.sunDir).applyAxisAngle(UP, TWIN_SPREAD).multiplyScalar(300)
+      const risen = THREE.MathUtils.smoothstep(this.sunDir.y, -0.06, 0.04)
+      this.companion.visible = risen > 0.01
+      this.companionHalo.material.uniforms.uStrength.value = (0.4 + day * 0.8) * risen
+      this.companionBody.material.emissiveIntensity = (0.5 + day * 1.4) * risen
+    } else {
+      this.companion.visible = true
+      this.companionHalo.material.uniforms.uStrength.value = 0.35 + (1 - day) * 0.65
+      this.companionBody.material.emissiveIntensity = 0.25 + (1 - day) * 0.55
+    }
 
     // Fog follows the horizon, or the whole world looks like it is behind glass at night.
     this.scene.fog.color.copy(bottom).lerp(this._c1.set(planet.fog.color), 0.55)

@@ -46,6 +46,7 @@
   "devDependencies": {
     "@gltf-transform/core": "^4.4.2",
     "@gltf-transform/functions": "^4.4.2",
+    "pngjs": "^7.0.0",
     "vite": "^7.1.0"
   }
 }

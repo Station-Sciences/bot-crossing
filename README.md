@@ -329,17 +329,20 @@ so lit surfaces stay crisp instead of going hazy.
 
 ## Where the art comes from
 
-The colony is built out of two CC0 asset packs by **[Kay Lousberg](https://kaylousberg.com)**,
+The colony is built out of CC0 asset packs — three by **[Kay Lousberg](https://kaylousberg.com)**,
+one by **[Kenney](https://kenney.nl)** and one by **[Quaternius](https://quaternius.com)** —
 plus the project's own shaders on top of them.
 
 | Pack | Used for | Licence |
 | --- | --- | --- |
-| [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | Every building, the landing pads, rovers, and the crates and drums stacked around each plot | CC0 |
+| [KayKit : Space Base Bits](https://kaylousberg.itch.io/space-base-bits) | Every building on most worlds, the landing pads, rovers, and the crates and drums stacked around each plot | CC0 |
 | [KayKit : Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) | The crew's body and all fifteen animation clips they play | CC0 |
 | [KayKit : Forest Nature Pack](https://kaylousberg.itch.io/kaykit-forest) | Terra's trees, bushes and grass, and the boulders on every world | CC0 |
+| [Kenney : Space Kit](https://kenney.nl/assets/space-kit) (v1.0) | Karak's hangars, dishes, machines, the rocket, and the parked speeders | CC0 |
+| [Quaternius : Ultimate Space Kit](https://quaternius.com/packs/ultimatespacekit.html) | Karak's dome, houses and masts (fetched via the [poly.pizza mirror](https://poly.pizza/bundle/Ultimate-Space-Kit-YWh743lqGX)) | CC0 |
 
-CC0 asks for nothing, but crediting Kay costs nothing either. If you rebuild the assets, both
-packs go in `assets-src/` (see below).
+CC0 asks for nothing, but crediting the artists costs nothing either. If you rebuild the
+assets, the packs go in `assets-src/` (see below).
 
 Two things about Space Base Bits make the whole approach work. It is **modular** — a habitat is
 a base module with a roof module on it, a workshop is the garage variant with a rover parked
@@ -362,6 +365,14 @@ per-instance tint takes exactly the same rock to lunar dust or Martian rust with
 the atlas — so one scatter recipe dresses a meadow and a crater field. Only sixteen of its 105
 models are packed: variety comes from per-instance scale and rotation, and packing every size
 and colour variant would be five times the file for no more to look at.
+
+Karak builds in its own kit, and that one is *made* to fit the convention rather than born in
+it. Kenney's models ship as flat per-material colours and Quaternius' UV into a pixel-palette
+PNG — so `tools/build-desert-kit.mjs` classifies every triangle of both into six desert
+swatches (plaster, clay, shade, metal, terracotta trim, glass), paints a gradient atlas of its
+own in the same 8×4 grid, and rewrites the UVs to match. Out the far end they behave exactly
+like a KayKit pack: one material, one draw call per building, a trim cell that takes the
+accent and lights up at night.
 
 ### The surfaces are drawn, not shipped
 
@@ -396,17 +407,21 @@ colour on the same texture.
 
 ### Rebuilding them
 
-`npm run assets` packs the raw packs into the two glbs the app loads. The built files are
+`npm run assets` packs the raw packs into the glbs the app loads. The built files are
 checked in and the raw packs are not, so this is a no-op unless you have fetched them:
 
 ```bash
 mkdir -p assets-src && cd assets-src
-# download the FREE tier of both packs from the links above, then unzip in place
+# download the FREE tier of the KayKit packs from the links above, then unzip in place
+mkdir -p downloads   # the desert kit's two packs go here:
+#   downloads/kenney_space-kit/       — Kenney's Space Kit zip, unzipped in place
+#   downloads/quaternius-selected/    — the Quaternius models Karak uses, one .glb each
 ```
 
-`npm run assets` runs `tools/build-assets.mjs`, which drives `build-kit.mjs` once per model
+`npm run assets` runs `tools/build-assets.mjs`, which drives `build-kit.mjs` once per KayKit
 pack — merging a directory of single-model `.gltf` files into one document with one material
-and one texture — and then `build-crew.mjs`. That last one keeps the fifteen clips the colony actually plays out of
+and one texture — then `build-desert-kit.mjs` (the classify-and-repaint pass described
+above) and `build-crew.mjs`. That last one keeps the fifteen clips the colony actually plays out of
 KayKit's 161 and — the part that matters — **retargets every animation channel onto the
 mannequin's own bones**. Merging glTF documents brings each animation file's private copy of the
 rig along with it, so without that step the finished file has five skeletons named `hips` and
