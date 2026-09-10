@@ -11,14 +11,17 @@ import { crewRig, loadCrew } from './agents/crew.js'
 import { TIMES } from './world/sky.js'
 import {
   HOSTED,
+  fetchBilling,
   fetchThreads,
   fetchState,
   saveState,
   openThread,
   openDeepLink,
+  newCrewSession,
   newSession,
   putSnapshot,
   revealFolder,
+  startCheckout,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 import { LocalScanner } from './scan/index.js'
@@ -152,13 +155,17 @@ const actions = {
   newConversation: async () => {
     const name = selectedProject
     const folder = name && pathForProject(name)
-    if (!folder) {
+    if (!folder && !(HOSTED && harnessForProject(name) === 'emrabot')) {
       hud.toast('No folder on disk for that project', 'err')
       return
     }
     try {
       const harness = harnessForProject(name)
-      if (HOSTED) {
+      if (HOSTED && harness === 'emrabot') {
+        // The crew lives in this workspace: a new chat is a page here, not a deep link.
+        const { url } = await newCrewSession()
+        await openDeepLink(url)
+      } else if (HOSTED) {
         // The page is on the machine that runs the harness, so it opens the deep link itself.
         const url = scanner?.newSessionUrl(harness, folder)
         if (!url) throw new Error('That harness has no new-thread link from here')
@@ -742,10 +749,24 @@ async function boot() {
       onStatus: (status) => crew?.setStatus(status),
       publish: putSnapshot,
     })
-    crew = new CrewPanel(app, { scanner, toast: (message, kind) => hud.toast(message, kind) })
+    crew = new CrewPanel(app, {
+      scanner,
+      toast: (message, kind) => hud.toast(message, kind),
+      checkout: startCheckout,
+    })
     await scanner.init()
     scanner.start(POLL_MS)
     window.addEventListener('focus', () => scanner.scan())
+    // Back from checkout: the URL says how it went, and the plan is re-read either way.
+    const params = new URLSearchParams(window.location.search)
+    if (params.has('upgraded')) hud.toast('Your crew has landed — look for them on the planet')
+    if (params.get('upgrade') === 'failed') hud.toast('The payment did not go through', 'err')
+    if (params.has('upgraded') || params.has('upgrade')) {
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+    fetchBilling()
+      .then((billing) => crew.setBilling(billing))
+      .catch(() => crew.setBilling({ plan: 'free', active: false, checkout: 'off', crewAgent: null, crewUrl: null }))
   }
 
   await poll()

@@ -133,6 +133,15 @@ export const revealFolder = (folder) => {
   return post(`${API}/reveal`, { folder })
 }
 
+/** Hosted only: the person's plan and where their crew lives. */
+export const fetchBilling = () => req('/api/billing/status')
+
+/** Hosted only: where to send the browser to pay. The workspace decides — Stripe, a link, or a local stand-in. */
+export const startCheckout = () => post('/api/billing/checkout', {})
+
+/** Hosted only: a fresh chat with the person's crew; resolves to where it lives. */
+export const newCrewSession = () => post(`${API}/crew/sessions`, {})
+
 /** Hosted only: what the in-page scanner saw, so the planet shows from another device too. */
 export const putSnapshot = async (snapshot) => {
   const res = await fetch(`${API}/snapshot`, {

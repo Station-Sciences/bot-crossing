@@ -46,9 +46,9 @@ const TEMPLATE = `
       </section>
       <section class="crew-card crew-card-paid">
         <h3>Built-in agents</h3>
-        <p>Crew that lives on the planet and keeps working while your computer is closed. Chat with them here, no coding agent needed.</p>
+        <p class="crew-paid-copy">Crew that lives on the planet and keeps working while your computer is closed. Chat with them here, no coding agent needed.</p>
         <p class="crew-price">$20 / month</p>
-        <button class="btn" type="button" disabled>Coming soon</button>
+        <div class="crew-paid-actions"><button class="btn" type="button" disabled>Checking your plan…</button></div>
       </section>
     </div>
     <button class="btn ghost crew-skip" type="button">Just look around</button>
@@ -58,17 +58,24 @@ const TEMPLATE = `
 export class CrewPanel {
   /**
    * @param {HTMLElement} root
-   * @param {{ scanner: LocalScanner, toast: (message: string, kind?: string) => void }} opts
+   * @param {{
+   *   scanner: LocalScanner,
+   *   toast: (message: string, kind?: string) => void,
+   *   checkout: () => Promise<{ url: string }>,
+   * }} opts
    */
-  constructor(root, { scanner, toast }) {
+  constructor(root, { scanner, toast, checkout }) {
     this.scanner = scanner
     this.toast = toast
+    this.checkout = checkout
     this.el = document.createElement('div')
     this.el.className = 'crew'
     this.el.innerHTML = TEMPLATE
     root.appendChild(this.el)
     this.$ = (sel) => this.el.querySelector(sel)
     this.status = scanner.status()
+    /** The person's plan, once the workspace has said; null until then. */
+    this.billing = null
     this._wire()
     this.render()
     // The chip's "12s ago" has to move on its own.
@@ -114,6 +121,24 @@ export class CrewPanel {
       )
     })
 
+    this.$('.crew-paid-actions').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-pay], button[data-go]')
+      if (!btn) return
+      if (btn.dataset.go) {
+        window.location.assign(btn.dataset.go)
+        return
+      }
+      btn.disabled = true
+      btn.textContent = 'Opening checkout…'
+      try {
+        const { url } = await this.checkout()
+        window.location.assign(url)
+      } catch (err) {
+        this.toast(err?.message || 'Could not start checkout', 'err')
+        this._renderPaid()
+      }
+    })
+
     this.$('.crew-folders').addEventListener('click', async (e) => {
       const btn = e.target.closest('button[data-grant], button[data-forget]')
       if (!btn) return
@@ -141,6 +166,36 @@ export class CrewPanel {
   setStatus(status) {
     this.status = status
     this.render()
+  }
+
+  /** @param {{ plan: string, active: boolean, checkout: string, crewAgent: string|null, crewUrl: string|null } | null} billing */
+  setBilling(billing) {
+    this.billing = billing
+    this._renderPaid()
+  }
+
+  _renderPaid() {
+    const actions = this.$('.crew-paid-actions')
+    const copy = this.$('.crew-paid-copy')
+    const price = this.$('.crew-price')
+    const b = this.billing
+    if (!b) {
+      actions.innerHTML = `<button class="btn" type="button" disabled>Checking your plan…</button>`
+      return
+    }
+    if (b.active) {
+      copy.textContent = 'Your crew is on the planet. Every chat with them is an astronaut here; click one to pick the conversation up.'
+      price.textContent = 'Crew · active'
+      actions.innerHTML = `<button class="btn primary" type="button" data-go="${esc(b.crewUrl || '/')}">Chat with your crew</button>`
+      return
+    }
+    price.textContent = '$20 / month'
+    if (b.checkout === 'off') {
+      actions.innerHTML = `<button class="btn" type="button" disabled>Not available on this planet yet</button>`
+      return
+    }
+    const test = b.checkout === 'pretend' ? ' (test)' : ''
+    actions.innerHTML = `<button class="btn primary" type="button" data-pay="1">Get built-in agents${test}</button>`
   }
 
   isOpen() {
