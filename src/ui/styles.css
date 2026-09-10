@@ -1424,8 +1424,7 @@ kbd {
 .crew-chip {
   position: fixed;
   top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 14px;
   z-index: 30;
   display: inline-flex;
   align-items: center;
