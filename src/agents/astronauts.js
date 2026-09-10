@@ -721,6 +721,15 @@ export class Astronauts {
 
       case 'walking': {
         agent.scale = Math.min(1, agent.scale + dt * 3)
+        // You picked it to look at it. A selected astronaut holds still mid-stride rather
+        // than making the camera and the sidebar chase it; the walk resumes on deselect.
+        // The age reset keeps the pause from counting toward the give-up clocks below.
+        if (this.selected === agent) {
+          agent.vel.set(0, 0, 0)
+          agent.stateAge = 0
+          this._settle(agent, dt)
+          break
+        }
         this._walk(agent, toSite, dist, dt, 1)
         // Close enough — settle into whatever this thread is actually doing. Or close
         // enough to *give up*: a site that something was built on top of between polls can
@@ -748,7 +757,11 @@ export class Astronauts {
       }
 
       case 'at-site': {
-        if (agent.status === 'idle') {
+        if (this.selected === agent) {
+          // Same deal as mid-walk: no pottering, no circling the site while inspected.
+          agent.vel.set(0, 0, 0)
+          this._settle(agent, dt)
+        } else if (agent.status === 'idle') {
           // Idlers potter around their plot, and `_drift` owns their velocity outright.
           this._drift(agent, dt, elapsed)
         } else if (agent.status === 'working' && agent.anchor) {
