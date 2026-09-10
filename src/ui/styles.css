@@ -79,6 +79,16 @@ body {
   /* How much room the sidebar takes. It is always there now, so this is what anything
      else on screen has to stay clear of. */
   --side: 334px;
+  /* How much of the right-hand edge is actually covered by a panel right now.
+     Deliberately not the same number as `--side`: that one is consumed by `placeCard`,
+     which wants 0 on a narrow screen so the thread card may use the full width, while the
+     toasts and the hint still have a 320px sidebar to keep out of. Settings slides the
+     sidebar aside rather than over it, so while it is open the pair covers twice as much. */
+  --right-panel: 334px;
+}
+
+.hud:has(.side.shifted) {
+  --right-panel: 654px;
 }
 
 .hud.hidden {
@@ -668,7 +678,11 @@ body {
   font-weight: 650;
   font-size: 14px;
   letter-spacing: -0.01em;
+  /* `min-width: 0` lets it shrink; without the ellipsis it just shrinks and spills, which
+     on a 320px screen is four buttons' worth of brand running under the buttons. */
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   flex: 1;
   min-width: 0;
 }
@@ -1144,10 +1158,27 @@ body {
 
 /* ── toasts + readouts ───────────────────────────────────────────────────────────── */
 
+/* No box of its own: each readout stays absolutely positioned against the HUD, in the
+   corner it has always used. The wrapper only becomes a layout box on a screen that cannot
+   spare three corners — see the stacking rules further down. */
+.readouts {
+  display: contents;
+}
+
+/* None of the three is a control, and `.panel` hands out `pointer-events: auto` to
+   everything that wears it. Left alone, a readout is a rectangle of dead ground you cannot
+   drag the colony through — the hint pill is 418px of exactly that, lying across the top of
+   the scene for the first five seconds of every visit. They are for reading, not touching. */
+.readouts,
+.readouts > *,
+.toast {
+  pointer-events: none;
+}
+
 .toasts {
   position: absolute;
   bottom: 14px;
-  right: calc(14px + var(--side));
+  right: calc(14px + var(--right-panel));
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -1158,7 +1189,7 @@ body {
   padding: 9px 13px;
   border-radius: 10px;
   font-size: 12.5px;
-  max-width: 320px;
+  max-width: min(320px, calc(100vw - 24px));
   animation: toast-in 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -1222,8 +1253,21 @@ body {
   display: grid;
 }
 
+.help.open {
+  /* Padding, not just `place-items`, so the sheet can never touch the screen edge and a
+     backdrop tap always has somewhere to land. */
+  padding: 16px;
+}
+
 .help .sheet {
-  width: min(560px, calc(100vw - 40px));
+  width: min(560px, 100%);
+  /* `dvh`, not `vh`: Safari's `vh` is the *large* viewport, so a `vh`-capped sheet is
+     taller than the visible page whenever the toolbar is showing, and the last thing in
+     it — "Got it" — sits under the toolbar with no way to reach it. */
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 22px 24px;
 }
 
@@ -1243,6 +1287,31 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px 26px;
+}
+
+/* Only one of these two is ever true of the device reading it. */
+.help .touch-only,
+.help p.sub .touch-only,
+.help .legend-row .touch-only {
+  display: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .help .pointer-only {
+    display: none;
+  }
+  .help .touch-only {
+    display: grid;
+  }
+  .help p.sub .touch-only,
+  .help .legend-row .touch-only {
+    display: inline;
+  }
+  /* One column: there are only seven of these, and two columns of them on a phone squeeze
+     the labels until the `kbd` beside each one is pushed off the edge of the sheet. */
+  .help .cols.touch-only {
+    grid-template-columns: 1fr;
+  }
 }
 
 .help .k {
@@ -1282,6 +1351,12 @@ kbd {
   color: var(--muted);
 }
 
+.help .help-actions {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .help .legend-row .badge {
   width: 20px;
   height: 20px;
@@ -1298,7 +1373,10 @@ kbd {
 .hint-pill {
   position: absolute;
   top: 78px;
-  left: 50%;
+  /* Centred on the colony rather than on the window, so it does not slide under whatever
+     is parked on the right-hand edge. */
+  left: calc(50% - var(--right-panel) / 2);
+  max-width: calc(100vw - var(--right-panel) - 28px);
   transform: translateX(-50%);
   padding: 8px 14px;
   font-size: 12.5px;
@@ -1386,8 +1464,11 @@ kbd {
   .side.shifted {
     transform: translateX(0);
   }
-  .rail {
-    display: none;
+  /* Settings covers the sidebar here rather than pushing it aside, so the pair occupies one
+     panel's width, not two. Without this the readouts are told to clear 654px of an edge
+     that only has 334px on it, and get squeezed into the rail. */
+  .hud:has(.side.shifted) {
+    --right-panel: 334px;
   }
   .stats {
     gap: 5px;
@@ -1397,6 +1478,65 @@ kbd {
   }
   .legend {
     max-width: calc(100vw - 28px);
+  }
+  /* The rail stays a column here — the sidebar is on the *right*, so the left edge was
+     always free and hiding the rail was never about room. What it cost was five actions —
+     reset, next, orbit, planet and time — each of which is keyboard-only otherwise, so on
+     a tablet or a phone in landscape they were simply gone.
+
+     Anchored to the top rather than centred: centred, a 243px column claims the whole left
+     edge of a 393px-tall landscape phone, and the bottom-left corner the readouts live in
+     stops existing. */
+  .rail {
+    top: 14px;
+    transform: none;
+  }
+}
+
+/* ── small screens: one column of readouts instead of three corners ────────────────── */
+
+/* Height matters as much as width here. A phone held sideways is 852px across — past every
+   width breakpoint in this file — and 393px tall, which is the dimension that is actually
+   scarce. Keying only on width leaves landscape phones with the desktop layout on a screen
+   a quarter of its height. */
+@media (max-width: 820px), (max-height: 560px) {
+  .readouts {
+    display: flex;
+    position: absolute;
+    bottom: 14px;
+    right: calc(14px + var(--right-panel));
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    /* The wrapper is only a lane; the readouts inside it keep their own hit targets. */
+    pointer-events: none;
+  }
+  /* Handing position back to the parent is what makes the column a column. */
+  .readouts > * {
+    position: static;
+    inset: auto;
+    transform: none;
+    max-width: 100%;
+  }
+  .readouts .toasts {
+    align-items: flex-end;
+  }
+}
+
+/* And a short viewport needs the rail out of the middle of its left edge for the same
+   reason a narrow one does — see the note on the rail above. */
+@media (max-height: 560px) {
+  .rail {
+    top: 14px;
+    transform: none;
+  }
+  /* Two 320px panels side by side is 654px of an 852px landscape phone. Settings covers
+     the sidebar here too, for the same reason it does on a narrow screen. */
+  .side.shifted {
+    transform: translateX(0);
+  }
+  .hud:has(.side.shifted) {
+    --right-panel: 334px;
   }
 }
 
@@ -1408,6 +1548,204 @@ kbd {
   .brand span,
   .stats .stat .lbl {
     display: none;
+  }
+
+  /* Nothing is left of the right-hand edge to avoid: the sidebar is a sheet across the top
+     now, so the toasts and the hint get the full width back. */
+  .hud,
+  .hud:has(.side.shifted) {
+    --right-panel: 0px;
+  }
+
+  /* The rail lies down along the bottom, where a thumb is. It can only do this once the
+     sidebar is out of the right-hand column — above this width the sidebar is still a
+     full-height panel and a bottom bar would run underneath it. */
+  .rail {
+    left: 50%;
+    top: auto;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    flex-direction: row;
+    gap: 2px;
+  }
+  /* The divider has to turn with the rail it divides. */
+  .rail .sep {
+    width: 1px;
+    height: 22px;
+    margin: 0 4px;
+    align-self: center;
+  }
+
+  /* The readout column runs full width and centred, and starts above the rail rather than
+     under it. */
+  .readouts {
+    left: 12px;
+    right: 12px;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    align-items: center;
+  }
+  .readouts .toasts {
+    align-items: center;
+  }
+  .hint-pill {
+    text-align: center;
+  }
+
+  /* The sidebar stops being a sidebar. At 320px on a 393px screen it is not a panel beside
+     the colony, it *is* the screen — so it becomes a sheet across the top and gives the
+     lower half back to the thing the app is for. */
+  .side {
+    top: calc(10px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+    right: calc(10px + env(safe-area-inset-right));
+    bottom: auto;
+    width: auto;
+    max-height: 46dvh;
+  }
+
+  .settings {
+    top: calc(10px + env(safe-area-inset-top));
+    left: calc(10px + env(safe-area-inset-left));
+    right: calc(10px + env(safe-area-inset-right));
+    bottom: calc(76px + env(safe-area-inset-bottom));
+    width: auto;
+  }
+
+  .stat {
+    height: 32px;
+    padding: 0 11px;
+  }
+
+  /* The card is placed in screen space by `placeCard`, which clamps to the window — but it
+     can only clamp a width that fits in the first place. */
+  .thread-pop {
+    width: min(284px, calc(100vw - 24px));
+  }
+  .thread-pop .pair {
+    flex-wrap: wrap;
+  }
+
+  /* One wide target beats a small one tucked in a corner, on the one control whose whole
+     job is getting out of this sheet. */
+  .help .help-actions .btn {
+    width: 100%;
+  }
+}
+
+/* ── tap targets ──────────────────────────────────────────────────────────────────── */
+
+/* 34px is a comfortable mouse target and a poor thumb one. Everything that can be tapped
+   goes up to 44, the smallest square a finger hits reliably.
+
+   Keyed on the pointer rather than on width, because a thumb is the same size on a tablet.
+   A width rule would leave a 768px iPad — a touch device by any measure, and one where the
+   sidebar is a full list of tappable rows — on targets picked for a mouse it does not have. */
+@media (hover: none) and (pointer: coarse) {
+  .btn {
+    height: 40px;
+    min-width: 40px;
+  }
+  .btn.icon {
+    width: 40px;
+  }
+  .side .brandbar .btn,
+  .side .brandbar .btn.icon {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+  }
+  .side .brandbar .btn svg {
+    width: 17px;
+    height: 17px;
+  }
+  .rail .btn {
+    width: 44px;
+    height: 44px;
+  }
+  .side .repo,
+  .side .hidden-toggle,
+  .side .thread {
+    min-height: 44px;
+  }
+  /* Three controls set their own height and so miss the blanket `.btn` bump above: the
+     card's close, the card's action row, and the sidebar's back. */
+  .thread-pop #btn-deselect,
+  .thread-pop #btn-deselect.icon {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+  }
+  .thread-pop #btn-deselect svg {
+    width: 16px;
+    height: 16px;
+  }
+  .thread-pop .pair .btn,
+  .side .project-actions .btn {
+    height: 40px;
+  }
+  .side .back {
+    height: 38px;
+  }
+  .toggle {
+    transform: scale(1.15);
+    transform-origin: right center;
+  }
+  .slider {
+    height: 30px;
+  }
+}
+
+/* Sticky rather than merely last, on any screen the sheet has to scroll on — which is a
+   question of height, not width: a phone in landscape is 852px across and still only fits
+   half the sheet. It stays a plain trailing row on a roomy screen, where the sheet fits
+   whole and this would add nothing but a seam and a strip of dead space. */
+@media (max-width: 600px), (max-height: 760px) {
+  .help .help-actions {
+    position: sticky;
+    /* Offset and padded by the sheet's own 22px bottom padding, so the button lands flush
+       on the scrollport's edge instead of floating 22px above it. */
+    bottom: -22px;
+    padding: 12px 0 22px;
+    background: linear-gradient(to top, var(--panel-solid) 62%, transparent);
+  }
+}
+
+/* ── the way back from "hide all UI" ──────────────────────────────────────────────── */
+
+/* H hides the chrome and H brings it back, which is a complete story only if there is a
+   keyboard in the room. On a phone the eye button hides the eye button, and nothing short
+   of a reload undoes it — so on touch, and only on touch, one small control survives.
+   It lives outside `.hud` because `.hud.hidden` zeroes that whole layer's opacity, and a
+   child cannot opt out of its parent's opacity. */
+.ui-restore {
+  position: absolute;
+  right: calc(14px + env(safe-area-inset-right));
+  bottom: calc(14px + env(safe-area-inset-bottom));
+  z-index: 20;
+  width: 44px;
+  height: 44px;
+  display: none;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(16, 17, 22, 0.7);
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.ui-restore svg {
+  width: 20px;
+  height: 20px;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .ui-restore.on {
+    display: grid;
   }
 }
 
