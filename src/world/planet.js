@@ -2,11 +2,11 @@ import * as THREE from 'three'
 import { atlasTexture, hasPart, part } from './kit.js'
 
 /**
- * The three worlds you can put the colony on, and the terrain generator that draws them.
+ * The worlds you can put the colony on, and the terrain generator that draws them.
  *
  * A planet is nothing but a bag of colours and a couple of switches — terrain, scatter, sky
- * and lighting all read from the same preset, so adding a fourth world is a data change
- * rather than a code change.
+ * and lighting all read from the same preset, so adding a world is a data change rather
+ * than a code change.
  */
 
 export const PLANETS = {
@@ -65,6 +65,30 @@ export const PLANETS = {
     companion: { name: 'Moon', color: 0xdcd8cc, size: 3.2, glow: 0xfff6e0 },
     dust: 0.25,
   },
+  desert: {
+    id: 'desert',
+    name: 'Karak',
+    blurb: 'Twin suns, endless dunes, and a spaceport that smells of hot metal.',
+    ground: { low: 0x8a6a42, high: 0xd6b078, tint: 0xe8cf9a },
+    rock: 0xa87848,
+    horizon: 0xe0a468,
+    sky: { top: 0x86aac2, bottom: 0xf0c48c },
+    fog: { color: 0xd8a878, near: 78, far: 200 },
+    sun: { color: 0xfff2cf, intensity: 2.5, night: 0.08 },
+    ambient: { sky: 0xe8c090, ground: 0x8a6038, intensity: 0.85 },
+    atmosphere: 0.8,
+    craters: 0,
+    roughness: 0.8,
+    // Dunes instead of hills: same field inside the colony, ridges beyond it.
+    terrain: 'dunes',
+    scatter: 'desert',
+    // The neutral hull swatches take on this clay, so the same kit reads as adobe here.
+    buildingTint: 0xc9a176,
+    // `sunTwin` puts the companion on the sun's own arc — a second, smaller sun that
+    // rises and sets with the first instead of hanging fixed in the sky.
+    companion: { name: 'Twin', color: 0xffd9a0, size: 2.4, glow: 0xffbe78, sunTwin: true },
+    dust: 1,
+  },
 }
 
 const GROUND_SIZE = 340
@@ -98,22 +122,7 @@ export function createTerrain(planet, detail, seed = 1337) {
     const z = pos.getZ(i)
     const dist = Math.hypot(x, z)
 
-    // Flat where the colony lives, then hills that ramp in over the next forty metres —
-    // so nothing ever builds on a slope but the horizon still has shape to it.
-    const outside = THREE.MathUtils.smoothstep(dist, COLONY_RADIUS - 6, COLONY_RADIUS + 40)
-    const gentle = fbm(noise, x * 0.035, z * 0.035, 3) * 0.5
-    const hills = fbm(noise, x * 0.012, z * 0.012, 4) * 9 + fbm(noise, x * 0.05, z * 0.05, 2) * 1.4
-    let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
-
-    for (const crater of craters) {
-      const d = Math.hypot(x - crater.x, z - crater.z)
-      if (d > crater.r * 1.5) continue
-      // A bowl with a raised rim — the rim is what makes it read as an impact.
-      const t = d / crater.r
-      if (t < 1) y -= (1 - t * t) * crater.depth
-      else y += (1 - Math.abs(t - 1.22) / 0.28) * crater.depth * 0.32
-    }
-
+    const y = sampleHeight(x, z, noise, craters, planet)
     pos.setY(i, y)
 
     // Colour: height-driven blend, mottled with a second noise band so it never bands.
@@ -149,15 +158,40 @@ export function createTerrain(planet, detail, seed = 1337) {
   return mesh
 }
 
+/**
+ * The relief beyond the colony. Hills for most worlds; on a `dunes` planet, ridged noise
+ * sampled in a squashed, rotated frame — 1-|fbm| folds the noise into sharp crests, and
+ * stretching one axis of the sample space makes every crest run the same way, which is
+ * what a wind-built dune field does.
+ */
+function farField(noise, x, z, planet) {
+  if (planet.terrain === 'dunes') {
+    const u = x * 0.9 + z * 0.44
+    const v = z * 0.9 - x * 0.44
+    const ridge = 1 - Math.abs(fbm(noise, u * 0.03, v * 0.009, 3))
+    // Squaring sharpens the crest and flattens the trough — the asymmetry that makes a
+    // dune a dune. A dash of isotropic detail keeps the slip faces from reading as glass.
+    return ridge * ridge * 7 + fbm(noise, x * 0.05, z * 0.05, 2) * 0.8
+  }
+  return fbm(noise, x * 0.012, z * 0.012, 4) * 9 + fbm(noise, x * 0.05, z * 0.05, 2) * 1.4
+}
+
+/**
+ * The one height field — the mesh is displaced by it and everything placed later samples
+ * it, so the two can never drift apart.
+ */
 function sampleHeight(x, z, noise, craters, planet) {
   const dist = Math.hypot(x, z)
+  // Flat where the colony lives, then relief that ramps in over the next forty metres —
+  // so nothing ever builds on a slope but the horizon still has shape to it.
   const outside = THREE.MathUtils.smoothstep(dist, COLONY_RADIUS - 6, COLONY_RADIUS + 40)
   const gentle = fbm(noise, x * 0.035, z * 0.035, 3) * 0.5
-  const hills = fbm(noise, x * 0.012, z * 0.012, 4) * 9 + fbm(noise, x * 0.05, z * 0.05, 2) * 1.4
-  let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
+  const far = farField(noise, x, z, planet)
+  let y = gentle * planet.roughness * (1 - outside) + far * outside * planet.roughness
   for (const crater of craters) {
     const d = Math.hypot(x - crater.x, z - crater.z)
     if (d > crater.r * 1.5) continue
+    // A bowl with a raised rim — the rim is what makes it read as an impact.
     const t = d / crater.r
     if (t < 1) y -= (1 - t * t) * crater.depth
     else y += (1 - Math.abs(t - 1.22) / 0.28) * crater.depth * 0.32
@@ -219,6 +253,16 @@ const SCATTER = {
     { part: 'Rock_2_G_Color1', weight: 1, size: [0.3, 0.7], sink: 0.25, tint: true },
     { part: 'Rock_3_L_Color1', weight: 2, size: [0.4, 0.9], sink: 0.12, tint: true },
     { part: 'Rock_3_Q_Color1', weight: 1, size: [0.25, 0.55], sink: 0.1, tint: true },
+  ],
+  // Sparse on purpose: a dune field crowded with props stops reading as a dune field.
+  // Rocks take the planet's ochre; the grass stays the pack's own straw-dry green.
+  desert: [
+    { part: 'Rock_1_D_Color1', weight: 4, size: [0.5, 1.2], sink: 0.35, tint: true },
+    { part: 'Rock_2_C_Color1', weight: 3, size: [0.5, 1.1], sink: 0.35, tint: true },
+    { part: 'Rock_3_E_Color1', weight: 2, size: [0.6, 1.4], sink: 0.2, tint: true },
+    { part: 'Rock_3_L_Color1', weight: 2, size: [0.4, 0.9], sink: 0.15, tint: true },
+    { part: 'Grass_2_D_Color1', weight: 3, size: [0.5, 1.0], sink: 0.06, upright: true },
+    { part: 'Bush_1_E_Color1', weight: 1, size: [0.35, 0.7], sink: 0.08, upright: true },
   ],
 }
 

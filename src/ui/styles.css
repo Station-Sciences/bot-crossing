@@ -439,7 +439,8 @@ body {
 
 .planets {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* Four worlds sit as a 2x2; three columns would strand one on a row of its own. */
+  grid-template-columns: repeat(2, 1fr);
   gap: 7px;
 }
 

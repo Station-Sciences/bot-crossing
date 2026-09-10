@@ -2,4 +2,4 @@
 export { PRESETS } from '../core/settings.js'
 
 /** Display order for the planet picker — nearest to furthest from home. */
-export const PLANETS_ORDER = ['moon', 'mars', 'terra']
+export const PLANETS_ORDER = ['moon', 'mars', 'terra', 'desert']
