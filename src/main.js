@@ -47,7 +47,16 @@ const engine = new Engine(settings).mount(app)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
+let state = {
+  archived: [],
+  archivedAt: {},
+  opened: [],
+  plots: {},
+  seen: {},
+  hiddenProjects: [],
+  viewedAt: {},
+  projectNames: {},
+}
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -206,6 +215,23 @@ const actions = {
     queueSave()
     applyThreads(threads)
     hud.toast(`Showing ${name} again`)
+  },
+
+  // Cosmetic only: `name` (the repo's real folder/project name) stays the key everywhere a
+  // plot, a thread, or a harness is actually looked up. `projectNames` just says what to
+  // print instead of it. An empty or unchanged value clears the override rather than storing
+  // a no-op entry.
+  renameProject: (name, displayName) => {
+    if (!name) return
+    const trimmed = String(displayName || '').trim()
+    const current = { ...(state.projectNames || {}) }
+    if (!trimmed || trimmed === name) delete current[name]
+    else current[name] = trimmed.slice(0, 80)
+    state.projectNames = current
+    queueSave()
+    applyThreads(threads)
+    syncProject()
+    hud.toast(trimmed && trimmed !== name ? `Renamed to "${trimmed}"` : `Reset to "${name}"`)
   },
 
   copyProjectPath: async () => {
@@ -394,6 +420,7 @@ function syncProject() {
 
   hud.setProject({
     name: plot.name,
+    displayName: state.projectNames?.[plot.name] || plot.name,
     accent: plot.accent,
     path: pathForProject(plot.name),
     threads: list,
@@ -617,12 +644,13 @@ function applyThreads(list) {
   }
   if (firstSeen) queueSave()
 
-  const stats = colony.setThreads(list, archivedSet, hiddenSet, known)
+  const stats = colony.setThreads(list, archivedSet, hiddenSet, known, state.projectNames || {})
   hud.setStats(stats)
 
   legendProjects = colony.plotOrder
     .map((plot) => ({
       name: plot.name,
+      displayName: state.projectNames?.[plot.name] || plot.name,
       accent: plot.accent,
       count: list.filter((t) => !t.archived && !archivedSet.has(t.id) && t.project === plot.name).length,
       urgent: colony.urgentPlots?.has(plot.id) ?? false,

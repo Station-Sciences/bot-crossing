@@ -65,6 +65,27 @@ export const PLANETS = {
     companion: { name: 'Moon', color: 0xdcd8cc, size: 3.2, glow: 0xfff6e0 },
     dust: 0.25,
   },
+  fiji: {
+    id: 'fiji',
+    name: 'Fiji',
+    blurb: 'White sand, warm water, palm shade at noon.',
+    ground: { low: 0xdfc48a, high: 0xf6e8bd, tint: 0xffe9a8 },
+    rock: 0xc98a5e,
+    // Fallback flora (this world has no palm assets to load — see `scatter: 'tropical'`
+    // below) tints by this instead of `rock`, so canopies read as green, not driftwood tan.
+    foliage: 0x2f8f5b,
+    horizon: 0x2fb6c9,
+    sky: { top: 0x2f8fd0, bottom: 0xbdeee0 },
+    fog: { color: 0xbfeee2, near: 110, far: 240 },
+    sun: { color: 0xfff6da, intensity: 2.6, night: 0.15 },
+    ambient: { sky: 0x9fe3e0, ground: 0xd9b878, intensity: 1.05 },
+    atmosphere: 0.7,
+    craters: 0,
+    roughness: 0.55,
+    scatter: 'tropical',
+    companion: { name: 'Daymoon', color: 0xeaeaea, size: 2.6, glow: 0xffffff },
+    dust: 0,
+  },
 }
 
 const GROUND_SIZE = 340
@@ -222,7 +243,11 @@ const SCATTER = {
   ],
 }
 
-/** The fallback when the kit has not loaded: the primitives this used to be made of. */
+/**
+ * The fallback when the kit has not loaded: the primitives this used to be made of. Also the
+ * *only* look `scatter: 'tropical'` ever gets — there is no palm in the pack, so that recipe
+ * is treated as permanently kit-less rather than pretending an atlas part exists.
+ */
 function fallbackShapes(isFlora) {
   const shapes = isFlora
     ? [new THREE.IcosahedronGeometry(0.5, 0), new THREE.ConeGeometry(0.42, 1.5, 5), new THREE.SphereGeometry(0.5, 6, 4)]
@@ -232,7 +257,11 @@ function fallbackShapes(isFlora) {
         new THREE.TetrahedronGeometry(0.72, 0),
       ]
   for (const g of shapes) g.computeVertexNormals()
-  return shapes.map((geo) => ({ geo, sink: 0.25, size: [0.28, 0.83], tint: true, upright: false }))
+  // Rock-fallback shapes still tint by `planet.rock` (`tint`); flora-fallback shapes tint by
+  // `planet.foliage` instead (`foliage`) so a planet can ask for green canopies over tan rock
+  // rather than one rock-coloured blob for everything. `foliage` defaults to `rock` below when
+  // a planet does not set one, so Moon/Mars/Terra render exactly as before.
+  return shapes.map((geo) => ({ geo, sink: 0.25, size: [0.28, 0.83], tint: !isFlora, foliage: isFlora, upright: false }))
 }
 
 export function createScatter(planet, density, keepClear = [], seed = 4242) {
@@ -242,9 +271,10 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
   if (count <= 0) return group
 
   const rand = mulberry(seed)
-  const isFlora = planet.scatter === 'flora'
+  const isTropical = planet.scatter === 'tropical'
+  const isFlora = planet.scatter === 'flora' || isTropical
   const recipe = SCATTER[planet.scatter] || SCATTER.rocks
-  const ready = recipe.every((r) => hasPart(r.part, 'forest'))
+  const ready = !isTropical && recipe.every((r) => hasPart(r.part, 'forest'))
 
   const kinds = ready
     ? recipe.map((r) => ({ ...r, geo: part(r.part, 'forest'), weight: r.weight }))
@@ -268,6 +298,7 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
   )
 
   const rock = new THREE.Color(planet.rock)
+  const foliage = new THREE.Color(planet.foliage ?? planet.rock)
   const dummy = new THREE.Object3D()
   const color = new THREE.Color()
   const fill = new Array(kinds.length).fill(0)
@@ -318,7 +349,8 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
     // Foliage keeps the colour it was painted; rock takes the planet's. The tint is lifted
     // because it *multiplies* the atlas rather than replacing it — the pack's stone is a
     // mid grey, and rust times mid grey is a much darker rust than the ground it sits on.
-    if (kind.tint) color.copy(rock).multiplyScalar(1.55)
+    if (kind.foliage) color.copy(foliage).multiplyScalar(1.55)
+    else if (kind.tint) color.copy(rock).multiplyScalar(1.55)
     else color.setRGB(1, 1, 1)
     color.offsetHSL((rand() - 0.5) * 0.03, (rand() - 0.5) * 0.08, (rand() - 0.5) * 0.14)
     mesh.setColorAt(slot, color)

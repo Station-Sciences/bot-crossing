@@ -263,7 +263,10 @@ export class Colony {
    * ids — repo name for plots, session id for buildings — so a poll that changes nothing
    * moves nothing on screen.
    */
-  setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
+  setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set(), projectNames = {}) {
+    // Cosmetic only, read by `_syncPlots` below to decide what a plot's label prints — every
+    // lookup in this function that actually finds a repo's threads still keys on the real name.
+    this.projectNames = projectNames || {}
     const now = Date.now()
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
 
@@ -392,9 +395,22 @@ export class Colony {
     for (const [name, cells] of layout) wanted.set(name, `${name}:${cells.map((c) => `${c.q},${c.r}`).join('/')}`)
 
     // A plot is rebuilt whenever its own footprint moved, and left completely alone
-    // whenever it did not.
+    // whenever it did not — except its label, which is cheap to redraw on its own and is
+    // the one thing a rename touches without moving a single hex.
     for (const [name, plot] of this.plots) {
-      if (wanted.get(name) === plot.signature) continue
+      const displayName = this.projectNames[name] || name
+      if (wanted.get(name) === plot.signature && plot.displayName === displayName) continue
+      if (wanted.get(name) === plot.signature) {
+        if (plot.label) {
+          this.labelGroup.remove(plot.label)
+          plot.label.userData.dispose?.()
+        }
+        plot.label = createLabel(displayName, plot.accent)
+        plot.label.position.set(plot.labelAnchor.x, 3.2, plot.labelAnchor.z)
+        plot.displayName = displayName
+        this.labelGroup.add(plot.label)
+        continue
+      }
       this.plotGroup.remove(plot.group)
       if (plot.label) {
         this.labelGroup.remove(plot.label)
@@ -410,12 +426,14 @@ export class Colony {
       const cells = layout.get(name)
       if (!cells?.length) return
       const accent = this._pickAccent(name)
+      const displayName = this.projectNames[name] || name
       const plot = new Plot({ id: name, name, index, cells, accent })
       plot.signature = wanted.get(name)
+      plot.displayName = displayName
       this.plots.set(name, plot)
       this.plotGroup.add(plot.group)
 
-      const label = createLabel(name, accent)
+      const label = createLabel(displayName, accent)
       label.position.set(plot.labelAnchor.x, 3.2, plot.labelAnchor.z)
       plot.label = label
       this.labelGroup.add(label)
