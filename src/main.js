@@ -720,7 +720,13 @@ async function boot() {
     hud.toggleHelp(true)
     localStorage.setItem('botcrossing.seen-help', '1')
   } else {
-    hud.hint('Drag to move · click an astronaut · H hides everything', 5200)
+    const touch = matchMedia('(hover: none) and (pointer: coarse)').matches
+    hud.hint(
+      touch
+        ? 'Drag to move · pinch to zoom · two fingers to tilt · tap an astronaut'
+        : 'Drag to move · click an astronaut · H hides everything',
+      5200
+    )
   }
 }
 

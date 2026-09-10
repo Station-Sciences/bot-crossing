@@ -67,6 +67,17 @@ export class Hud {
     this.el.innerHTML = TEMPLATE
     root.appendChild(this.el)
 
+    // A sibling of the HUD, not a child of it: see `.ui-restore` in the stylesheet for why
+    // the one control that undoes "hide all UI" cannot live inside the layer it un-hides.
+    this.restoreEl = document.createElement('button')
+    this.restoreEl.type = 'button'
+    this.restoreEl.className = 'ui-restore'
+    this.restoreEl.title = 'Show the interface again'
+    this.restoreEl.setAttribute('aria-label', 'Show the interface again')
+    this.restoreEl.innerHTML = ICON.eyeOff
+    this.restoreEl.addEventListener('click', () => this.toggleUi(true))
+    root.appendChild(this.restoreEl)
+
     this.$ = (sel) => this.el.querySelector(sel)
 
     this._buildStats()
@@ -777,6 +788,7 @@ export class Hud {
   toggleUi(force) {
     this.visible = force ?? !this.visible
     this.el.classList.toggle('hidden', !this.visible)
+    this.restoreEl.classList.toggle('on', !this.visible)
     this.$('#btn-hide').innerHTML = this.visible ? ICON.eye : ICON.eyeOff
     this.actions.uiVisibility?.(this.visible)
     if (!this.visible) this.toggleHelp(false)
@@ -982,15 +994,26 @@ const TEMPLATE = `
   </div>
 </div>
 
-<div class="toasts"></div>
-<div class="fps panel"></div>
-<div class="hint-pill panel"></div>
+<!-- The three transient readouts share one wrapper so that, on any screen too small to give
+     them a corner each, they can be laid out as a single column instead of being talked out
+     of each other's way with hand-picked offsets. On a roomy screen the wrapper is
+     display:contents and they keep the corners they have always had. Toasts come last:
+     last in the column is nearest the thumb, and last in the DOM is on top. -->
+<div class="readouts">
+  <div class="fps panel"></div>
+  <div class="hint-pill panel"></div>
+  <div class="toasts"></div>
+</div>
 
 <div class="help">
   <div class="sheet panel">
     <h2>Bot Crossing</h2>
-    <p class="sub">Every coding-agent thread on this machine is an astronaut. They walk out of the ship, claim a plot for their repo, and build. Click one to open its thread; click a zone — its deck or its name — for the repo itself, and start a new conversation there. Hide a repo from that panel if you would rather not see it — its threads stay in your harness, and you can show it again from the list. Navigation works like Google Earth — drag the ground itself, right-drag to tilt, scroll to zoom in on whatever is under the cursor.</p>
-    <div class="cols">
+    <p class="sub">Every coding-agent thread on this machine is an astronaut. They walk out of the ship, claim a plot for their repo, and build. <span class="pointer-only">Click</span><span class="touch-only">Tap</span> one to open its thread; <span class="pointer-only">click</span><span class="touch-only">tap</span> a zone — its deck or its name — for the repo itself, and start a new conversation there. Hide a repo from that panel if you would rather not see it — its threads stay in your harness, and you can show it again from the list. Navigation works like Google Earth — <span class="pointer-only">drag the ground itself, right-drag to tilt, scroll to zoom in on whatever is under the cursor.</span><span class="touch-only">drag the ground itself, pinch to zoom in on whatever is between your fingers, and drag with two fingers to tilt and turn.</span></p>
+    <!-- Two versions of the same list, because the answer genuinely differs. A phone has no
+         keys to press, and a shortcut sheet that names ten of them is worse than none: it
+         reads as a list of things this device cannot do. On touch the gestures take the
+         navigation half, and everything else is a button you can see on screen. -->
+    <div class="cols pointer-only">
       <div>
         <div class="k"><span>Drag the ground</span><kbd>drag</kbd></div>
         <div class="k"><span>Tilt &amp; rotate</span><kbd>right-drag</kbd></div>
@@ -1015,14 +1038,28 @@ const TEMPLATE = `
         <div class="k"><span>This sheet</span><kbd>?</kbd></div>
       </div>
     </div>
+    <div class="cols touch-only">
+      <div>
+        <div class="k"><span>Move the ground</span><kbd>drag</kbd></div>
+        <div class="k"><span>Zoom</span><kbd>pinch</kbd></div>
+        <div class="k"><span>Tilt &amp; rotate</span><kbd>two fingers</kbd></div>
+        <div class="k"><span>Open a thread</span><kbd>tap it</kbd></div>
+        <div class="k"><span>Open a repo</span><kbd>tap its deck</kbd></div>
+        <div class="k"><span>Reset, next, orbit, planet, time</span><kbd>bottom bar</kbd></div>
+        <div class="k"><span>Screenshot, settings, hide</span><kbd>top right</kbd></div>
+      </div>
+    </div>
     <div style="margin-top:16px">
-      <div class="legend-row"><i class="badge" style="background:#1a2b46;color:#8fb4ee">?</i> waiting on your reply — click to open the thread</div>
+      <!-- One span around the whole line: the legend row is a flex box with a gap, so a bare
+           span in the middle of the text would become its own flex item and open a hole
+           either side of the word it varies. -->
+      <div class="legend-row"><i class="badge" style="background:#1a2b46;color:#8fb4ee">?</i> <span>waiting on your reply — <span class="pointer-only">click</span><span class="touch-only">tap</span> to open the thread</span></div>
       <div class="legend-row"><i class="badge" style="background:#3d1c1c;color:#e88b8b">!</i> the session hit an error</div>
       <div class="legend-row"><i class="badge" style="background:#16301f;color:#7fd39a">⚒</i> running right now, building</div>
       <div class="legend-row"><i class="badge" style="background:#332b12;color:#e6c67f">✓</i> its pull request landed</div>
       <div class="legend-row"><i class="badge" style="background:#1d1f2e;color:#a9a8c0">z</i> nothing for three days</div>
     </div>
-    <div style="margin-top:18px;display:flex;justify-content:flex-end">
+    <div class="help-actions">
       <button class="btn primary" id="btn-help-close">Got it</button>
     </div>
   </div>

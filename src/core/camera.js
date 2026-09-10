@@ -75,6 +75,10 @@ export class CameraRig {
     this._mode = null
     this._last = new THREE.Vector2()
     this._pinch = 0
+    /** Onset state for a two-finger gesture, and which of the two it turned out to be. */
+    this._two = null
+    /** True from the moment a second finger lands until the last one lifts — see `wasClick`. */
+    this._multi = false
     this._moved = 0
     this._panAnchor = new THREE.Vector3()
     this._hasAnchor = false
@@ -128,8 +132,20 @@ export class CameraRig {
 
     if (this._pointers.size === 2) {
       this._mode = 'pinch'
+      this._multi = true
       this._pinch = this._pinchDistance()
-      this._grab(...this._pinchCentre())
+      const [cx, cy] = this._pinchCentre()
+      // Classified once, at onset, and then locked for the rest of the gesture. Re-deciding
+      // every frame makes a tilt stutter into a zoom the moment your fingers drift apart.
+      // Each finger's own starting point is what the decision is made from — see `_classify`.
+      for (const p of this._pointers.values()) {
+        p.x0 = p.x
+        p.y0 = p.y
+      }
+      this._two = { kind: null, cx, cy }
+      this.interacting = true
+      this.idleFor = 0
+      this._grab(cx, cy)
       return
     }
 
@@ -158,16 +174,7 @@ export class CameraRig {
 
     if (this._mode === 'pinch') {
       e.preventDefault()
-      const d = this._pinchDistance()
-      const [cx, cy] = this._pinchCentre()
-      if (this._pinch > 0 && d > 0) {
-        this.desiredDistance = THREE.MathUtils.clamp(this.desiredDistance * (this._pinch / d), MIN_DIST, MAX_DIST)
-        this.distance = this.desiredDistance
-        this._sync()
-      }
-      this._pinch = d
-      // Two fingers pan as well as zoom, both anchored on the point between them.
-      this._dragGround(cx, cy)
+      this._twoFinger()
       return
     }
 
@@ -187,6 +194,91 @@ export class CameraRig {
     if (this.suppressed) return
     e.preventDefault()
     this._dragGround(e.clientX, e.clientY)
+  }
+
+  /**
+   * Which of the two gestures this is, or null while it is still too early to say.
+   *
+   * Decided from the two fingers' own displacement vectors rather than from the separation
+   * and midpoint they imply. Those two summaries are only meaningful when both fingers are
+   * up to date, and they never are: every finger reports its own `pointermove`, so on the
+   * event that moves finger A the pair still holds finger B's previous position — and a
+   * parallel drag, sampled that way, looks exactly like a pinch for one event. Which is one
+   * event too many, because the decision is final.
+   *
+   * The vectors have no such problem. Fingers travelling the same way are a drag; fingers
+   * travelling opposite ways are a pinch; and that stays true no matter which of the two
+   * reported last.
+   */
+  _classify() {
+    const [p, q] = [...this._pointers.values()]
+    if (!p || !q) return null
+    const px = p.x - p.x0
+    const py = p.y - p.y0
+    const qx = q.x - q.x0
+    const qy = q.y - q.y0
+    const lp = Math.hypot(px, py)
+    const lq = Math.hypot(qx, qy)
+
+    if (lp >= 6 && lq >= 6) {
+      const cos = (px * qx + py * qy) / (lp * lq)
+      return cos > 0.5 ? 'orbit' : 'zoom'
+    }
+    // One finger planted and the other travelling is the commonest pinch of all — thumb
+    // still, index sliding — and it has no second vector to compare against. Distance is
+    // the only thing changing, so it can only be a zoom.
+    if (Math.max(lp, lq) >= 24) return 'zoom'
+    return null
+  }
+
+  /**
+   * The touch half of the navigation model, and the only way to reach tilt without a mouse.
+   *
+   * Two fingers do one of two things, decided by how they first move and then held for the
+   * rest of the gesture:
+   *
+   * - **Change their separation** — a pinch. Zooms, anchored on the point between them, the
+   *   way the wheel anchors on the cursor.
+   * - **Move together** — the touch spelling of right-drag. Horizontal turns the heading,
+   *   vertical tilts between overhead and the horizon, at the same rates and in the same
+   *   directions as the mouse, so the two inputs describe the same camera.
+   *
+   * They are mutually exclusive on purpose. A pinch always drifts a little sideways and a
+   * two-finger drag always breathes a little in and out, so a gesture that applied both at
+   * once would tilt every time you zoomed and zoom every time you tilted.
+   */
+  _twoFinger() {
+    const g = this._two
+    if (!g) return
+    const d = this._pinchDistance()
+    const [cx, cy] = this._pinchCentre()
+
+    if (!g.kind) {
+      g.kind = this._classify()
+      if (!g.kind) {
+        g.cx = cx
+        g.cy = cy
+        this._pinch = d
+        return
+      }
+    }
+
+    if (g.kind === 'orbit') {
+      this.desiredAzimuth -= (cx - g.cx) * 0.006
+      this.desiredPolar = THREE.MathUtils.clamp(this.desiredPolar - (cy - g.cy) * 0.005, MIN_POLAR, MAX_POLAR)
+    } else {
+      if (this._pinch > 0 && d > 0) {
+        this.desiredDistance = THREE.MathUtils.clamp(this.desiredDistance * (this._pinch / d), MIN_DIST, MAX_DIST)
+        this.distance = this.desiredDistance
+        this._sync()
+      }
+      // A pinch pans as well as zooms, both anchored on the point between the fingers.
+      this._dragGround(cx, cy)
+    }
+
+    g.cx = cx
+    g.cy = cy
+    this._pinch = d
   }
 
   /**
@@ -218,8 +310,11 @@ export class CameraRig {
       this.interacting = false
       this.suppressed = false
       this._hasAnchor = false
+      this._two = null
+      this._multi = false
     } else if (this._pointers.size === 1) {
       this._mode = 'pan'
+      this._two = null
       const [only] = this._pointers.values()
       this._last.set(only.x, only.y)
       this._grab(only.x, only.y)
@@ -263,9 +358,15 @@ export class CameraRig {
     t.y = 0
   }
 
-  /** True when the pointer went down and up without really moving — a click, not a drag. */
+  /**
+   * True when the pointer went down and up without really moving — a click, not a drag.
+   *
+   * A two-finger gesture is never a click, however still the fingers were: the pinch branch
+   * does not accumulate `_moved`, so without this the lift at the end of a tilt would read
+   * as a tap and select whatever happened to be under the last finger.
+   */
   get wasClick() {
-    return this._moved < 6
+    return !this._multi && this._moved < 6
   }
 
   /** Glide the view to a world point without yanking it — used when you pick an astronaut. */
