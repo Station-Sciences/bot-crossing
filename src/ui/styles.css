@@ -1513,7 +1513,8 @@ kbd {
 .crew-hint { color: var(--dim); font-size: 12px; }
 .crew-hint:empty { display: none; }
 .crew-price { color: var(--text); font-weight: 600; }
-.crew-add { display: flex; flex-wrap: wrap; gap: 8px; }
+.crew-add { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.crew-add .btn { display: inline-flex; align-items: center; gap: 0.55em; white-space: nowrap; }
 .crew-add:empty { display: none; }
 .crew-drop {
   border: 1px dashed var(--line-strong);

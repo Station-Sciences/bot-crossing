@@ -6,8 +6,14 @@
  * the merged thread list to the game exactly as `/api/threads` would have. When the list
  * changes it also posts a small snapshot to the server — titles, previews, status, never a
  * transcript — so the same planet can be looked at from a phone.
+ *
+ * One folder per harness, because the browser will not hand over the home directory itself:
+ * `~/.claude`, `~/.codex` and `~/.cursor` are three separate picks. Cursor scans last so the
+ * paths the other two have already named can decode its lossy folder names.
  */
 import claudeCode from './claude-code.js'
+import codex from './codex.js'
+import cursor from './cursor.js'
 import {
   canPickFolders,
   droppedFolder,
@@ -19,7 +25,8 @@ import {
   saveFolder,
 } from './handles.js'
 
-const ADAPTERS = [claudeCode]
+/** In scan order. `hint` is what the picker card says about finding the folder. */
+const ADAPTERS = [claudeCode, codex, cursor]
 const adapterById = (id) => ADAPTERS.find((a) => a.id === id) || null
 
 /** Which adapter a picked folder belongs to, by asking each one whether it recognises it. */
@@ -123,7 +130,12 @@ export class LocalScanner {
   async adopt(handle, preferred) {
     const adapter = await adapterFor(handle, preferred)
     if (!adapter) {
-      throw new Error(`That folder does not look like a harness folder — try ${ADAPTERS.map((a) => a.folder).join(' or ')}`)
+      const wanted = preferred && adapterById(preferred)
+      throw new Error(
+        wanted
+          ? `That does not look like your ${wanted.folder} folder — it should contain ${wanted.name}'s sessions`
+          : `That folder does not look like a harness folder — try ${ADAPTERS.map((a) => a.folder).join(', ')}`
+      )
     }
     await saveFolder(adapter.id, handle)
     this.folders.set(adapter.id, { adapter, handle, state: 'granted', threads: 0, error: '' })
@@ -156,22 +168,27 @@ export class LocalScanner {
     try {
       const lists = []
       const harnesses = []
-      for (const [id, folder] of this.folders) {
+      const knownPaths = new Set()
+      // Adapter order, not insertion order: the later ones may lean on what the earlier found.
+      for (const adapter of ADAPTERS) {
+        const folder = this.folders.get(adapter.id)
+        if (!folder) continue
         if (folder.state !== 'granted') {
-          harnesses.push({ id, name: folder.adapter.name, detected: false, error: 'Needs permission' })
+          harnesses.push({ id: adapter.id, name: adapter.name, detected: false, error: 'Needs permission' })
           continue
         }
         try {
-          const threads = await folder.adapter.scanThreads(folder.handle)
+          const threads = await adapter.scanThreads(folder.handle, { knownPaths: [...knownPaths] })
+          for (const t of threads) if (t.projectPath) knownPaths.add(t.projectPath)
           folder.threads = threads.length
           folder.error = ''
           lists.push(threads)
-          harnesses.push({ id, name: folder.adapter.name, detected: true, error: '' })
+          harnesses.push({ id: adapter.id, name: adapter.name, detected: true, error: '' })
         } catch (err) {
           // A grant that expired mid-session reads as NotAllowedError; anything else is the folder itself.
           folder.state = err?.name === 'NotAllowedError' ? 'prompt' : folder.state
           folder.error = err?.message || 'Could not read that folder'
-          harnesses.push({ id, name: folder.adapter.name, detected: true, error: folder.error })
+          harnesses.push({ id: adapter.id, name: adapter.name, detected: true, error: folder.error })
         }
       }
       this.threads = lists.flat().sort((a, b) => b.lastActivityAt - a.lastActivityAt)

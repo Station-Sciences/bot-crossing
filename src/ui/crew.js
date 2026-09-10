@@ -10,8 +10,8 @@ import { LocalScanner } from '../scan/index.js'
 
 const IS_MAC = /Mac/.test(navigator.platform)
 const HINT = IS_MAC
-  ? 'Hidden folders show with ⌘⇧. in the picker, or press ⌘⇧G and type ~/.claude'
-  : 'Pick the folder in your home directory — it is not hidden on this system'
+  ? 'The folders are hidden in the picker: press ⌘⇧. to show them, or ⌘⇧G and type the path shown on the button'
+  : 'Pick the folder inside your home directory — it is not hidden on this system'
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -37,7 +37,7 @@ const TEMPLATE = `
     <div class="crew-cards">
       <section class="crew-card">
         <h3>Read my sessions</h3>
-        <p>Pick the folder your coding agent keeps its sessions in. It stays on your computer; this page reads it while it is open.</p>
+        <p>Pick the folder each coding agent keeps its sessions in. It stays on your computer; this page reads it while it is open. One folder per agent, add as many as you use.</p>
         <div class="crew-folders"></div>
         <div class="crew-add"></div>
         <p class="crew-hint"></p>
@@ -186,10 +186,12 @@ export class CrewPanel {
       })
       .join('')
 
+    // One button per agent the page can read; the first is filled, the rest outlined, so a
+    // person with one agent sees one obvious thing to press.
     this.$('.crew-add').innerHTML = available
       .map(
-        (a) =>
-          `<button class="btn primary" type="button" data-add="${esc(a.harness)}">Choose your <code>${esc(a.folder)}</code> folder</button>`
+        (a, i) =>
+          `<button class="btn ${i === 0 && !folders.length ? 'primary' : ''}" type="button" data-add="${esc(a.harness)}" title="~/${esc(a.folder)}">Read my ${esc(a.name)} sessions <code>~/${esc(a.folder)}</code></button>`
       )
       .join('')
   }
