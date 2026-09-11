@@ -19,12 +19,22 @@ import { HARNESSES, detectedHarnesses, harnessById } from './harnesses/index.mjs
  * name is also the key a saved layout is stored under, so disambiguating unconditionally would
  * move every plot on everybody's map to fix something most people never hit.
  */
-function disambiguateProjects(threads) {
+export function disambiguateProjects(threads) {
   // Windows hands the same checkout back as `c:\…` from one transcript and `C:\…` from
   // another: the CLI's project-directory encoding keeps whatever case the drive letter was
   // given. Those are one path, not two — and counted as two they make an unambiguous name look
   // ambiguous, which renames a plot on a machine that has no collision at all.
-  const canonical = (p) => (/^[A-Za-z]:[\\/]/.test(p) ? p[0].toLowerCase() + p.slice(1) : p)
+  //
+  // Codex hands the same checkout back a third way: with the extended-length prefix, as
+  // `\\?\C:\…`. That does not begin with a drive letter, so the case fold below never reached
+  // it and one folder on disk arrived here as two paths — enough to make `geh` look ambiguous
+  // against itself and rename both plots to their full absolute paths. Drop the prefix first,
+  // but only where a drive follows it: `\\?\UNC\server\share` is a different animal, and
+  // folding its first character would be wrong.
+  const canonical = (p) => {
+    const s = /^\\\\\?\\[A-Za-z]:[\\/]/.test(p) ? p.slice(4) : p
+    return /^[A-Za-z]:[\\/]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s
+  }
 
   const pathsByName = new Map()
   for (const t of threads) {
