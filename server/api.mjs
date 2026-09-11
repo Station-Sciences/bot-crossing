@@ -10,6 +10,7 @@ import {
   newSession as harnessNewSession,
   openThread as harnessOpenThread,
   scanThreads,
+  scanCronJobs,
 } from './scan.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -368,6 +369,32 @@ export async function apiMiddleware(req, res, next) {
       // appearing healthy in the list while quietly contributing nothing.
       const warnings = (await harnessStatus()).filter((h) => h.detected && h.error).map((h) => h.error)
       return send(res, 200, { threads, scannedAt: Date.now(), warnings })
+    }
+
+    if ((url.pathname === '/api/tasks' || url.pathname === '/api/taskboard') && req.method === 'GET') {
+      const threads = await reconcileArchived(await scanThreads())
+      const cronjobs = await scanCronJobs()
+      const tasks = threads
+        .filter((t) => t.running || t.unread || t.hasError || t.ref?.issueNumber || (Date.now() - t.lastActivityAt < 24 * 60 * 60 * 1000 && !t.archived))
+        .map((t) => ({
+          id: t.id,
+          title: t.title,
+          preview: t.preview,
+          project: t.project,
+          projectPath: t.projectPath,
+          running: t.running,
+          unread: t.unread,
+          hasError: t.hasError,
+          lastActivityAt: t.lastActivityAt,
+          harness: t.harness,
+          harnessName: t.harnessName,
+          model: t.model,
+          agent: t.ref?.agent || t.harness,
+          url: t.ref?.url || '',
+          issueNumber: t.ref?.issueNumber || null,
+          ref: t.ref,
+        }))
+      return send(res, 200, { tasks, cronjobs, scannedAt: Date.now() })
     }
 
     if (url.pathname === '/api/harnesses' && req.method === 'GET') {

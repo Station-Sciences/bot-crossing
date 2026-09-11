@@ -6,6 +6,9 @@
  * from, and hands back a single list sorted by recency. Everything harness-specific lives
  * in `server/harnesses/` — see the README there.
  */
+import fsp from 'node:fs/promises'
+import path from 'node:path'
+import os from 'node:os'
 import { HARNESSES, detectedHarnesses, harnessById } from './harnesses/index.mjs'
 
 /**
@@ -118,3 +121,58 @@ const dispatch = (harnessId) => {
 export const openThread = async (harnessId, ref) => dispatch(harnessId).openThread(ref)
 
 export const newSession = async (harnessId, dir) => dispatch(harnessId).newSession(dir)
+
+/**
+ * Scans scheduled cron jobs and routines across all detected harnesses and local agent configs.
+ */
+export async function scanCronJobs() {
+  const harnesses = await detectedHarnesses()
+  const lists = await Promise.all(
+    harnesses.map(async (h) => {
+      if (typeof h.scanCronJobs === 'function') {
+        try {
+          const jobs = await h.scanCronJobs()
+          return (jobs || []).map((j) => ({
+            ...j,
+            harness: h.id,
+            harnessName: h.name,
+          }))
+        } catch (err) {
+          console.warn(`bot-crossing: harness "${h.id}" failed to scan cron jobs —`, err?.message || err)
+          return []
+        }
+      }
+      return []
+    })
+  )
+
+  const openclawJobs = []
+  try {
+    const p = path.join(os.homedir(), '.openclaw', 'cron', 'jobs.json')
+    const raw = await fsp.readFile(p, 'utf8')
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed?.jobs)) {
+      for (const job of parsed.jobs) {
+        openclawJobs.push({
+          id: `openclaw:${job.id}`,
+          agent: job.agentId || 'openclaw',
+          agentName: job.agentId ? job.agentId.charAt(0).toUpperCase() + job.agentId.slice(1) : 'OpenClaw',
+          role: 'Scheduled Agent Task',
+          domain: 'OpenClaw',
+          name: job.name,
+          schedule: job.schedule?.expr || '',
+          tz: job.schedule?.tz || '',
+          task: job.description || job.payload?.message || '',
+          enabled: job.enabled !== false,
+          source: 'OpenClaw Cron',
+          harness: 'openclaw',
+          harnessName: 'OpenClaw',
+        })
+      }
+    }
+  } catch {
+    // OpenClaw cron file not present or unreadable
+  }
+
+  return [...lists.flat(), ...openclawJobs]
+}

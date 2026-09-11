@@ -11,6 +11,7 @@ import { crewRig, loadCrew } from './agents/crew.js'
 import { TIMES } from './world/sky.js'
 import {
   fetchThreads,
+  fetchTaskBoard,
   fetchState,
   saveState,
   openThread,
@@ -134,6 +135,18 @@ const actions = {
   select: (id) => select(id, {}),
 
   focusThread: (id) => select(id, { fly: true }),
+
+  openThreadById: (id) => {
+    const t = threads.find((x) => x.id === id)
+    if (t) openThread(t)
+  },
+
+  focusBillboard: () => {
+    if (colony.taskBoard) {
+      rig.focus(colony.taskBoard.position, { distance: 18 })
+      hud.hint('Task Board Billboard — Spaceport Apron')
+    }
+  },
 
   /**
    * A new thread in this repo. The desktop app opens an empty session with the folder as
@@ -438,13 +451,16 @@ engine.canvas.addEventListener('pointermove', (e) => {
     return
   }
   const p = ndc(e)
+  const billboardHit = colony.pickBillboard(p.x, p.y)
+  colony.setBillboardHover(billboardHit)
+
   const agent = colony.pick(p.x, p.y, p.aspect)
   hoverId = agent?.id ?? null
   colony.astronauts.setHover(agent)
   // Pointing at a quiet plot is what makes its name appear.
   const plot = plotUnder(e, p)
   colony.setHoveredPlot(plot)
-  engine.canvas.style.cursor = agent || plot ? 'pointer' : 'grab'
+  engine.canvas.style.cursor = billboardHit || agent || plot ? 'pointer' : 'grab'
 })
 
 /**
@@ -468,6 +484,13 @@ function plotUnder(e, p) {
 engine.canvas.addEventListener('pointerup', (e) => {
   if (e.button !== 0 || !rig.wasClick) return
   const p = ndc(e)
+
+  // Clicking the task board billboard next to the spaceship opens the task board
+  if (colony.pickBillboard(p.x, p.y)) {
+    hud.openTaskBoard()
+    return
+  }
+
   const agent = colony.pick(p.x, p.y, p.aspect)
   if (agent) {
     select(agent.id, {})
@@ -487,6 +510,7 @@ engine.canvas.addEventListener('pointerleave', () => {
   hoverId = null
   colony.astronauts.setHover(null)
   colony.setHoveredPlot(null)
+  colony.setBillboardHover(false)
 })
 
 // ── keyboard ──────────────────────────────────────────────────────────────────────────
@@ -545,6 +569,11 @@ window.addEventListener('keydown', (e) => {
     case 'A':
       if (selectedId) actions.archiveThread()
       break
+    case 'b':
+    case 'B':
+      if (e.shiftKey) actions.focusBillboard()
+      else hud.toggleTaskBoard()
+      break
     case 'v':
     case 'V':
       if (selectedId) actions.markViewed()
@@ -581,9 +610,10 @@ window.addEventListener('keydown', (e) => {
     case '_':
       rig.desiredDistance = Math.min(150, rig.desiredDistance * 1.22)
       break
-    // One step at a time, outward: the thread, then the zone it belongs to.
+    // One step at a time, outward: the task board, the help sheet, the thread, then the zone it belongs to.
     case 'Escape':
-      if (document.querySelector('.help.open')) hud.toggleHelp(false)
+      if (hud.isTaskBoardOpen) hud.closeTaskBoard()
+      else if (document.querySelector('.help.open')) hud.toggleHelp(false)
       else if (selectedId) select(null, {})
       else if (selectedProject) actions.closeProject()
       break
@@ -654,8 +684,15 @@ async function poll() {
   if (polling) return
   polling = true
   try {
-    const res = await fetchThreads()
+    const [res, taskData] = await Promise.all([
+      fetchThreads(),
+      fetchTaskBoard().catch(() => null),
+    ])
     applyThreads(res.threads || [])
+    if (taskData) {
+      hud.updateTaskBoard(taskData)
+      colony.updateTaskBoardData(taskData)
+    }
     hud.removeBoot()
   } catch (err) {
     hud.toast(err.message || 'Could not reach the thread scanner', 'err')
