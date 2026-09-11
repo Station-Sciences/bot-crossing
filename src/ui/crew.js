@@ -2,16 +2,28 @@
  * How a hosted planet gets its crew.
  *
  * Two pieces of DOM, both optional like the rest of the HUD. A chip at the top of the screen
- * says which folders the page is reading and how fresh the scan is; the overlay behind it is
+ * says which folders the page is reading and how fresh the scan is; the dialog behind it is
  * where a folder is picked, a lapsed grant is revived, and the paid crew is offered. Every
  * picker and permission call here runs from a click, because the browser insists on one.
  */
 import { LocalScanner } from '../scan/index.js'
 
-const IS_MAC = /Mac/.test(navigator.platform)
-const HINT = IS_MAC
-  ? 'The folders are hidden in the picker: press ⌘⇧. to show them, or ⌘⇧G and type the path shown on the button'
-  : 'Pick the folder inside your home directory — it is not hidden on this system'
+const PLATFORM = /Mac/.test(navigator.platform)
+  ? 'mac'
+  : /Win/.test(navigator.platform)
+    ? 'windows'
+    : 'linux'
+
+/** Where a harness folder is, in the words of the person's own operating system. */
+const folderPath = (folder) =>
+  PLATFORM === 'windows' ? `C:\\Users\\you\\${folder}` : `~/${folder}`
+
+/** How to reach a hidden folder in this operating system's picker. */
+const HINT = {
+  mac: 'Hidden in the picker? Press ⌘⇧. to show hidden folders, or ⌘⇧G and type the path.',
+  windows: 'Open your user folder, then pick the folder by name. It is not hidden on Windows.',
+  linux: 'Hidden in the picker? Press Ctrl+H to show hidden folders.',
+}[PLATFORM]
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
@@ -25,33 +37,58 @@ const ago = (t) => {
   return m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`
 }
 
+const ICON = {
+  folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.4A1.4 1.4 0 0 1 4.4 6h4.2l2 2.5h7A1.4 1.4 0 0 1 19 9.9v7.7a1.4 1.4 0 0 1-1.4 1.4H4.4A1.4 1.4 0 0 1 3 17.6z"/></svg>`,
+  chevron: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg>`,
+  check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>`,
+  close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
+  sparkle: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6.3 6.3l2.8 2.8M14.9 14.9l2.8 2.8M6.3 17.7l2.8-2.8M14.9 9.1l2.8-2.8"/></svg>`,
+}
+
+const PERKS = [
+  'A crew that lives on your planet, not on your laptop',
+  'Keeps working while your computer is closed',
+  'Chat from any device, no coding agent needed',
+]
+
 const TEMPLATE = `
-<button class="crew-chip" type="button" title="Which sessions this planet is reading"></button>
+<button class="crew-chip" type="button"></button>
 <div class="crew-overlay" hidden>
-  <div class="crew-dialog panel" role="dialog" aria-labelledby="crew-title">
-    <button class="btn icon crew-close" type="button" aria-label="Close">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-    </button>
-    <h2 id="crew-title">How do you want to crew this planet?</h2>
-    <p class="crew-sub">Every coding-agent thread becomes an astronaut. Nothing installs. Only titles and status ever leave your computer — never a transcript.</p>
+  <div class="crew-dialog" role="dialog" aria-labelledby="crew-title">
+    <button class="crew-close" type="button" aria-label="Close">${ICON.close}</button>
+    <header class="crew-head">
+      <div class="crew-eyebrow">Bot Crossing</div>
+      <h2 id="crew-title">How do you want to crew this planet?</h2>
+      <p class="crew-sub">Every coding-agent thread becomes an astronaut. Nothing installs. Only titles and status ever leave your computer, never a transcript.</p>
+    </header>
     <div class="crew-cards">
       <section class="crew-card">
-        <h3>Read my sessions</h3>
-        <p>Pick the folder each coding agent keeps its sessions in. It stays on your computer; this page reads it while it is open. One folder per agent, add as many as you use.</p>
-        <div class="crew-folders"></div>
-        <div class="crew-add"></div>
-        <p class="crew-hint"></p>
+        <div class="crew-card-head">
+          <h3>Bring your own agents</h3>
+          <span class="crew-tag">Free</span>
+        </div>
+        <p>Pick the folder each coding agent keeps its sessions in. It stays on your computer; this page reads it while it is open.</p>
+        <div class="crew-rows crew-folders"></div>
+        <div class="crew-rows crew-add"></div>
         <div class="crew-drop">or drop the folder here</div>
+        <p class="crew-hint"></p>
         <p class="crew-unsupported" hidden>This browser cannot read folders. Open this page in Chrome, Edge, Brave or Arc on the computer that runs your agents.</p>
       </section>
       <section class="crew-card crew-card-paid">
-        <h3>Built-in agents</h3>
-        <p class="crew-paid-copy">Crew that lives on the planet and keeps working while your computer is closed. Chat with them here, no coding agent needed.</p>
-        <p class="crew-price">$20 / month</p>
-        <div class="crew-paid-actions"><button class="btn" type="button" disabled>Checking your plan…</button></div>
+        <div class="crew-card-head">
+          <h3>Built-in agents</h3>
+          <span class="crew-tag crew-tag-state" hidden></span>
+        </div>
+        <div class="crew-price"><span class="crew-price-amount">$20</span><span class="crew-price-cadence">/ month</span></div>
+        <ul class="crew-perks">${PERKS.map((p) => `<li>${ICON.check}<span>${esc(p)}</span></li>`).join('')}</ul>
+        <div class="crew-paid-actions"></div>
+        <p class="crew-fine">Cancel any time. Secure checkout by Stripe.</p>
       </section>
     </div>
-    <button class="btn ghost crew-skip" type="button">Just look around</button>
+    <footer class="crew-foot">
+      <span class="crew-fine">Hosted by Emra</span>
+      <button class="crew-btn ghost crew-skip" type="button">Just look around</button>
+    </footer>
   </div>
 </div>`
 
@@ -174,30 +211,6 @@ export class CrewPanel {
     this._renderPaid()
   }
 
-  _renderPaid() {
-    const actions = this.$('.crew-paid-actions')
-    const copy = this.$('.crew-paid-copy')
-    const price = this.$('.crew-price')
-    const b = this.billing
-    if (!b) {
-      actions.innerHTML = `<button class="btn" type="button" disabled>Checking your plan…</button>`
-      return
-    }
-    if (b.active) {
-      copy.textContent = 'Your crew is on the planet. Every chat with them is an astronaut here; click one to pick the conversation up.'
-      price.textContent = 'Crew · active'
-      actions.innerHTML = `<button class="btn primary" type="button" data-go="${esc(b.crewUrl || '/')}">Chat with your crew</button>`
-      return
-    }
-    price.textContent = '$20 / month'
-    if (b.checkout === 'off') {
-      actions.innerHTML = `<button class="btn" type="button" disabled>Not available on this planet yet</button>`
-      return
-    }
-    const test = b.checkout === 'pretend' ? ' (test)' : ''
-    actions.innerHTML = `<button class="btn primary" type="button" data-pay="1">Get built-in agents${test}</button>`
-  }
-
   isOpen() {
     return !this.$('.crew-overlay').hidden
   }
@@ -213,12 +226,15 @@ export class CrewPanel {
 
   render() {
     this._renderChip()
+    this._renderPaid()
     const { supported, folders, available } = this.status
     this.$('.crew-unsupported').hidden = supported
     this.$('.crew-add').hidden = !supported
     this.$('.crew-drop').hidden = !supported
     this.$('.crew-hint').textContent = supported ? HINT : ''
 
+    // Folders already granted or remembered, one row each, in the same shape as the buttons
+    // below them so the list reads as one list whichever state a row is in.
     this.$('.crew-folders').innerHTML = folders
       .map((f) => {
         const state =
@@ -229,26 +245,51 @@ export class CrewPanel {
               : 'permission denied'
         const action =
           f.state === 'granted'
-            ? ''
-            : `<button class="btn primary" type="button" data-grant="${esc(f.harness)}">Allow</button>`
-        return `<div class="crew-folder ${esc(f.state)}">
-          <span class="dot"></span>
-          <span class="crew-folder-name"><strong>${esc(f.name)}</strong> · <code>${esc(f.folder)}</code></span>
-          <span class="crew-folder-state">${esc(f.error || state)}</span>
+            ? `<button class="crew-mini" type="button" data-forget="${esc(f.harness)}">Remove</button>`
+            : `<button class="crew-mini primary" type="button" data-grant="${esc(f.harness)}">Allow</button>`
+        return `<div class="crew-row is-${esc(f.state)}">
+          <span class="crew-row-icon"><span class="dot"></span></span>
+          <span class="crew-row-text"><strong>${esc(f.name)}</strong><span class="crew-row-meta">${esc(f.error || state)}</span></span>
           ${action}
-          <button class="btn ghost" type="button" data-forget="${esc(f.harness)}">Remove</button>
         </div>`
       })
       .join('')
 
-    // One button per agent the page can read; the first is filled, the rest outlined, so a
-    // person with one agent sees one obvious thing to press.
     this.$('.crew-add').innerHTML = available
       .map(
-        (a, i) =>
-          `<button class="btn ${i === 0 && !folders.length ? 'primary' : ''}" type="button" data-add="${esc(a.harness)}" title="~/${esc(a.folder)}">Read my ${esc(a.name)} sessions <code>~/${esc(a.folder)}</code></button>`
+        (a) =>
+          `<button class="crew-row" type="button" data-add="${esc(a.harness)}">
+            <span class="crew-row-icon">${ICON.folder}</span>
+            <span class="crew-row-text"><strong>${esc(a.name)}</strong><span class="crew-row-meta"><code>${esc(folderPath(a.folder))}</code></span></span>
+            <span class="crew-row-go">Choose folder ${ICON.chevron}</span>
+          </button>`
       )
       .join('')
+  }
+
+  _renderPaid() {
+    const actions = this.$('.crew-paid-actions')
+    const tag = this.$('.crew-tag-state')
+    const fine = this.$('.crew-card-paid .crew-fine')
+    const b = this.billing
+    tag.hidden = true
+    if (!b) {
+      actions.innerHTML = `<button class="crew-btn primary" type="button" disabled>Checking your plan…</button>`
+      return
+    }
+    if (b.active) {
+      tag.hidden = false
+      tag.textContent = 'Active'
+      fine.textContent = 'Every chat with your crew is an astronaut on this planet.'
+      actions.innerHTML = `<button class="crew-btn primary" type="button" data-go="${esc(b.crewUrl || '/')}">${ICON.sparkle} Chat with your crew</button>`
+      return
+    }
+    fine.textContent = 'Cancel any time. Secure checkout by Stripe.'
+    if (b.checkout === 'off') {
+      actions.innerHTML = `<button class="crew-btn primary" type="button" disabled>Not available on this planet yet</button>`
+      return
+    }
+    actions.innerHTML = `<button class="crew-btn primary" type="button" data-pay="1">Get built-in agents</button>`
   }
 
   _renderChip() {
