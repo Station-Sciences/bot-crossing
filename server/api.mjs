@@ -11,6 +11,7 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
 } from './scan.mjs'
+import { pluginManager } from './plugins.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
@@ -361,7 +362,22 @@ export async function apiMiddleware(req, res, next) {
     return send(res, 403, { error: 'Bot Crossing only answers its own page on this machine' })
   }
 
+  // Intercept with active plugins if configured
+  let pluginsHandled = false
+  await pluginManager.middleware(req, res, () => {
+    pluginsHandled = true
+  })
+  if (!pluginsHandled) return
+
   try {
+    if (url.pathname === '/api/plugins' && req.method === 'GET') {
+      return send(res, 200, pluginManager.getStatus())
+    }
+
+    if (url.pathname === '/api/plugins/client-scripts' && req.method === 'GET') {
+      return send(res, 200, { scripts: pluginManager.getClientScripts() })
+    }
+
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const threads = await reconcileArchived(await scanThreads())
       // A harness that is present but cannot read its own store says so here, rather than

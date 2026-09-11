@@ -277,6 +277,51 @@ const sideWidth = () => (window.innerWidth <= 820 ? 0 : 334)
 hud.setSideWidth(sideWidth())
 window.addEventListener('resize', () => hud.setSideWidth(sideWidth()))
 
+// ── plugin & extension hooks ──────────────────────────────────────────────────────────
+window.botCrossing = {
+  colony,
+  hud,
+  hooks: {
+    'card:render': new Set(),
+    'hud:action': new Set(),
+    'world:ready': new Set(),
+  },
+  on(event, fn) {
+    if (!this.hooks[event]) this.hooks[event] = new Set()
+    this.hooks[event].add(fn)
+  },
+  off(event, fn) {
+    this.hooks[event]?.delete(fn)
+  },
+  emit(event, ...args) {
+    const set = this.hooks[event]
+    if (!set) return false
+    for (const fn of set) {
+      const res = fn(...args)
+      if (res) return res
+    }
+    return false
+  },
+}
+
+// Load active client plugin scripts if provided by the server
+;(async function loadClientPlugins() {
+  try {
+    const res = await fetch('/api/plugins/client-scripts')
+    if (res.ok) {
+      const { scripts } = await res.json()
+      if (Array.isArray(scripts)) {
+        for (const src of scripts) {
+          const s = document.createElement('script')
+          s.type = 'module'
+          s.src = src
+          document.head.appendChild(s)
+        }
+      }
+    }
+  } catch {}
+})()
+
 // ── selection ─────────────────────────────────────────────────────────────────────────
 
 function select(id, { fly = false } = {}) {
