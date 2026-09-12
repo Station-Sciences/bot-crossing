@@ -18,6 +18,10 @@ import {
   revealFolder,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
+import {
+  migrateLegacyHiddenProjects,
+  preferredProjectPath,
+} from './game/project-groups.js'
 
 /**
  * Boot and the outer game loop.
@@ -47,7 +51,16 @@ const engine = new Engine(settings).mount(app)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
+let state = {
+  archived: [],
+  archivedAt: {},
+  opened: [],
+  plots: {},
+  seen: {},
+  hiddenProjects: [],
+  viewedAt: {},
+  activeRoot: '',
+}
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -122,7 +135,16 @@ const actions = {
   },
 
   /** The legend, and anything else that means "show me this repo". */
-  pickProject: (name) => selectProject(name, { fly: true }),
+  pickProject: (key) => selectProject(key, { fly: true }),
+
+  pickRoot: (key) => {
+    if (!key || key === state.activeRoot) return
+    state.activeRoot = key
+    selectedProject = null
+    select(null, {})
+    applyThreads(threads)
+    queueSave()
+  },
 
   /** Back out of one repo to the list of all of them. The panel itself never leaves. */
   closeProject: () => {
@@ -140,15 +162,16 @@ const actions = {
    * its workspace — nothing here is resumed, and nothing is written to disk.
    */
   newConversation: async () => {
-    const name = selectedProject
-    const folder = name && pathForProject(name)
+    const key = selectedProject
+    const folder = key && pathForProject(key)
     if (!folder) {
       hud.toast('No folder on disk for that project', 'err')
       return
     }
     try {
-      const harness = harnessForProject(name)
+      const harness = harnessForProject(key)
       await newSession(folder, harness)
+      const name = colony.plots.get(key)?.name || 'repo'
       hud.toast(`New thread in ${name} — opening ${harnessLabel(harness)}`)
       // It lands as an astronaut walking down the ramp, once it has a record to scan.
       setTimeout(poll, 6000)
@@ -186,23 +209,25 @@ const actions = {
   },
 
   hideProject: () => {
-    const name = selectedProject
-    if (!name) return
-    state.hiddenProjects = hideProject(state.hiddenProjects || [], name)
+    const key = selectedProject
+    if (!key) return
+    const name = colony.plots.get(key)?.name || 'repo'
+    state.hiddenProjects = hideProject(state.hiddenProjects || [], key)
     queueSave()
     // If the open thread belonged to the repo that just left, nothing is selected any more.
     if (selectedId) {
       const thread = threads.find((t) => t.id === selectedId)
-      if (thread?.project === name) select(null, {})
+      if (thread?.plotKey === key) select(null, {})
     }
     selectedProject = null
     applyThreads(threads)
     hud.toast(`Hidden ${name} — still in your harness, gone from the colony`)
   },
 
-  unhideProject: (name) => {
-    if (!name) return
-    state.hiddenProjects = unhideProject(state.hiddenProjects || [], name)
+  unhideProject: (key) => {
+    if (!key) return
+    const name = threads.find((thread) => thread.plotKey === key)?.project || key
+    state.hiddenProjects = unhideProject(state.hiddenProjects || [], key)
     queueSave()
     applyThreads(threads)
     hud.toast(`Showing ${name} again`)
@@ -253,9 +278,10 @@ const actions = {
     // click. That is the setting working, but silently it reads as the colony breaking, so
     // it says which repo went and why.
     const folded = [...(colony.dormantProjects || [])].filter((n) => !foldedBefore.has(n))
+    const foldedNames = hiddenCatalog(folded, threads).map((project) => project.name)
     hud.toast(
       folded.length
-        ? `Archived — ${folded.join(', ')} ${folded.length === 1 ? 'is' : 'are'} all quiet now, folded off the map`
+        ? `Archived — ${foldedNames.join(', ')} ${folded.length === 1 ? 'is' : 'are'} all quiet now, folded off the map`
         : 'Archived — heading home'
     )
     colony.ship.ping()
@@ -293,7 +319,7 @@ function select(id, { fly = false } = {}) {
   const thread = threads.find((t) => t.id === id) || agent.thread
   hud.setSelection(agent, thread)
   // Picking somebody is also picking the zone they are standing on: the sidebar follows.
-  if (thread?.project && colony.plots.has(thread.project)) selectedProject = thread.project
+  if (thread?.plotKey && colony.plots.has(thread.plotKey)) selectedProject = thread.plotKey
   syncProject()
   if (fly) {
     rig.focus(new THREE.Vector3(agent.pos.x, 0, agent.pos.z), { distance: Math.min(rig.desiredDistance, 26) })
@@ -301,20 +327,15 @@ function select(id, { fly = false } = {}) {
 }
 
 /** Open a zone's sidebar. Any selected astronaut from a different zone lets go. */
-function selectProject(name, { fly = false } = {}) {
-  if (!name || !colony.plots.has(name)) return
-  selectedProject = name
+function selectProject(key, { fly = false } = {}) {
+  if (!key || !colony.plots.has(key)) return
+  selectedProject = key
   const current = threads.find((t) => t.id === selectedId)
-  if (current && current.project !== name) select(null, {})
+  if (current && current.plotKey !== key) select(null, {})
   else syncProject()
-  if (fly) actions.focusProject(name)
+  if (fly) actions.focusProject(key)
 }
 
-/**
- * The repo folder behind a zone. Plots are keyed by the folder's *name*, which is all the
- * colony needs to draw one — the path itself lives on the threads, so it is read back off
- * them, taking the most common answer if two checkouts somehow share a basename.
- */
 /** The human name for a harness id — every thread already carries its own. */
 function harnessLabel(id) {
   for (const thread of colony.threads.values()) {
@@ -328,10 +349,10 @@ function harnessLabel(id) {
  * common answer among the threads standing there. A repo worked on from two harnesses gets
  * a new thread in whichever one it is mostly used from.
  */
-function harnessForProject(name) {
+function harnessForProject(key) {
   const counts = new Map()
   for (const thread of colony.threads.values()) {
-    if (thread.project !== name || !thread.harness) continue
+    if (thread.plotKey !== key || !thread.harness) continue
     counts.set(thread.harness, (counts.get(thread.harness) ?? 0) + 1)
   }
   let best = ''
@@ -344,30 +365,20 @@ function harnessForProject(name) {
   return best
 }
 
-function pathForProject(name) {
-  const counts = new Map()
-  for (const thread of colony.threads.values()) {
-    if (thread.project !== name) continue
-    const dir = thread.projectPath || thread.cwd
-    if (!dir) continue
-    counts.set(dir, (counts.get(dir) ?? 0) + 1)
-  }
-  let best = ''
-  let bestCount = 0
-  for (const [dir, n] of counts) {
-    if (n <= bestCount) continue
-    best = dir
-    bestCount = n
-  }
-  return best
+function pathForProject(key) {
+  return preferredProjectPath([...colony.threads.values()].filter((thread) => thread.plotKey === key))
 }
 
 /** Push the open zone's current contents at the sidebar. Closes it if the zone is gone. */
 function syncProject() {
-  const hidden = hiddenCatalog(state.hiddenProjects || [], threads)
+  const rootThreads = threads.filter((thread) => thread.workspaceRootKey === state.activeRoot)
+  const hiddenHere = (state.hiddenProjects || []).filter(
+    (key) => !String(key).includes('::') || key.startsWith(`${state.activeRoot}::`)
+  )
+  const hidden = hiddenCatalog(hiddenHere, rootThreads)
   // Folded-away repos are listed alongside the ones you hid by hand. Same principle: nothing
   // leaves the map without somewhere on screen saying where it went.
-  const folded = hiddenCatalog([...(colony.dormantProjects || [])], threads)
+  const folded = hiddenCatalog([...(colony.dormantProjects || [])], rootThreads)
   const plot = selectedProject ? colony.plots.get(selectedProject) : null
   if (!plot) {
     selectedProject = null
@@ -377,7 +388,7 @@ function syncProject() {
   }
   const now = Date.now()
   const list = [...colony.threads.values()]
-    .filter((thread) => thread.project === plot.name)
+    .filter((thread) => thread.plotKey === plot.id)
     .map((thread) => ({
       id: thread.id,
       title: thread.title,
@@ -393,9 +404,10 @@ function syncProject() {
     })
 
   hud.setProject({
+    key: plot.id,
     name: plot.name,
     accent: plot.accent,
-    path: pathForProject(plot.name),
+    path: pathForProject(plot.id),
     threads: list,
     selectedId,
   })
@@ -476,7 +488,7 @@ engine.canvas.addEventListener('pointerup', (e) => {
   // Nobody there: a zone's deck or its name plate opens that repo's sidebar instead, and
   // bare ground puts everything down.
   const plot = plotUnder(e, p)
-  if (plot) selectProject(plot.name, {})
+  if (plot) selectProject(plot.id, {})
   else {
     select(null, {})
     actions.closeProject()
@@ -602,6 +614,12 @@ function applyThreads(list) {
   })
   list = threads
   const archivedSet = new Set(state.archived)
+
+  const migratedHidden = migrateLegacyHiddenProjects(state.hiddenProjects || [], list)
+  if (JSON.stringify(migratedHidden) !== JSON.stringify(state.hiddenProjects || [])) {
+    state.hiddenProjects = migratedHidden
+    queueSave()
+  }
   const hiddenSet = new Set(state.hiddenProjects || [])
 
   // Which threads the colony has met before. Walking out of the ship is meant to *mean*
@@ -617,14 +635,41 @@ function applyThreads(list) {
   }
   if (firstSeen) queueSave()
 
-  const stats = colony.setThreads(list, archivedSet, hiddenSet, known)
+  const visible = list.filter((thread) => !thread.archived && !archivedSet.has(thread.id))
+  const roots = new Map()
+  for (const thread of visible) {
+    const key = thread.workspaceRootKey || 'other'
+    const current = roots.get(key) || {
+      key,
+      name: thread.workspaceRootName || 'Other',
+      count: 0,
+      urgent: false,
+      latest: 0,
+    }
+    current.count += 1
+    current.latest = Math.max(current.latest, thread.lastActivityAt || 0)
+    current.urgent ||= Boolean(thread.unread || thread.hasError || thread.running)
+    roots.set(key, current)
+  }
+  const rootChoices = [...roots.values()].sort((a, b) => b.latest - a.latest || a.name.localeCompare(b.name))
+  if (!roots.has(state.activeRoot)) {
+    state.activeRoot = rootChoices[0]?.key || ''
+    queueSave()
+  }
+  hud.setRoots(rootChoices, state.activeRoot)
+
+  // Migrate against every root so a duplicate old name is never guessed across maps.
+  colony.migrateLayoutKeys(list)
+  const rootThreads = list.filter((thread) => thread.workspaceRootKey === state.activeRoot)
+  const stats = colony.setThreads(rootThreads, archivedSet, hiddenSet, known)
   hud.setStats(stats)
 
   legendProjects = colony.plotOrder
     .map((plot) => ({
+      key: plot.id,
       name: plot.name,
       accent: plot.accent,
-      count: list.filter((t) => !t.archived && !archivedSet.has(t.id) && t.project === plot.name).length,
+      count: rootThreads.filter((t) => !t.archived && !archivedSet.has(t.id) && t.plotKey === plot.id).length,
       urgent: colony.urgentPlots?.has(plot.id) ?? false,
     }))
     .sort((a, b) => b.count - a.count)

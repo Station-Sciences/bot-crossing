@@ -6,11 +6,8 @@
  * that repo until you show it again. It is for the checkout you have forty dead threads in and
  * do not want owning a third of your ground.
  *
- * Keyed on the project *name*, which is what plots are keyed on too. That has a consequence
- * worth knowing: a second checkout of the same repo appearing renames `foo` to `1/foo` (see
- * `disambiguateProjects` in server/scan.mjs) and the hide quietly stops matching. Keying on the
- * path instead would fix it and break the moment somebody moves a folder, and the layout has the
- * same trade — so both are wrong in the same direction, which is at least predictable.
+ * Keyed on stable plot identity. Display names may collide or change as another checkout
+ * appears; neither event should put a hidden repository back on the map.
  */
 
 export function hideProject(hidden, name) {
@@ -28,7 +25,7 @@ export function unhideProject(hidden, name) {
 export function liveThreadsForColony(threads, archivedIds, hiddenProjects) {
   const archived = archivedIds instanceof Set ? archivedIds : new Set(archivedIds)
   const hidden = hiddenProjects instanceof Set ? hiddenProjects : new Set(hiddenProjects)
-  return threads.filter((t) => !t.archived && !archived.has(t.id) && !hidden.has(t.project || 'unknown'))
+  return threads.filter((t) => !t.archived && !archived.has(t.id) && !hidden.has(t.plotKey || t.project || 'unknown'))
 }
 
 /**
@@ -36,9 +33,11 @@ export function liveThreadsForColony(threads, archivedIds, hiddenProjects) {
  * reads as `0` and you can tell it is safe to forget rather than having to show it to find out.
  */
 export function hiddenCatalog(hidden, threads) {
-  const names = [...new Set(hidden.map(String).filter(Boolean))].sort((a, b) => a.localeCompare(b))
-  return names.map((name) => ({
-    name,
-    count: threads.filter((t) => !t.archived && (t.project || 'unknown') === name).length,
-  }))
+  const ids = [...new Set(hidden.map(String).filter(Boolean))]
+  return ids
+    .map((key) => {
+      const matches = threads.filter((t) => !t.archived && (t.plotKey || t.project || 'unknown') === key)
+      return { key, name: matches[0]?.project || key, count: matches.length }
+    })
+    .sort((a, b) => a.name.localeCompare(b.name))
 }

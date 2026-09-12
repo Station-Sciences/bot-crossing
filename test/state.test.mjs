@@ -51,6 +51,17 @@ test('settings are not merged field-wise — the last tab to touch a slider wins
   assert.deepEqual(out.settings, { q: 3 })
 })
 
+test('active root is a scalar: local changes win, otherwise remote changes win', () => {
+  assert.equal(
+    mergeState({ activeRoot: 'a' }, { activeRoot: 'mine' }, { activeRoot: 'theirs' }).activeRoot,
+    'mine'
+  )
+  assert.equal(
+    mergeState({ activeRoot: 'a' }, { activeRoot: 'a' }, { activeRoot: 'theirs' }).activeRoot,
+    'theirs'
+  )
+})
+
 // ── the API, against a real socket ────────────────────────────────────────────
 
 async function withServer(run) {
@@ -82,9 +93,24 @@ test('a v1 file has its bare ids prefixed on read, once', async () => {
       JSON.stringify({ version: 1, archived: [id], archivedAt: { [id]: 5 }, updatedAt: 1 })
     )
     const state = await (await call('/api/state')).json()
-    assert.equal(state.version, 2)
+    assert.equal(state.version, 3)
     assert.deepEqual(state.archived, [`claude-code:${id}`])
     assert.deepEqual(Object.keys(state.archivedAt), [`claude-code:${id}`])
+    assert.equal(state.activeRoot, '')
+  })
+})
+
+test('a v2 file gains activeRoot without repeating or weakening the id migration', async () => {
+  await withServer(async ({ call, dir }) => {
+    const id = 'fe911daa-2393-4e29-8d36-6e37c328594c'
+    await fsp.writeFile(
+      path.join(dir, 'colony.json'),
+      JSON.stringify({ version: 2, archived: [id], updatedAt: 1 })
+    )
+    const state = await (await call('/api/state')).json()
+    assert.equal(state.version, 3)
+    assert.deepEqual(state.archived, [id], 'the v1 id rewrite is not re-run for a v2 file')
+    assert.equal(state.activeRoot, '')
   })
 })
 
@@ -96,6 +122,19 @@ test('a stale save is refused with the disk state, not silently applied', async 
     assert.equal(stale.status, 409)
     assert.deepEqual((await stale.json()).archived, ['ok'])
     void call
+  })
+})
+
+test('activeRoot survives a 409 merge, so an unchanged second tab cannot erase it', async () => {
+  await withServer(async ({ put }) => {
+    const base = await (await put({ activeRoot: 'root-a' })).json()
+    const changed = await (await put({ activeRoot: 'root-b', baseUpdatedAt: base.updatedAt })).json()
+    const stale = await put({ activeRoot: 'root-a', baseUpdatedAt: base.updatedAt })
+    assert.equal(stale.status, 409)
+    const remote = await stale.json()
+    const merged = mergeState(base, { ...base, activeRoot: 'root-a' }, remote)
+    const saved = await (await put({ ...merged, baseUpdatedAt: changed.updatedAt })).json()
+    assert.equal(saved.activeRoot, 'root-b')
   })
 })
 

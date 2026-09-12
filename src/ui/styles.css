@@ -795,6 +795,55 @@ body {
   display: flex;
 }
 
+.side .roots {
+  display: flex;
+  gap: 5px;
+  padding: 10px 10px 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: none;
+}
+
+.side .roots::-webkit-scrollbar {
+  display: none;
+}
+
+.side .root {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.side .root:hover,
+.side .root[aria-pressed='true'] {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.09);
+  border-color: var(--line-strong);
+}
+
+.side .root .count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
+}
+
+.side .root .alarm {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--blue);
+  box-shadow: 0 0 6px currentColor;
+}
+
 .side .sec-head {
   display: flex;
   align-items: baseline;

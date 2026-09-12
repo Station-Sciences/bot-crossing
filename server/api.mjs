@@ -16,7 +16,7 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
 const STATE_FILE = path.join(DATA_DIR, 'colony.json')
 
-const STATE_VERSION = 2
+const STATE_VERSION = 3
 
 /**
  * v1 keyed everything on a bare session id, because Claude Code was the only harness and its
@@ -29,16 +29,21 @@ const BARE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 const migrateId = (id) => (BARE_UUID.test(id) ? `claude-code:${id}` : id)
 
 function migrate(raw) {
-  if (Number(raw.version) >= 2) return raw
-  const keys = (o) => Object.fromEntries(Object.entries(asObject(o)).map(([k, v]) => [migrateId(k), v]))
-  return {
-    ...raw,
-    archived: asArray(raw.archived).map(migrateId),
-    archivedAt: keys(raw.archivedAt),
-    opened: asArray(raw.opened).map(migrateId),
-    seen: keys(raw.seen),
-    viewedAt: keys(raw.viewedAt),
+  let state = raw
+  if (Number(state.version) < 2) {
+    const keys = (o) => Object.fromEntries(Object.entries(asObject(o)).map(([k, v]) => [migrateId(k), v]))
+    state = {
+      ...state,
+      version: 2,
+      archived: asArray(state.archived).map(migrateId),
+      archivedAt: keys(state.archivedAt),
+      opened: asArray(state.opened).map(migrateId),
+      seen: keys(state.seen),
+      viewedAt: keys(state.viewedAt),
+    }
   }
+  if (Number(state.version) < 3) state = { ...state, version: 3, activeRoot: '' }
+  return state
 }
 
 /**
@@ -56,6 +61,7 @@ const emptyState = () => ({
   seen: {},
   hiddenProjects: [],
   viewedAt: {},
+  activeRoot: '',
   settings: null,
   updatedAt: 0,
 })
@@ -75,6 +81,7 @@ async function readState() {
       seen: asObject(raw.seen),
       hiddenProjects: asArray(raw.hiddenProjects).map(String).filter(Boolean),
       viewedAt: asObject(raw.viewedAt),
+      activeRoot: typeof raw.activeRoot === 'string' ? raw.activeRoot : '',
       settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : null,
       updatedAt: Number(raw.updatedAt) || 0,
     }
@@ -110,6 +117,7 @@ async function writeState(next) {
     seen: asObject(next.seen),
     hiddenProjects: asArray(next.hiddenProjects).map(String).filter(Boolean),
     viewedAt: asObject(next.viewedAt),
+    activeRoot: typeof next.activeRoot === 'string' ? next.activeRoot : '',
     settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
     updatedAt: Date.now(),
   }

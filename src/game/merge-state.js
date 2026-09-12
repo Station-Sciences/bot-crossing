@@ -97,6 +97,14 @@ function mergeMap(base, local, remote) {
   return out
 }
 
+/** A scalar changed in this tab wins; otherwise adopt the other tab's value. */
+function mergeScalar(base, local, remote, fallback) {
+  const b = typeof base === 'string' ? base : fallback
+  const l = typeof local === 'string' ? local : b
+  const r = typeof remote === 'string' ? remote : fallback
+  return sameValue(l, b) ? r : l
+}
+
 /**
  * Merge one colony state, field by field.
  *
@@ -118,7 +126,7 @@ export function mergeState(base, local, remote) {
   const l = local || {}
   const r = remote || {}
   return {
-    version: r.version ?? l.version ?? 2,
+    version: r.version ?? l.version ?? 3,
     archived: mergeSet(b.archived, l.archived, r.archived),
     archivedAt: mergeMap(b.archivedAt, l.archivedAt, r.archivedAt),
     opened: mergeSet(b.opened, l.opened, r.opened),
@@ -126,6 +134,7 @@ export function mergeState(base, local, remote) {
     seen: mergeMap(b.seen, l.seen, r.seen),
     hiddenProjects: mergeSet(b.hiddenProjects, l.hiddenProjects, r.hiddenProjects),
     viewedAt: mergeMap(b.viewedAt, l.viewedAt, r.viewedAt),
+    activeRoot: mergeScalar(b.activeRoot, l.activeRoot, r.activeRoot, ''),
     settings: l.settings && typeof l.settings === 'object' ? l.settings : r.settings ?? null,
   }
 }
