@@ -181,13 +181,53 @@ async function fakeCursor(dirName, records) {
   return home
 }
 
-async function cursorWith(home) {
+async function cursorWith(home, stateDb = path.join(home, 'missing-state.vscdb')) {
   process.env.BOT_CROSSING_CURSOR_PROJECTS = home
-  const mod = await import(`../server/harnesses/cursor.mjs?${home}`)
+  process.env.BOT_CROSSING_CURSOR_STATE_DB = stateDb
+  process.env.BOT_CROSSING_CURSOR_CLI = path.join(home, 'missing-cursor-cli')
+  process.env.BOT_CROSSING_CURSOR_OPEN_REQUEST = path.join(home, '.cursor', 'bot-crossing-open.json')
+  const mod = await import(`../server/harnesses/cursor.mjs?${home}-${Date.now()}-${Math.random()}`)
   return mod.default
 }
 
 const askedFor = (text) => ({ role: 'user', message: { content: [{ type: 'text', text }] } })
+
+async function fakeCursorState(file, rows) {
+  const { DatabaseSync } = await import('node:sqlite')
+  await fsp.mkdir(path.dirname(file), { recursive: true })
+  const db = new DatabaseSync(file)
+  try {
+    db.exec(`
+      CREATE TABLE composerHeaders (
+        composerId TEXT PRIMARY KEY,
+        isSubagent INTEGER,
+        createdAt INTEGER,
+        lastUpdatedAt INTEGER,
+        isArchived INTEGER,
+        recency INTEGER,
+        value TEXT
+      )
+    `)
+    const insert = db.prepare(`
+      INSERT INTO composerHeaders
+        (composerId, isSubagent, createdAt, lastUpdatedAt, isArchived, recency, value)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const row of rows) {
+      insert.run(
+        row.composerId,
+        row.isSubagent || 0,
+        row.createdAt || 0,
+        row.lastUpdatedAt || 0,
+        row.isArchived || 0,
+        row.recency || 0,
+        JSON.stringify(row.value || {}),
+      )
+    }
+  } finally {
+    db.close()
+  }
+}
 
 test('a Cursor transcript yields a thread with the typed query as its title', async () => {
   const home = await fakeCursor('tmp', [
@@ -230,14 +270,150 @@ test('a failed turn is an error, and an open turn is running', async () => {
   await fsp.rm(home, { recursive: true, force: true })
 })
 
-test('Cursor offers a folder link but never a per-thread one it cannot honour', async () => {
+test('Cursor opens a workspace URL while requesting per-thread focus', async () => {
   const home = await fakeCursor('tmp', [askedFor('<user_query>hi</user_query>')])
   const h = await cursorWith(home)
-  assert.equal(h.openThread({ sessionId: SESSION_ID }).ok, false)
+  const openedThread = await h.openThread({ composerId: SESSION_ID, workspacePath: '/tmp/some repo' })
+  assert.equal(openedThread.ok, true)
+  assert.equal(openedThread.url, 'cursor://file/tmp/some%20repo')
+  assert.equal(openedThread.command, undefined, 'no CLI means URL-only degraded operation')
+  const request = JSON.parse(
+    await fsp.readFile(path.join(home, '.cursor', 'bot-crossing-open.json'), 'utf8'),
+  )
+  assert.equal(request.composerId, SESSION_ID)
+  assert.equal((await fsp.stat(path.join(home, '.cursor', 'bot-crossing-open.json'))).mode & 0o777, 0o600)
+  assert.equal((await h.openThread({ composerId: [SESSION_ID], workspacePath: '/tmp' })).ok, false)
+  assert.equal((await h.openThread({ workspacePath: '/tmp' })).ok, false)
   const opened = h.newSession('/tmp/some repo')
   assert.equal(opened.ok, true)
   assert.equal(schemeOf(opened.url), 'cursor')
   assert.ok(opened.url.includes('%20'), 'a space in the path is escaped, not left raw')
   assert.equal(h.newSession('relative/path').ok, false)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('a Cursor composer header maps sidebar metadata into a thread', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'cursor-composer-'))
+  const stateDb = path.join(home, 'state.vscdb')
+  const now = Date.now()
+  await fakeCursorState(stateDb, [
+    {
+      composerId: SESSION_ID,
+      createdAt: now - 1000,
+      lastUpdatedAt: now,
+      isArchived: 1,
+      value: {
+        name: 'Sidebar title',
+        subtitle: 'Sidebar preview',
+        workspaceIdentifier: { uri: { fsPath: '/tmp/demo' } },
+        trackedGitRepos: [
+          { repoPath: '/tmp/demo', branches: [{ branchName: 'feature/sidebar', lastInteractionAt: now }] },
+        ],
+        unifiedMode: 'agent',
+        hasUnreadMessages: true,
+        unfinishedRunAt: now,
+      },
+    },
+  ])
+  const h = await cursorWith(path.join(home, 'projects'), stateDb)
+  const [thread] = await h.scanThreads()
+  assert.equal(thread.id, `cursor:${SESSION_ID}`)
+  assert.equal(thread.title, 'Sidebar title')
+  assert.equal(thread.preview, 'Sidebar preview')
+  assert.equal(thread.project, 'demo')
+  assert.equal(thread.projectPath, '/tmp/demo')
+  assert.equal(thread.gitBranch, 'feature/sidebar')
+  assert.equal(thread.model, 'agent')
+  assert.equal(thread.unread, true)
+  assert.equal(thread.running, true)
+  assert.equal(thread.archived, true)
+  assert.equal(thread.canOpen, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('Cursor excludes composer rows marked as subagents', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'cursor-subagent-'))
+  const projects = await fakeCursor('tmp', [askedFor('<user_query>child task</user_query>')])
+  const stateDb = path.join(home, 'state.vscdb')
+  await fakeCursorState(stateDb, [
+    { composerId: SESSION_ID, value: { name: 'Task child', isSubagent: true } },
+  ])
+  const h = await cursorWith(projects, stateDb)
+  assert.deepEqual(await h.scanThreads(), [])
+  await fsp.rm(home, { recursive: true, force: true })
+  await fsp.rm(projects, { recursive: true, force: true })
+})
+
+test('Cursor merges composer state with transcript size and errors', async () => {
+  const projects = await fakeCursor('tmp', [
+    askedFor('<user_query>transcript title</user_query>'),
+    { type: 'turn_ended', status: 'error' },
+  ])
+  const stateDb = path.join(projects, 'state.vscdb')
+  const now = Date.now()
+  await fakeCursorState(stateDb, [
+    {
+      composerId: SESSION_ID,
+      lastUpdatedAt: now,
+      isArchived: 1,
+      value: {
+        name: 'Composer title',
+        subtitle: 'Composer preview',
+        workspaceIdentifier: { uri: { fsPath: '/tmp/composer-workspace' } },
+        hasUnreadMessages: true,
+        unfinishedRunAt: now,
+      },
+    },
+  ])
+  const h = await cursorWith(projects, stateDb)
+  const [thread] = await h.scanThreads()
+  assert.equal(thread.title, 'Composer title')
+  assert.equal(thread.preview, 'Composer preview')
+  assert.equal(thread.cwd, '/tmp/composer-workspace')
+  assert.equal(thread.unread, true)
+  assert.equal(thread.running, true)
+  assert.equal(thread.archived, true)
+  assert.equal(thread.hasError, true)
+  assert.ok(thread.sizeBytes > 0)
+  assert.equal(thread.source, 'composer+agent')
+  await fsp.rm(projects, { recursive: true, force: true })
+})
+
+test('an unreadable Cursor database degrades to transcripts with a diagnostic', async () => {
+  const projects = await fakeCursor('tmp', [askedFor('<user_query>still visible</user_query>')])
+  const unreadable = path.join(projects, 'state.vscdb')
+  await fsp.mkdir(unreadable)
+  const h = await cursorWith(projects, unreadable)
+  const [thread] = await h.scanThreads()
+  assert.equal(thread.title, 'still visible')
+  assert.match(await h.diagnostic(), /state\.vscdb is unreadable/)
+  await fsp.rm(projects, { recursive: true, force: true })
+})
+
+test('an unchanged Cursor database is served from the mtime and size cache', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'cursor-cache-'))
+  const stateDb = path.join(home, 'state.vscdb')
+  await fakeCursorState(stateDb, [
+    {
+      composerId: SESSION_ID,
+      value: {
+        name: 'first-title',
+        workspaceIdentifier: { uri: { fsPath: '/tmp/demo' } },
+      },
+    },
+  ])
+  const stableTime = new Date('2026-09-12T08:00:00.000Z')
+  await fsp.utimes(stateDb, stableTime, stableTime)
+  const h = await cursorWith(path.join(home, 'projects'), stateDb)
+  assert.equal((await h.scanThreads())[0].title, 'first-title')
+  const bytes = await fsp.readFile(stateDb)
+  const first = Buffer.from('first-title')
+  const other = Buffer.from('other-title')
+  const at = bytes.indexOf(first)
+  assert.ok(at >= 0, 'fixture title is stored plainly in SQLite')
+  other.copy(bytes, at)
+  await fsp.writeFile(stateDb, bytes)
+  await fsp.utimes(stateDb, stableTime, stableTime)
+  assert.equal((await h.scanThreads())[0].title, 'first-title', 'the unchanged stat avoids another query')
   await fsp.rm(home, { recursive: true, force: true })
 })
