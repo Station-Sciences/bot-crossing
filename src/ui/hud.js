@@ -584,6 +584,12 @@ export class Hud {
     this.selected = { agent, thread }
     card.classList.add('on')
 
+    // Allow plugins to customize or completely replace the card render
+    if (window.botCrossing?.emit('card:render', { agent, thread, card, hud: this })) {
+      this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
+      return
+    }
+
     this.$('.thread-pop .title').textContent = thread.title || 'Untitled thread'
     const status = STATUS_LABEL[agent.status] || agent.status
     const meta = this.$('.thread-pop .meta')

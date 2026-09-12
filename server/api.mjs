@@ -11,6 +11,7 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
 } from './scan.mjs'
+import { pluginManager } from './plugins.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
@@ -357,11 +358,62 @@ export async function apiMiddleware(req, res, next) {
   const url = new URL(req.url, 'http://localhost')
   if (!url.pathname.startsWith('/api/')) return next ? next() : send(res, 404, { error: 'Not found' })
 
+  if (url.pathname.startsWith('/plugins/')) {
+    const rel = decodeURIComponent(url.pathname).replace(/^\/plugins\//, '')
+    let filePath = path.resolve(path.join(here, '..', 'plugins'), rel)
+    if (!fs.existsSync(filePath)) {
+      filePath = path.resolve(path.join(here, '..', '..', 'bot-crossing-plugins', 'packages'), rel)
+    }
+    if (fs.existsSync(filePath) && !fs.statSync(filePath).isDirectory()) {
+      const ext = path.extname(filePath)
+      const type = ext === '.js' || ext === '.mjs' ? 'text/javascript; charset=utf-8' :
+                   ext === '.css' ? 'text/css; charset=utf-8' :
+                   ext === '.json' ? 'application/json; charset=utf-8' : 'application/octet-stream'
+      const content = fs.readFileSync(filePath)
+      res.writeHead(200, { 'Content-Type': type, 'Content-Length': content.length, 'Cache-Control': 'no-cache' })
+      return res.end(content)
+    }
+
+    // Dynamic Remote Fallback: Stream directly from GitHub BeerCanLabs/bot-crossing-plugins
+    try {
+      const remoteUrl = `https://raw.githubusercontent.com/BeerCanLabs/bot-crossing-plugins/main/packages/${rel}`
+      const remoteRes = await fetch(remoteUrl)
+      if (remoteRes.ok) {
+        const ext = path.extname(rel)
+        const type = ext === '.js' || ext === '.mjs' ? 'text/javascript; charset=utf-8' :
+                     ext === '.css' ? 'text/css; charset=utf-8' :
+                     ext === '.json' ? 'application/json; charset=utf-8' : 'application/octet-stream'
+        const buf = Buffer.from(await remoteRes.arrayBuffer())
+        res.writeHead(200, { 'Content-Type': type, 'Content-Length': buf.length, 'Cache-Control': 'public, max-age=300' })
+        return res.end(buf)
+      }
+    } catch (err) {
+      console.warn(`[Plugins] Remote asset fetch error for ${rel}:`, err.message)
+    }
+
+    return send(res, 404, { error: 'Plugin asset not found' })
+  }
+
   if (!isLocalRequest(req)) {
     return send(res, 403, { error: 'Bot Crossing only answers its own page on this machine' })
   }
 
+  // Intercept with active plugins if configured
+  let pluginsHandled = false
+  await pluginManager.middleware(req, res, () => {
+    pluginsHandled = true
+  })
+  if (!pluginsHandled) return
+
   try {
+    if (url.pathname === '/api/plugins' && req.method === 'GET') {
+      return send(res, 200, await pluginManager.getStatus())
+    }
+
+    if (url.pathname === '/api/plugins/client-scripts' && req.method === 'GET') {
+      return send(res, 200, { scripts: pluginManager.getClientScripts() })
+    }
+
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const threads = await reconcileArchived(await scanThreads())
       // A harness that is present but cannot read its own store says so here, rather than
