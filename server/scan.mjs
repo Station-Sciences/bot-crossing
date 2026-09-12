@@ -7,61 +7,7 @@
  * in `server/harnesses/` — see the README there.
  */
 import { HARNESSES, detectedHarnesses, harnessById } from './harnesses/index.mjs'
-
-/**
- * A project's ground is keyed on its name, and a name is the last segment of its path — so two
- * checkouts of the same repo, `~/workspaces/1/foo` and `~/workspaces/2/foo`, are both "foo".
- * Left alone they share one plot and their threads become indistinguishable, which is wrong for
- * anyone keeping parallel copies instead of using worktrees.
- *
- * Where a name is ambiguous, grow it leftward along the path until it is not: `1/foo` and
- * `2/foo`. Only names that actually collide are touched, and that restraint is the point — the
- * name is also the key a saved layout is stored under, so disambiguating unconditionally would
- * move every plot on everybody's map to fix something most people never hit.
- */
-function disambiguateProjects(threads) {
-  // Windows hands the same checkout back as `c:\…` from one transcript and `C:\…` from
-  // another: the CLI's project-directory encoding keeps whatever case the drive letter was
-  // given. Those are one path, not two — and counted as two they make an unambiguous name look
-  // ambiguous, which renames a plot on a machine that has no collision at all.
-  const canonical = (p) => (/^[A-Za-z]:[\\/]/.test(p) ? p[0].toLowerCase() + p.slice(1) : p)
-
-  const pathsByName = new Map()
-  for (const t of threads) {
-    if (!t.project) continue
-    if (!pathsByName.has(t.project)) pathsByName.set(t.project, new Set())
-    pathsByName.get(t.project).add(canonical(t.projectPath || ''))
-  }
-
-  const renames = new Map()
-  for (const [name, paths] of pathsByName) {
-    if (paths.size < 2) continue
-    const list = [...paths]
-    // Both separators. A Windows path splits on neither otherwise, leaving a single "segment"
-    // that is the whole absolute path — which then becomes the plot's name on the map.
-    const segments = list.map((p) => p.split(/[\\/]/).filter(Boolean))
-    const deepest = Math.max(...segments.map((s) => s.length))
-
-    // Take one more trailing segment until every path in the group reads differently. Paths
-    // that differ at all must separate by `deepest`, so this always terminates. A thread with
-    // no path at all cannot be told apart by one, so it keeps the bare name and the others
-    // move around it.
-    const labelAt = (segs, depth) => (segs.length ? segs.slice(-depth).join('/') : name)
-    let depth = 1
-    let labels = segments.map((segs) => labelAt(segs, depth))
-    while (new Set(labels).size < list.length && depth < deepest) {
-      depth += 1
-      labels = segments.map((segs) => labelAt(segs, depth))
-    }
-    list.forEach((path, i) => renames.set(`${name}\u0000${path}`, labels[i]))
-  }
-
-  if (!renames.size) return threads
-  return threads.map((t) => {
-    const next = renames.get(`${t.project || ''}\u0000${canonical(t.projectPath || '')}`)
-    return next && next !== t.project ? { ...t, project: next } : t
-  })
-}
+import { addRepositoryIdentity } from './lib/repository-identity.mjs'
 
 /**
  * Every thread from every detected harness.
@@ -82,7 +28,7 @@ export async function scanThreads() {
       }
     })
   )
-  const threads = disambiguateProjects(lists.flat())
+  const threads = await addRepositoryIdentity(lists.flat())
   threads.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   return threads
 }

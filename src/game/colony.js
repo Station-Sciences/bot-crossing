@@ -20,6 +20,7 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
+import { dormantPlotKeys, migrateLegacyPlotCells } from './project-groups.js'
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -260,17 +261,17 @@ export class Colony {
 
   /**
    * Take a fresh scan and reshape the colony around it. Everything here is keyed by stable
-   * ids — repo name for plots, session id for buildings — so a poll that changes nothing
+   * ids — repository identity for plots, session id for buildings — so a poll that changes nothing
    * moves nothing on screen.
    */
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
     const now = Date.now()
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
 
-    // Group by repo, biggest project first so the busiest work lands nearest the middle.
+    // Group by stable repository identity, not by a checkout path or display label.
     const byProject = new Map()
     for (const thread of live) {
-      const key = thread.project || 'unknown'
+      const key = thread.plotKey || thread.project || 'unknown'
       if (!byProject.has(key)) byProject.set(key, [])
       byProject.get(key).push(thread)
     }
@@ -286,15 +287,10 @@ export class Colony {
      * Deliberately all-or-nothing per repo: a zone with one live thread in it stays whole,
      * because half a zone would misrepresent the repo rather than tidy the map.
      */
-    const dormant = new Set()
+    let dormant = new Set()
     if (this.settings.get('hideDormant')) {
-      for (const [name, list] of byProject) {
-        if (list.every((t) => statusFor(t, now) === 'sleeping')) dormant.add(name)
-      }
-      // Never fold away everything: a colony that answers a poll with an empty planet reads as
-      // broken rather than tidy, and there is nothing on screen to tell you which it was.
-      if (dormant.size === byProject.size) dormant.clear()
-      for (const name of dormant) byProject.delete(name)
+      dormant = dormantPlotKeys(byProject, (thread) => statusFor(thread, now) === 'sleeping')
+      for (const key of dormant) byProject.delete(key)
     }
     this.dormantProjects = dormant
 
@@ -309,11 +305,11 @@ export class Colony {
     // reclaims the same ground if it is still free. Re-inserting the entry also keeps
     // LAYOUT_MEMORY from evicting a name you only hid — otherwise a zone folded away for a
     // week loses where it used to be, and comes back somewhere else entirely.
-    for (const name of [...hiddenProjects, ...dormant]) {
-      const cells = this.plotCells.get(name)
+    for (const key of [...hiddenProjects, ...dormant]) {
+      const cells = this.plotCells.get(key)
       if (!cells) continue
-      this.plotCells.delete(name)
-      this.plotCells.set(name, cells)
+      this.plotCells.delete(key)
+      this.plotCells.set(key, cells)
     }
 
     const roster = []
@@ -327,8 +323,8 @@ export class Colony {
     // only show it on hover.
     const active = new Set()
 
-    for (const [name, list] of projects) {
-      const plot = this.plots.get(name)
+    for (const [key, list] of projects) {
+      const plot = this.plots.get(key)
       if (!plot) continue
       // Oldest thread first, so a given session keeps its slot as siblings come and go.
       list.sort((a, b) => a.createdAt - b.createdAt)
@@ -377,24 +373,27 @@ export class Colony {
     // — never because a different repo gained or lost a thread. `plotCells` carries it
     // between polls, and the colony file carries it between sessions.
     const layout = allocateCells(
-      projects.map(([name, list]) => ({ id: name, size: list.length })),
+      projects.map(([key, list]) => ({ id: key, size: list.length })),
       this.plotCells
     )
     // Remembered, not replaced: a project that has just lost its last thread keeps its
     // ground on the books, and the oldest entries fall off the end.
-    for (const [name, cells] of layout) {
-      this.plotCells.delete(name)
-      this.plotCells.set(name, cells)
+    for (const [key, cells] of layout) {
+      this.plotCells.delete(key)
+      this.plotCells.set(key, cells)
     }
     while (this.plotCells.size > LAYOUT_MEMORY) this.plotCells.delete(this.plotCells.keys().next().value)
 
+    const names = new Map(projects.map(([key, list]) => [key, list[0]?.project || 'unknown']))
     const wanted = new Map()
-    for (const [name, cells] of layout) wanted.set(name, `${name}:${cells.map((c) => `${c.q},${c.r}`).join('/')}`)
+    for (const [key, cells] of layout) {
+      wanted.set(key, `${key}:${names.get(key)}:${cells.map((c) => `${c.q},${c.r}`).join('/')}`)
+    }
 
     // A plot is rebuilt whenever its own footprint moved, and left completely alone
     // whenever it did not.
-    for (const [name, plot] of this.plots) {
-      if (wanted.get(name) === plot.signature) continue
+    for (const [key, plot] of this.plots) {
+      if (wanted.get(key) === plot.signature) continue
       this.plotGroup.remove(plot.group)
       if (plot.label) {
         this.labelGroup.remove(plot.label)
@@ -402,17 +401,18 @@ export class Colony {
       }
       this.usedAccents.delete(plot.accent)
       plot.dispose()
-      this.plots.delete(name)
+      this.plots.delete(key)
     }
 
-    projects.forEach(([name], index) => {
-      if (this.plots.has(name)) return
-      const cells = layout.get(name)
+    projects.forEach(([key, list], index) => {
+      if (this.plots.has(key)) return
+      const cells = layout.get(key)
       if (!cells?.length) return
-      const accent = this._pickAccent(name)
-      const plot = new Plot({ id: name, name, index, cells, accent })
-      plot.signature = wanted.get(name)
-      this.plots.set(name, plot)
+      const name = names.get(key)
+      const accent = this._pickAccent(key)
+      const plot = new Plot({ id: key, name, index, cells, accent })
+      plot.signature = wanted.get(key)
+      this.plots.set(key, plot)
       this.plotGroup.add(plot.group)
 
       const label = createLabel(name, accent)
@@ -635,6 +635,14 @@ export class Colony {
       if (list.length) clean.set(String(name), list)
     }
     this.plotCells = clean
+  }
+
+  /**
+   * Layouts written before repository identity were keyed by the visible repo name. Reuse
+   * that ground only when the old name has one unambiguous stable owner.
+   */
+  migrateLayoutKeys(threads) {
+    migrateLegacyPlotCells(this.plotCells, threads)
   }
 
   /** The same, on the way out. */

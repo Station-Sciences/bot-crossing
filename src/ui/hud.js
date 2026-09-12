@@ -397,17 +397,39 @@ export class Hud {
     }
   }
 
+  /** Only one top-level workspace is drawn at a time; the others still report alarms. */
+  setRoots(roots, activeKey) {
+    const signature = roots.map((root) => `${root.key}:${root.count}:${root.urgent ? 1 : 0}`).join('|') + `~${activeKey}`
+    if (this._last.roots === signature) return
+    this._last.roots = signature
+    const wrap = this.$('.roots')
+    wrap.innerHTML = ''
+    for (const root of roots) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'root'
+      button.setAttribute('aria-pressed', String(root.key === activeKey))
+      button.title = `${root.count} thread${root.count === 1 ? '' : 's'} under ${root.name}`
+      button.innerHTML =
+        `<span>${escapeHtml(root.name)}</span>` +
+        (root.urgent ? '<i class="alarm"></i>' : '') +
+        `<span class="count">${root.count}</span>`
+      button.addEventListener('click', () => this.actions.pickRoot?.(root.key))
+      wrap.appendChild(button)
+    }
+  }
+
   /**
    * Every repo, in the sidebar. This was a strip of chips along the bottom of the screen;
    * it is a list now because the sidebar is where all the chrome lives, and because a list
    * can carry a count and an alarm without running out of room at eleven repos.
    */
-  setLegend(projects, activeName = null, hidden = [], folded = []) {
+  setLegend(projects, activeKey = null, hidden = [], folded = []) {
     const signature =
-      projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
-      `~${activeName}~` +
-      hidden.map((p) => `${p.name}:${p.count}`).join('|') +
-      `~${folded.length}`
+      projects.map((p) => `${p.key}:${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
+      `~${activeKey}~` +
+      hidden.map((p) => `${p.key}:${p.name}:${p.count}`).join('|') +
+      `~${folded.map((p) => `${p.key}:${p.name}:${p.count}`).join('|')}`
     if (this._last.legend === signature) return
     this._last.legend = signature
 
@@ -418,13 +440,13 @@ export class Hud {
       b.type = 'button'
       b.className = 'repo'
       b.title = `${p.count} thread${p.count === 1 ? '' : 's'} in ${p.name}`
-      b.setAttribute('aria-pressed', String(p.name === activeName))
+      b.setAttribute('aria-pressed', String(p.key === activeKey))
       b.innerHTML =
         `<i class="swatch" style="background:${hex(p.accent)};color:${hex(p.accent)}"></i>` +
         `<span class="n">${escapeHtml(p.name)}</span>` +
         (p.urgent ? '<i class="alarm"></i>' : '') +
         `<span class="count">${p.count}</span>`
-      b.addEventListener('click', () => this.actions.pickProject?.(p.name))
+      b.addEventListener('click', () => this.actions.pickProject?.(p.key))
       wrap.appendChild(b)
     }
     this.$('.sec-head span').textContent = `${projects.length} repo${projects.length === 1 ? '' : 's'}`
@@ -436,7 +458,7 @@ export class Hud {
     const hiddenWrap = this.$('.hidden-projects')
     hiddenWrap.innerHTML = ''
     for (const p of hidden) {
-      const accent = PLOT_PALETTE[hashString(p.name) % PLOT_PALETTE.length]
+      const accent = PLOT_PALETTE[hashString(p.key) % PLOT_PALETTE.length]
       const row = document.createElement('div')
       row.className = 'repo hidden-repo'
       row.innerHTML =
@@ -448,7 +470,7 @@ export class Hud {
       show.className = 'btn ghost show-repo'
       show.title = `Show ${p.name} on the map again`
       show.textContent = 'Show'
-      show.addEventListener('click', () => this.actions.unhideProject?.(p.name))
+      show.addEventListener('click', () => this.actions.unhideProject?.(p.key))
       row.appendChild(show)
       hiddenWrap.appendChild(row)
     }
@@ -459,9 +481,10 @@ export class Hud {
       const n = folded.reduce((sum, p) => sum + p.count, 0)
       const row = document.createElement('div')
       row.className = 'repo hidden-repo folded-note'
+      const names = folded.map((project) => project.name).join(', ')
       row.innerHTML =
-        `<span class="n">${folded.length} quiet repo${folded.length === 1 ? '' : 's'}` +
-        `, ${n} thread${n === 1 ? '' : 's'}</span>`
+        `<span class="n" title="${escapeHtml(names)}">${escapeHtml(names)} — ` +
+        `${n} thread${n === 1 ? '' : 's'}</span>`
       const show = document.createElement('button')
       show.type = 'button'
       show.className = 'btn ghost show-repo'
@@ -917,6 +940,7 @@ const TEMPLATE = `
   <div class="side-body">
     <div class="projects-pane">
       <div class="sec-head"><span>Repos</span></div>
+      <div class="roots"></div>
       <div class="projects"></div>
       <div class="hidden-block" hidden>
         <button type="button" class="hidden-toggle" id="btn-hidden-toggle" aria-expanded="false">
