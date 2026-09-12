@@ -1,29 +1,36 @@
 /**
- * Harness adapter: Cursor (Anysphere) — agent transcripts.
+ * Harness adapter: Cursor (Anysphere) — sidebar metadata plus agent transcripts.
  *
- * Cursor writes one JSONL per agent session at
- * `~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl`. The records are
- * plainer than most: `{ role, message }` for each turn and, in recent versions, a
- * `{ type: 'turn_ended', status }` marker closing each one. There is no title, no cwd, no model
- * and no branch anywhere in the file — the encoded directory name and the first user message are
- * the whole of the metadata.
+ * Cursor's global `state.vscdb` can be multi-gigabyte and is held open read-write by the editor.
+ * This adapter still reads it because it is the only source for sidebar/composer titles, workspaces
+ * and status, but it mitigates that cost in three deliberate ways: the SQL projects NULL instead of
+ * every large subagent blob, an mtime+size cache avoids re-querying an unchanged database on the
+ * fifteen-second poll, and a last-good snapshot survives a transient lock.
  *
- * Not covered: the composer / sidebar threads. Their bodies are not in these files — the
- * per-workspace `state.vscdb` holds only pane layout, and the global one is a couple of
- * gigabytes on a working machine and open read-write by the editor. Reading that on a
- * fifteen-second poll is its own piece of work, and guessing at its shape would be worse than
- * leaving it out and saying so.
+ * The database is merged with
+ * `~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl`. Sidebar metadata wins
+ * for title and state; transcripts win for byte size and error state. Task/subagent children are
+ * omitted. If SQLite is unavailable or the private schema cannot be read, transcript-only rows
+ * remain visible and `diagnostic()` explains the degraded mode.
  *
- * Read-only, no subprocess, and nothing is ever read from inside `Cursor.app`.
+ * Thread focus has no native Cursor deep link. On Open only, a helper extension is installed via a
+ * `cursor` CLI found on PATH or under `~/.cursor/bin`; no application bundle is inspected or
+ * executed. The extension consumes a short-lived request under `~/.cursor/`. See DIVERGENCE.md.
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { exists, jsonLines, listDirs, listFiles, readHead, readTail } from '../lib/fsutil.mjs'
+import { execFile } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
+import { exists, findExecutable, jsonLines, listDirs, listFiles, readHead, readTail } from '../lib/fsutil.mjs'
 
 const HOME = os.homedir()
 const PROJECTS = process.env.BOT_CROSSING_CURSOR_PROJECTS || path.join(HOME, '.cursor', 'projects')
 const TRANSCRIPTS = 'agent-transcripts'
+const OPEN_REQUEST = process.env.BOT_CROSSING_CURSOR_OPEN_REQUEST || path.join(HOME, '.cursor', 'bot-crossing-open.json')
+const EXTENSION_DIR = fileURLToPath(new URL('../../tools/cursor-open-extension/', import.meta.url))
 
 const HEAD_BYTES = 96 * 1024
 const TAIL_BYTES = 32 * 1024
@@ -34,6 +41,197 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /** Prefixed, per the contract in `server/harnesses/README.md`. */
 const ID = (raw) => `cursor:${raw}`
+
+function userDataDir() {
+  switch (process.platform) {
+    case 'win32':
+      return path.join(process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming'), 'Cursor')
+    case 'linux':
+      return path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'Cursor')
+    default:
+      return path.join(HOME, 'Library', 'Application Support', 'Cursor')
+  }
+}
+
+const STATE_DB =
+  process.env.BOT_CROSSING_CURSOR_STATE_DB ||
+  path.join(userDataDir(), 'User', 'globalStorage', 'state.vscdb')
+
+/** Lazy for the same reason as Codex: old Node degrades one metadata source, not the server. */
+let sqlitePromise
+const sqliteApi = () => (sqlitePromise ??= import('node:sqlite').catch(() => null))
+
+const WORKTREE = /[\\/](?:\.cursor[\\/]worktrees|\.wt)[\\/]([^\\/]+)/
+function splitWorktree(cwd) {
+  const m = WORKTREE.exec(cwd || '')
+  if (!m) return { root: cwd || '', worktree: '' }
+  return { root: cwd.slice(0, m.index), worktree: m[1] }
+}
+
+function workspacePathOf(header) {
+  const uri = header?.workspaceIdentifier?.uri
+  const value = uri?.fsPath || uri?.path || ''
+  return typeof value === 'string' && path.isAbsolute(value) ? value : ''
+}
+
+function activeRepoOf(header) {
+  let best = null
+  for (const repo of Array.isArray(header?.trackedGitRepos) ? header.trackedGitRepos : []) {
+    if (typeof repo?.repoPath !== 'string' || !path.isAbsolute(repo.repoPath)) continue
+    const branch = (Array.isArray(repo.branches) ? repo.branches : []).reduce(
+      (a, b) => (!a || Number(b?.lastInteractionAt) > Number(a?.lastInteractionAt) ? b : a),
+      null,
+    )
+    const at = Number(branch?.lastInteractionAt) || 0
+    if (!best || at > best.at) best = { path: repo.repoPath, branch: branch?.branchName || '', at }
+  }
+  return best
+}
+
+const dbColumn = (columns, name, fallback = 'NULL') =>
+  columns.has(name) ? `"${name}"` : `${fallback} AS "${name}"`
+
+let databaseProblem = ''
+let headerCache = null
+let lastGoodHeaders = { rows: new Map(), subagents: new Set() }
+
+/**
+ * Read the private table defensively. Every named column is probed first because Cursor changes
+ * this schema without notice; a missing optional field should not cost the transcript half.
+ */
+async function databaseRows() {
+  const sqlite = await sqliteApi()
+  if (!sqlite?.DatabaseSync) {
+    databaseProblem = `Cursor sidebar metadata needs Node 22.13 or newer (running ${process.versions.node})`
+    return lastGoodHeaders
+  }
+
+  let stat
+  try {
+    stat = await fsp.stat(STATE_DB)
+    if (!stat.isFile()) throw new Error('not a file')
+  } catch {
+    if (await exists(STATE_DB)) {
+      databaseProblem = 'Cursor sidebar metadata is unavailable because state.vscdb is unreadable'
+    }
+    return lastGoodHeaders
+  }
+  // Date/utimes and some network filesystems expose different sub-millisecond precision for the
+  // same timestamp; whole milliseconds are the stable cache key Node offers across platforms.
+  const mtime = Math.trunc(stat.mtimeMs)
+  if (headerCache?.mtime === mtime && headerCache?.size === stat.size) {
+    return headerCache.value
+  }
+
+  let db
+  try {
+    db = new sqlite.DatabaseSync(STATE_DB, { readOnly: true })
+    const tables = new Set(
+      db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((row) => row.name),
+    )
+    if (!tables.has('composerHeaders')) throw new Error('composerHeaders table is missing')
+    const columns = new Set(db.prepare('PRAGMA table_info(composerHeaders)').all().map((row) => row.name))
+    if (!columns.has('composerId')) throw new Error('composerId column is missing')
+
+    const valueExpr = columns.has('value')
+      ? columns.has('isSubagent')
+        ? 'CASE WHEN "isSubagent" THEN NULL ELSE "value" END AS "value"'
+        : '"value"'
+      : 'NULL AS "value"'
+    const rows = db
+      .prepare(`
+        SELECT
+          "composerId",
+          ${dbColumn(columns, 'isSubagent', '0')},
+          ${dbColumn(columns, 'createdAt', '0')},
+          ${dbColumn(columns, 'lastUpdatedAt', '0')},
+          ${dbColumn(columns, 'isArchived', '0')},
+          ${dbColumn(columns, 'recency', '0')},
+          ${valueExpr}
+        FROM composerHeaders
+      `)
+      .all()
+
+    const value = { rows: new Map(), subagents: new Set() }
+    for (const row of rows) {
+      const id = row.composerId
+      if (typeof id !== 'string' || !UUID.test(id)) continue
+      let embeddedSubagent = false
+      if (row.value) {
+        try {
+          const header = typeof row.value === 'string' ? JSON.parse(row.value) : row.value
+          embeddedSubagent = header?.isSubagent === true
+        } catch {
+          /* malformed private metadata */
+        }
+      }
+      if (row.isSubagent === 1 || row.isSubagent === true || embeddedSubagent) {
+        value.subagents.add(id)
+        continue
+      }
+      const parsed = parseHeaderRow(row)
+      if (parsed) value.rows.set(id, parsed)
+    }
+    databaseProblem = ''
+    lastGoodHeaders = value
+    headerCache = { mtime, size: stat.size, value }
+    return value
+  } catch {
+    databaseProblem =
+      'Cursor sidebar metadata is temporarily unavailable because state.vscdb could not be read; showing transcript data'
+    return lastGoodHeaders
+  } finally {
+    try {
+      db?.close()
+    } catch {
+      /* failed open */
+    }
+  }
+}
+
+function parseHeaderRow(row) {
+  let header = {}
+  try {
+    header = typeof row.value === 'string' ? JSON.parse(row.value) : row.value || {}
+  } catch {
+    header = {}
+  }
+  if (!header || typeof header !== 'object' || header.isDraft === true || header.isSubagent === true) return null
+  const composerId = row.composerId || header.composerId || ''
+  if (typeof composerId !== 'string' || !UUID.test(composerId)) return null
+
+  const createdAt = Number(header.createdAt || row.createdAt) || 0
+  const lastActivityAt = Math.max(
+    Number(header.lastUpdatedAt) || 0,
+    Number(header.conversationCheckpointLastUpdatedAt) || 0,
+    Number(row.lastUpdatedAt) || 0,
+    Number(row.recency) || 0,
+    createdAt,
+  )
+  const workspace = workspacePathOf(header)
+  const activeRepo = activeRepoOf(header)
+  const location = activeRepo?.path || workspace
+  const { root, worktree } = splitWorktree(location)
+  const projectPath = root || location
+
+  return {
+    composerId,
+    title: header.name || header.subtitle || '',
+    preview: header.subtitle || '',
+    project: path.basename(projectPath) || projectPath || 'unknown',
+    projectPath,
+    worktree,
+    cwd: workspace || location,
+    gitBranch: activeRepo?.branch || '',
+    model: header.unifiedMode || header.forceMode || '',
+    createdAt,
+    lastActivityAt,
+    lastFocusedAt: 0,
+    unread: header.hasUnreadMessages === true || header.hasBlockingPendingActions === true,
+    running: Boolean(Number(header.unfinishedRunAt)) && Date.now() - lastActivityAt < ACTIVE_WINDOW_MS,
+    archived: row.isArchived === 1 || row.isArchived === true || header.isArchived === true,
+  }
+}
 
 const isDir = async (p) => {
   try {
@@ -164,15 +362,17 @@ async function facts(entry) {
 
 async function scanThreads() {
   const entries = await scanTranscripts()
+  const headers = await databaseRows()
   const now = Date.now()
-  const threads = []
+  const byId = new Map(headers.rows)
 
   for (const entry of entries) {
+    if (headers.subagents.has(entry.id)) continue
     const f = await facts(entry)
     const projectPath = await decodeProjectDir(entry.dirName)
     const prompt = f.prompt
-    threads.push({
-      id: ID(entry.id),
+    const transcript = {
+      composerId: entry.id,
       title: (prompt || 'Untitled thread').slice(0, 120),
       preview: prompt.slice(0, 240),
       project: path.basename(projectPath) || 'unknown',
@@ -197,40 +397,232 @@ async function scanThreads() {
       archived: false,
       sizeBytes: entry.size,
       source: 'agent',
-      canOpen: false,
-      ref: { sessionId: entry.id, cwd: projectPath },
-    })
+    }
+    const composer = byId.get(entry.id)
+    byId.set(
+      entry.id,
+      composer
+        ? {
+            ...transcript,
+            ...composer,
+            title: composer.title || transcript.title,
+            preview: composer.preview || transcript.preview,
+            sizeBytes: transcript.sizeBytes,
+            hasError: transcript.hasError,
+            source: 'composer+agent',
+          }
+        : transcript,
+    )
   }
-  return threads
+
+  return [...byId.values()].map((thread) => ({
+    ...thread,
+    id: ID(thread.composerId),
+    title: (thread.title || 'Untitled thread').slice(0, 120),
+    preview: (thread.preview || '').slice(0, 240),
+    effort: '',
+    starred: false,
+    routine: '',
+    prState: '',
+    hasError: Boolean(thread.hasError),
+    sizeBytes: thread.sizeBytes || 0,
+    source: thread.source || 'composer',
+    canOpen: typeof thread.composerId === 'string' && UUID.test(thread.composerId),
+    ref: {
+      composerId: thread.composerId,
+      workspacePath: thread.cwd || thread.projectPath || '',
+      projectPath: thread.projectPath || '',
+    },
+  }))
 }
 
-/**
- * Cursor registers `cursor://`, but only for files and folders — nothing found so far addresses
- * a single agent thread, and inventing a route would be a link that silently does nothing.
- * Revealing the repo is the honest offer, and the UI greys the button and shows this instead.
- */
-function openThread() {
+const execFileAsync = promisify(execFile)
+let cursorBinPromise
+const findCursorBin = () =>
+  (cursorBinPromise ??= findExecutable(process.env.BOT_CROSSING_CURSOR_CLI || 'cursor', [
+    path.join(HOME, '.cursor', 'bin'),
+  ]))
+
+function cursorFileUrl(folder) {
+  const normalized = String(folder || '').replace(/\\/g, '/')
+  if (!path.isAbsolute(folder || '')) return ''
+  return `cursor://file${normalized.split('/').map(encodeURIComponent).join('/')}`
+}
+
+const CRC_TABLE = new Uint32Array(256)
+for (let n = 0; n < 256; n += 1) {
+  let value = n
+  for (let k = 0; k < 8; k += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1
+  CRC_TABLE[n] = value >>> 0
+}
+function crc32(buffer) {
+  let crc = 0xffffffff
+  for (const byte of buffer) crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8)
+  return (crc ^ 0xffffffff) >>> 0
+}
+function zipStore(entries) {
+  const localParts = []
+  const centralParts = []
+  let offset = 0
+  for (const [name, data] of entries) {
+    const nameBytes = Buffer.from(name)
+    const crc = crc32(data)
+    const local = Buffer.alloc(30)
+    local.writeUInt32LE(0x04034b50, 0)
+    local.writeUInt16LE(20, 4)
+    local.writeUInt16LE(0x0800, 6)
+    local.writeUInt32LE(crc, 14)
+    local.writeUInt32LE(data.length, 18)
+    local.writeUInt32LE(data.length, 22)
+    local.writeUInt16LE(nameBytes.length, 26)
+    localParts.push(local, nameBytes, data)
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(0x0800, 8)
+    central.writeUInt32LE(crc, 16)
+    central.writeUInt32LE(data.length, 20)
+    central.writeUInt32LE(data.length, 24)
+    central.writeUInt16LE(nameBytes.length, 28)
+    central.writeUInt32LE(offset, 42)
+    centralParts.push(central, nameBytes)
+    offset += local.length + nameBytes.length + data.length
+  }
+  const central = Buffer.concat(centralParts)
+  const end = Buffer.alloc(22)
+  end.writeUInt32LE(0x06054b50, 0)
+  end.writeUInt16LE(entries.length, 8)
+  end.writeUInt16LE(entries.length, 10)
+  end.writeUInt32LE(central.length, 12)
+  end.writeUInt32LE(offset, 16)
+  return Buffer.concat([...localParts, central, end])
+}
+
+let installedVersion = ''
+let extensionProblem = ''
+async function installOpenExtension(bin) {
+  const packageJson = JSON.parse(await fsp.readFile(path.join(EXTENSION_DIR, 'package.json'), 'utf8'))
+  const extensionId = `${packageJson.publisher}.${packageJson.name}`
+  if (installedVersion === packageJson.version) return
+  try {
+    const { stdout } = await execFileAsync(bin, ['--list-extensions', '--show-versions'], { timeout: 15000 })
+    if (stdout.split(/\r?\n/).includes(`${extensionId}@${packageJson.version}`)) {
+      installedVersion = packageJson.version
+      extensionProblem = ''
+      return
+    }
+  } catch {
+    /* installation below gives the actionable result */
+  }
+
+  const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-vsix-'))
+  const vsix = path.join(tmp, `${extensionId}-${packageJson.version}.vsix`)
+  const manifest = Buffer.from(`<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
+  <Metadata><Identity Language="en-US" Id="${packageJson.name}" Version="${packageJson.version}" Publisher="${packageJson.publisher}" />
+  <DisplayName>${packageJson.displayName}</DisplayName><Description>${packageJson.description}</Description>
+  <Categories>Other</Categories><Properties><Property Id="Microsoft.VisualStudio.Code.Engine" Value="${packageJson.engines.vscode}" />
+  <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="ui" /></Properties></Metadata>
+  <Installation><InstallationTarget Id="Microsoft.VisualStudio.Code"/></Installation><Dependencies/>
+  <Assets><Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" /></Assets>
+</PackageManifest>`)
+  const contentTypes = Buffer.from(`<?xml version="1.0" encoding="utf-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="json" ContentType="application/json"/><Default Extension="vsixmanifest" ContentType="text/xml"/>
+<Default Extension="js" ContentType="application/javascript"/><Default Extension="xml" ContentType="text/xml"/>
+</Types>`)
+  try {
+    const archive = zipStore([
+      ['extension.vsixmanifest', manifest],
+      ['[Content_Types].xml', contentTypes],
+      ['extension/package.json', Buffer.from(JSON.stringify(packageJson))],
+      ['extension/extension.js', await fsp.readFile(path.join(EXTENSION_DIR, 'extension.js'))],
+    ])
+    await fsp.writeFile(vsix, archive, { mode: 0o600 })
+    await execFileAsync(bin, ['--install-extension', vsix, '--force'], { timeout: 30000 })
+    installedVersion = packageJson.version
+    extensionProblem = ''
+  } finally {
+    await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+async function writeOpenRequest(composerId, workspacePath) {
+  const requestId = randomUUID()
+  const payload = `${JSON.stringify({ requestId, composerId, workspacePath, at: Date.now() })}\n`
+  await fsp.mkdir(path.dirname(OPEN_REQUEST), { recursive: true })
+  const tmp = `${OPEN_REQUEST}.${process.pid}.${requestId}.tmp`
+  await fsp.writeFile(tmp, payload, { mode: 0o600 })
+  await fsp.rename(tmp, OPEN_REQUEST)
+}
+
+async function openThread(ref) {
+  const composerId = ref?.composerId
+  if (typeof composerId !== 'string' || !UUID.test(composerId)) {
+    return { ok: false, error: 'No openable Cursor composer id on that thread' }
+  }
+  const folder =
+    typeof ref?.workspacePath === 'string' && path.isAbsolute(ref.workspacePath)
+      ? ref.workspacePath
+      : typeof ref?.projectPath === 'string' && path.isAbsolute(ref.projectPath)
+        ? ref.projectPath
+        : ''
+  const url = cursorFileUrl(folder)
+  if (!url) return { ok: false, error: 'That Cursor thread has no absolute workspace path' }
+
+  const bin = await findCursorBin()
+  if (bin) {
+    try {
+      await installOpenExtension(bin)
+    } catch (error) {
+      extensionProblem = `Cursor opened the workspace, but its thread helper could not be installed: ${error?.message || error}`
+    }
+  } else {
+    extensionProblem =
+      'Cursor CLI not found on PATH or ~/.cursor/bin; install tools/cursor-open-extension manually to focus individual threads'
+  }
+  try {
+    await writeOpenRequest(composerId, folder)
+  } catch (error) {
+    extensionProblem = `Cursor opened the workspace, but its thread-focus request could not be written: ${error?.message || error}`
+  }
   return {
-    ok: false,
-    error: 'Cursor has no link to a single thread — open the repo and pick it from the agent list.',
+    ok: true,
+    url,
+    ...(bin ? { command: { argv: [bin, folder], cwd: folder } } : {}),
   }
 }
 
 /** `cursor://file/<abs>` is answered by the installed app; the OS opener does the finding. */
 function newSession(dir) {
-  const abs = String(dir || '').replace(/\\/g, '/')
-  if (!abs.startsWith('/')) return { ok: false, error: 'That folder is not somewhere Cursor can open' }
-  return { ok: true, url: `cursor://file${abs.split('/').map(encodeURIComponent).join('/')}` }
+  const url = cursorFileUrl(dir)
+  if (!url) return { ok: false, error: 'That folder is not somewhere Cursor can open' }
+  return { ok: true, url }
 }
 
-const detect = () => exists(PROJECTS)
+const detect = async () => (await exists(PROJECTS)) || (await exists(STATE_DB))
+
+async function diagnostic() {
+  if (await exists(STATE_DB)) await databaseRows()
+  if (databaseProblem) return databaseProblem
+  if (extensionProblem) return extensionProblem
+  if ((await exists(STATE_DB)) && !(await sqliteApi())?.DatabaseSync) {
+    return `Cursor sidebar metadata needs Node 22.13 or newer (running ${process.versions.node})`
+  }
+  if (!(await findCursorBin())) {
+    return 'Cursor CLI not found on PATH or ~/.cursor/bin; install tools/cursor-open-extension manually for per-thread focus'
+  }
+  return ''
+}
 
 export default {
   id: 'cursor',
   name: 'Cursor',
   detect,
+  diagnostic,
   scanThreads,
   openThread,
   newSession,
-  paths: { PROJECTS },
+  paths: { PROJECTS, STATE_DB, OPEN_REQUEST },
 }

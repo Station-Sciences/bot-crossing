@@ -6,9 +6,10 @@ Every coding-agent thread on this machine is a little astronaut. They walk out o
 a plot for their repo, and build something. When one needs you it stops and holds a `?` over
 its head; click it and the thread opens back in whichever harness it came from.
 
-It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
-account, and **it never writes to a harness at all** — `data/colony.json`, where the map lives,
-is the only file it writes anywhere.
+It reads the harness's own files, on your own machine. Nothing is uploaded and there is no
+account. This fork has one documented exception to upstream's read-only rule: per-thread Cursor
+focus uses a short-lived request under `~/.cursor/` and may install its helper extension through
+the `cursor` CLI. See [DIVERGENCE.md](DIVERGENCE.md).
 
 > **Status:** published as-is. I built this for myself and cannot promise to maintain it —
 > issues and PRs are welcome but may go unanswered, and forking is an entirely reasonable
@@ -45,7 +46,7 @@ somebody writing that adapter.
 | **[Codex](https://developers.openai.com/codex/cli)** (OpenAI) | ✅ **Supported** — desktop, VS Code and CLI sessions, opened through `codex://` |
 | [OpenCode](https://opencode.ai) | ⬜ Not yet |
 | [Antigravity CLI](https://antigravity.google) (Google) | ⬜ Not yet — the successor to Gemini CLI, which Google stopped serving individual accounts on 18 June 2026 |
-| **[Cursor](https://cursor.com)** (Anysphere) | ✅ **Supported** — agent transcripts; the composer/sidebar threads are not read yet |
+| **[Cursor](https://cursor.com)** (Anysphere) | ✅ **Supported in this fork** — composer/sidebar and CLI-transcript threads are merged; per-thread focus uses the bundled helper extension, auto-installed through the `cursor` CLI when available |
 | [Amp](https://ampcode.com) (Sourcegraph) | ⬜ Not yet |
 | [Aider](https://aider.chat) | ⬜ Not yet |
 | [Goose](https://block.github.io/goose/) (Block) | ⬜ Not yet |
@@ -615,7 +616,7 @@ What it touches on disk, in full:
 | | |
 | --- | --- |
 | Reads | Your harness's own session records and transcripts |
-| Writes | `data/colony.json`, and **one** `isArchived` field per archived thread |
+| Writes | `data/colony.json`; for Cursor Open, a mode-`0600` request under `~/.cursor/` and, when needed, the bundled helper extension |
 | Sends | Nothing. No network calls, no telemetry, no account |
 
 `data/colony.json` holds the names and paths of the repos you work in, so it is gitignored —

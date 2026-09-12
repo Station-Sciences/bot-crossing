@@ -53,6 +53,14 @@ server has already checked still exists.
 If your harness has no deep link, return `{ ok: false, error: '…' }` and say why — the UI
 shows the message rather than pretending the click worked.
 
+Cursor is a documented fork exception. Cursor has no native deep link to a local composer, so
+its adapter returns a real `cursor://file/<workspace>` URL and asks
+`tools/cursor-open-extension/` to focus the composer as a side effect. On the first Open it finds
+the `cursor` CLI on PATH or under `~/.cursor/bin` and installs that helper; it never looks inside
+an application bundle. Without the CLI, the workspace still opens and `diagnostic()` explains
+that the helper must be installed manually. The helper's mode-`0600`, 30-second request file and
+the other accepted policy departures are recorded in [`DIVERGENCE.md`](../../DIVERGENCE.md).
+
 ### There is no `setArchived`, and that is deliberate
 
 Bot Crossing does not write to a harness. Not the transcripts, not the session records, not one
@@ -137,6 +145,11 @@ Verified on a real machine:
 - **Codex CLI** — transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-<iso>-<uuid>.jsonl`,
   with records shaped `{ timestamp, type, payload }`, and what looks like an index at
   `~/.codex/session_index.jsonl`. Not implemented yet.
+- **Cursor** — sidebar/composer metadata in the global `state.vscdb` `composerHeaders` table,
+  merged by UUID with CLI agent transcripts under
+  `~/.cursor/projects/<encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl`. Task/subagent rows
+  are filtered. The large live database is opened read-only only when its mtime or size changes,
+  and a failed read degrades to transcripts rather than removing threads.
 
 For anything else, the fastest way in is usually to start a throwaway session in that harness
 and watch which files change:
