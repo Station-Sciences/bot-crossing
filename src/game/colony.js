@@ -368,6 +368,17 @@ export class Colony {
     this.activePlots = active
     this._rebuildNavigation()
     this.stats = { ...stats, done: stats.celebrating }
+
+    // Prioritize active, urgent, and recently touched astronauts so quiet/dormant threads
+    // never starve an active thread of its astronaut when maxAgents is reached.
+    const priority = new Map(STATUS_ORDER.map((s, idx) => [s, idx]))
+    roster.sort((a, b) => {
+      const pA = priority.get(a.status) ?? 99
+      const pB = priority.get(b.status) ?? 99
+      if (pA !== pB) return pA - pB
+      return (b.thread?.lastActivityAt || 0) - (a.thread?.lastActivityAt || 0)
+    })
+
     this.astronauts.setRoster(roster, this._world())
     return this.stats
   }
