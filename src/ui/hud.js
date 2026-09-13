@@ -350,6 +350,8 @@ export class Hud {
     const on = (sel, ev, fn) => this.$(sel).addEventListener(ev, fn)
 
     on('#btn-settings', 'click', () => this.toggleSettings())
+    on('#view-colony', 'click', () => this.actions.pickView?.('colony'))
+    on('#view-t100', 'click', () => this.actions.pickView?.('t100'))
     on('#btn-close-settings', 'click', () => this.toggleSettings(false))
     on('#btn-hide', 'click', () => this.toggleUi())
     on('#btn-help', 'click', () => this.toggleHelp())
@@ -777,6 +779,13 @@ export class Hud {
     this.$('#btn-orbit').setAttribute('aria-pressed', String(Boolean(on)))
   }
 
+  /** Reflect the active top-level world view (colony vs T100) on the switch and shell. */
+  setView(view) {
+    this.el.dataset.view = view
+    this.$('#view-colony')?.setAttribute('aria-pressed', String(view === 'colony'))
+    this.$('#view-t100')?.setAttribute('aria-pressed', String(view === 't100'))
+  }
+
   toggleSettings(force) {
     const panel = this.$('.settings')
     const open = force ?? panel.classList.contains('closed')
@@ -934,6 +943,11 @@ const TEMPLATE = `
     <button class="btn icon ghost" id="btn-hide" title="Hide all UI (H)">${ICON.eye}</button>
     <button class="btn icon ghost" id="btn-settings" title="Settings (S)" aria-pressed="false">${ICON.settings}</button>
   </header>
+
+  <div class="view-switch" role="group" aria-label="World view">
+    <button id="view-colony" type="button" aria-pressed="true">Colony</button>
+    <button id="view-t100" type="button" aria-pressed="false">T100</button>
+  </div>
 
   <div class="stats"></div>
 

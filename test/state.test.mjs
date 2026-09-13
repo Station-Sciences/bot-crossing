@@ -62,6 +62,29 @@ test('active root is a scalar: local changes win, otherwise remote changes win',
   )
 })
 
+test('thread bindings merge by thread without losing another tab assignment', () => {
+  const a = { primary: 't100.eic.bar0.vpu', secondary: [], confirmedAt: 10 }
+  const b = { primary: 'work:chip_top', secondary: ['t100.eic.bar0.dfe'], confirmedAt: 20 }
+  const out = mergeState(
+    { threadBindings: {} },
+    { threadBindings: { mine: a } },
+    { threadBindings: { theirs: b } }
+  )
+  assert.deepEqual(out.threadBindings, { theirs: b, mine: a })
+})
+
+test('reassigning a thread in this tab wins over a concurrent value', () => {
+  const old = { primary: 'work:chip_top', secondary: [], confirmedAt: 1 }
+  const mine = { primary: 't100.eic.bar0.vpu', secondary: [], confirmedAt: 2 }
+  const theirs = { primary: 't100.eic.bar0.dfe', secondary: [], confirmedAt: 3 }
+  const out = mergeState(
+    { threadBindings: { thread: old } },
+    { threadBindings: { thread: mine } },
+    { threadBindings: { thread: theirs } }
+  )
+  assert.deepEqual(out.threadBindings.thread, mine)
+})
+
 // ── the API, against a real socket ────────────────────────────────────────────
 
 async function withServer(run) {
@@ -93,7 +116,7 @@ test('a v1 file has its bare ids prefixed on read, once', async () => {
       JSON.stringify({ version: 1, archived: [id], archivedAt: { [id]: 5 }, updatedAt: 1 })
     )
     const state = await (await call('/api/state')).json()
-    assert.equal(state.version, 3)
+    assert.equal(state.version, 4)
     assert.deepEqual(state.archived, [`claude-code:${id}`])
     assert.deepEqual(Object.keys(state.archivedAt), [`claude-code:${id}`])
     assert.equal(state.activeRoot, '')
@@ -108,9 +131,44 @@ test('a v2 file gains activeRoot without repeating or weakening the id migration
       JSON.stringify({ version: 2, archived: [id], updatedAt: 1 })
     )
     const state = await (await call('/api/state')).json()
-    assert.equal(state.version, 3)
+    assert.equal(state.version, 4)
     assert.deepEqual(state.archived, [id], 'the v1 id rewrite is not re-run for a v2 file')
     assert.equal(state.activeRoot, '')
+    assert.deepEqual(state.threadBindings, {})
+  })
+})
+
+test('a v3 file gains an empty thread binding map', async () => {
+  await withServer(async ({ call, dir }) => {
+    await fsp.writeFile(path.join(dir, 'colony.json'), JSON.stringify({ version: 3, activeRoot: 'x' }))
+    const state = await (await call('/api/state')).json()
+    assert.equal(state.version, 4)
+    assert.equal(state.activeRoot, 'x')
+    assert.deepEqual(state.threadBindings, {})
+  })
+})
+
+test('thread bindings persist only compact identity fields', async () => {
+  await withServer(async ({ put }) => {
+    const state = await (
+      await put({
+        threadBindings: {
+          'cursor:abc': {
+            primary: 't100.eic.bar0.vpu',
+            secondary: ['t100.eic.bar0.dfe', 't100.eic.bar0.dfe'],
+            confirmedAt: 42,
+            transcript: 'must not persist',
+          },
+        },
+      })
+    ).json()
+    assert.deepEqual(state.threadBindings, {
+      'cursor:abc': {
+        primary: 't100.eic.bar0.vpu',
+        secondary: ['t100.eic.bar0.dfe'],
+        confirmedAt: 42,
+      },
+    })
   })
 })
 

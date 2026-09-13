@@ -11,12 +11,13 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
 } from './scan.mjs'
+import { getWorld, getLayout, getOverlay, getEvidence, getEvents } from './t100/sources.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
 const STATE_FILE = path.join(DATA_DIR, 'colony.json')
 
-const STATE_VERSION = 3
+const STATE_VERSION = 4
 
 /**
  * v1 keyed everything on a bare session id, because Claude Code was the only harness and its
@@ -43,6 +44,7 @@ function migrate(raw) {
     }
   }
   if (Number(state.version) < 3) state = { ...state, version: 3, activeRoot: '' }
+  if (Number(state.version) < 4) state = { ...state, version: 4, threadBindings: {} }
   return state
 }
 
@@ -62,12 +64,39 @@ const emptyState = () => ({
   hiddenProjects: [],
   viewedAt: {},
   activeRoot: '',
+  threadBindings: {},
   settings: null,
   updatedAt: 0,
 })
 
 const asObject = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {})
 const asArray = (v) => (Array.isArray(v) ? v : [])
+const cleanString = (v, max = 256) => (typeof v === 'string' ? v.slice(0, max) : '')
+
+/**
+ * Bindings are local identity, never thread content. Keep the persisted contract
+ * deliberately small so a malformed page cannot turn colony.json into a second
+ * transcript store.
+ */
+const asThreadBindings = (value) => {
+  const out = {}
+  for (const [threadId, raw] of Object.entries(asObject(value))) {
+    const id = cleanString(threadId)
+    if (!id) continue
+    const binding = asObject(raw)
+    const primary = cleanString(binding.primary)
+    const secondary = [...new Set(asArray(binding.secondary).map((v) => cleanString(v)).filter(Boolean))]
+      .filter((target) => target !== primary)
+      .slice(0, 16)
+    if (!primary && !secondary.length) continue
+    out[id] = {
+      primary,
+      secondary,
+      confirmedAt: Math.max(0, Number(binding.confirmedAt) || 0),
+    }
+  }
+  return out
+}
 
 async function readState() {
   try {
@@ -82,6 +111,7 @@ async function readState() {
       hiddenProjects: asArray(raw.hiddenProjects).map(String).filter(Boolean),
       viewedAt: asObject(raw.viewedAt),
       activeRoot: typeof raw.activeRoot === 'string' ? raw.activeRoot : '',
+      threadBindings: asThreadBindings(raw.threadBindings),
       settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : null,
       updatedAt: Number(raw.updatedAt) || 0,
     }
@@ -118,6 +148,7 @@ async function writeState(next) {
     hiddenProjects: asArray(next.hiddenProjects).map(String).filter(Boolean),
     viewedAt: asObject(next.viewedAt),
     activeRoot: typeof next.activeRoot === 'string' ? next.activeRoot : '',
+    threadBindings: asThreadBindings(next.threadBindings),
     settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
     updatedAt: Date.now(),
   }
@@ -417,6 +448,29 @@ export async function apiMiddleware(req, res, next) {
       const { harness, ref } = await readJsonBody(req)
       const shown = await present(await harnessOpenThread(harness, ref))
       return send(res, shown.ok ? 200 : 400, shown)
+    }
+
+    /**
+     * T100 Work City read model. All GET, all read-only, all served from the
+     * revision-pinned world model (or the bundled snapshot when a source is
+     * absent). `/api/t100/world` is the aggregate the whole UI runs on.
+     */
+    if (url.pathname === '/api/t100/world' && req.method === 'GET') {
+      const force = url.searchParams.get('force') === '1'
+      return send(res, 200, await getWorld({ force }))
+    }
+    if (url.pathname === '/api/t100/layout' && req.method === 'GET') {
+      return send(res, 200, await getLayout())
+    }
+    if (url.pathname === '/api/t100/readiness' && req.method === 'GET') {
+      return send(res, 200, await getOverlay())
+    }
+    if (url.pathname === '/api/t100/evidence' && req.method === 'GET') {
+      return send(res, 200, await getEvidence())
+    }
+    if (url.pathname === '/api/t100/events' && req.method === 'GET') {
+      const stream = url.searchParams.get('stream') || 'synthetic'
+      return send(res, 200, { stream, events: await getEvents(stream) })
     }
 
     if ((url.pathname === '/api/new-session' || url.pathname === '/api/reveal') && req.method === 'POST') {

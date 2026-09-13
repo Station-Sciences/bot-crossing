@@ -22,6 +22,9 @@ import {
   migrateLegacyHiddenProjects,
   preferredProjectPath,
 } from './game/project-groups.js'
+import { T100Viewer } from './t100/viewer.js'
+import { SelectionStore, ViewRegistry } from './t100/view-registry.js'
+import { resolveThreadBinding } from './t100/bindings.js'
 
 /**
  * Boot and the outer game loop.
@@ -60,6 +63,7 @@ let state = {
   hiddenProjects: [],
   viewedAt: {},
   activeRoot: '',
+  threadBindings: {},
 }
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
@@ -74,10 +78,94 @@ let statusCursor = 0
 let pendingSave = 0
 const hoverGround = new THREE.Vector3()
 
+// ── T100 Work City ──────────────────────────────────────────────────────────────
+// A second top-level view over the same scene. The colony is threads-as-astronauts;
+// T100 is the chip's own floorplan with capability and physical layers. One shared
+// selection store links them; a ViewRegistry owns which is active.
+let activeView = 'colony'
+let t100 = null
+const selection = new SelectionStore()
+const registry = new ViewRegistry()
+const colonyChildVisibility = new Map()
+
+function hideColonyChildren() {
+  for (const child of engine.scene.children) {
+    if (child === t100?.chip.root) continue
+    if (!colonyChildVisibility.has(child)) colonyChildVisibility.set(child, child.visible)
+    child.visible = false
+  }
+}
+function restoreColonyChildren() {
+  for (const [child, visible] of colonyChildVisibility) child.visible = visible
+  colonyChildVisibility.clear()
+}
+
+function setThreadBinding(threadId, binding) {
+  const next = { ...(state.threadBindings || {}) }
+  if (binding?.primary || binding?.secondary?.length) next[threadId] = binding
+  else delete next[threadId]
+  state.threadBindings = next
+  t100?.setLocalAgents(threads, next)
+  queueSave()
+}
+
+async function openT100Thread(thread) {
+  try {
+    await openThread(thread)
+    colony.astronauts.celebrate(thread.id)
+    hud.toast(`Opened in ${thread.harnessName || 'your harness'}`)
+    setTimeout(poll, 1800)
+  } catch (err) {
+    hud.toast(err.message || 'Could not open that thread', 'err')
+  }
+}
+
+async function newT100Conversation(targetId, harness) {
+  const manifestPath = t100?.world?.provenance?.manifest?.path || ''
+  const folder = manifestPath.replace(/[\\/][^\\/]+$/, '')
+  if (!folder) {
+    hud.toast('The live models repo path is unavailable', 'err')
+    return
+  }
+  try {
+    await newSession(folder, harness)
+    hud.toast(`New ${harness} conversation for ${targetId}`)
+    setTimeout(poll, 6000)
+  } catch (err) {
+    hud.toast(err.message || `Could not start ${harness}`, 'err')
+  }
+}
+
 // ── actions the HUD can trigger ────────────────────────────────────────────────────────
 
 const actions = {
   resetView: () => rig.resetView(),
+
+  /** Switch the top-level world view. The colony scene is hidden, not torn down. */
+  pickView: (view) => {
+    if (!['colony', 't100'].includes(view) || view === activeView) return
+    // A view that failed to build is not registered; refuse rather than hiding the
+    // colony to show nothing.
+    if (!registry.has(view)) {
+      hud.toast('The T100 view is unavailable — see the console', 'err')
+      return
+    }
+    activeView = view
+    registry.setActive(view)
+    const showT100 = view === 't100'
+    if (showT100) hideColonyChildren()
+    else restoreColonyChildren()
+    t100?.setVisible(showT100)
+    hud.setView(view)
+    if (showT100) {
+      select(null, {})
+      hud.toggleSettings(false)
+      hud.hint('T100 Work City — capability layer. Click a district; switch layers in the panel.')
+    } else {
+      selection.clear('view')
+      rig.resetView()
+    }
+  },
 
   screenshot: () => {
     // Render one more frame, then read the buffer before the compositor clears it — the
@@ -298,6 +386,47 @@ const actions = {
 }
 
 const hud = new Hud(app, settings, actions)
+
+// T100 view: built after the HUD (it mounts its panel into the sidebar), then the
+// two views are registered so the ViewRegistry owns activation lifecycle.
+//
+// Guarded, because this runs at module scope: anything thrown while building the
+// second view would stop main.js before `boot()`, and the only symptom a person
+// sees is the boot overlay sitting on "Scanning for agent threads…" forever. The
+// colony is the app; T100 is a view of it, and a broken view must cost only itself.
+registry.register({ id: 'colony', label: 'Colony' })
+try {
+  t100 = new T100Viewer({
+    scene: engine.scene,
+    camera: engine.camera,
+    rig,
+    hud,
+    selection,
+    onBindingChange: setThreadBinding,
+    onOpenThread: openT100Thread,
+    onNewConversation: newT100Conversation,
+  })
+  registry.register({
+    id: 't100',
+    label: 'T100',
+    activate: () => t100.setVisible(true),
+    deactivate: () => t100.setVisible(false),
+    update: (dt, elapsed) => t100.update(dt, elapsed),
+  })
+  hud.setView(activeView)
+  t100
+    .load()
+    .then(() => t100.setLocalAgents(threads, state.threadBindings))
+    .catch((err) => {
+      hud.toast(err.message || 'Could not load the T100 world model', 'err')
+      console.error(err)
+    })
+} catch (err) {
+  t100 = null
+  hud.setView('colony')
+  console.error('T100 view unavailable', err)
+}
+
 // The sidebar is permanent, so the card beside an astronaut has a wall to stay clear of.
 const sideWidth = () => (window.innerWidth <= 820 ? 0 : 334)
 hud.setSideWidth(sideWidth())
@@ -317,6 +446,8 @@ function select(id, { fly = false } = {}) {
   }
   colony.astronauts.setSelected(agent)
   const thread = threads.find((t) => t.id === id) || agent.thread
+  const target = state.threadBindings?.[thread?.id]?.primary
+  if (target?.startsWith('t100.')) selection.selectUnit(target, { source: 'thread' })
   hud.setSelection(agent, thread)
   // Picking somebody is also picking the zone they are standing on: the sidebar follows.
   if (thread?.plotKey && colony.plots.has(thread.plotKey)) selectedProject = thread.plotKey
@@ -450,6 +581,11 @@ engine.canvas.addEventListener('pointermove', (e) => {
     return
   }
   const p = ndc(e)
+  if (activeView === 't100') {
+    const hit = t100?.pickAt(p.x, p.y, { commit: false })
+    engine.canvas.style.cursor = hit ? 'pointer' : 'grab'
+    return
+  }
   const agent = colony.pick(p.x, p.y, p.aspect)
   hoverId = agent?.id ?? null
   colony.astronauts.setHover(agent)
@@ -480,6 +616,10 @@ function plotUnder(e, p) {
 engine.canvas.addEventListener('pointerup', (e) => {
   if (e.button !== 0 || !rig.wasClick) return
   const p = ndc(e)
+  if (activeView === 't100') {
+    t100?.pickAt(p.x, p.y, { commit: true })
+    return
+  }
   const agent = colony.pick(p.x, p.y, p.aspect)
   if (agent) {
     select(agent.id, {})
@@ -496,6 +636,7 @@ engine.canvas.addEventListener('pointerup', (e) => {
 })
 
 engine.canvas.addEventListener('pointerleave', () => {
+  if (activeView === 't100') t100?.chip.hoverUnit(null)
   hoverId = null
   colony.astronauts.setHover(null)
   colony.setHoveredPlot(null)
@@ -612,6 +753,7 @@ function applyThreads(list) {
     const at = viewed[t.id]
     return at && t.lastActivityAt <= at ? { ...t, unread: false } : t
   })
+  t100?.setLocalAgents(threads, state.threadBindings)
   list = threads
   const archivedSet = new Set(state.archived)
 
@@ -791,18 +933,29 @@ settings.onChange((changed, scope) => {
 engine.add({
   update(dt, elapsed) {
     rig.update(dt)
-    colony.update(dt, elapsed, rig.target)
+    if (activeView === 'colony') {
+      colony.update(dt, elapsed, rig.target)
+    } else {
+      // The colony scene can drift back to visible when threads repopulate; keep it
+      // hidden while the chip is up, and drive the chip's own animation.
+      hideColonyChildren()
+      registry.update(dt, elapsed)
+    }
     // Whatever the camera is orbiting is what should be in focus.
     engine.setFocusDistance(rig.distance)
 
-    if (selectedId) {
+    if (activeView === 'colony' && selectedId) {
       hud.updateAvatar(colony.astronauts.faceTexture.image)
       // A selected astronaut that walked off the roster should not keep a stale card open.
       const agent = colony.agentFor(selectedId)
       if (!agent) select(null, {})
       else hud.placeCard(screenOf(agent))
     }
-    hud.setFps(engine.perf, engine.viewport, `${colony.astronauts.visibleCount} crew · ${colony.particles.liveCount} bits`)
+    const extra =
+      activeView === 't100'
+        ? `${t100?.world?.counts.leaves || 0} leaves · ${t100?.world?.counts.units || 0} units`
+        : `${colony.astronauts.visibleCount} crew · ${colony.particles.liveCount} bits`
+    hud.setFps(engine.perf, engine.viewport, extra)
   },
 })
 

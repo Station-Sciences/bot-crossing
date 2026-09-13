@@ -1,0 +1,1444 @@
+{
+  "alias_index": {
+    "t100.eic.dfe": [
+      "t100.eic.bar0.dfe"
+    ],
+    "t100.eic.fep": [
+      "t100.eic.bar0.fep"
+    ],
+    "t100.eic.hbm": [
+      "t100.eic.bar0.hbm.u_hbm4e_0",
+      "t100.eic.bar0.hbm.u_hbm4e_1",
+      "t100.eic.bar0.hbm.u_hbm4e_2",
+      "t100.eic.bar0.hbm.u_hbm4e_3",
+      "t100.eic.bar0.hbm.u_hbm4e_4",
+      "t100.eic.bar0.hbm.u_hbm4e_5"
+    ],
+    "t100.eic.host_dma": [
+      "t100.eic.bar0.host_dma"
+    ],
+    "t100.eic.hti": [
+      "t100.eic.bar1.hti"
+    ],
+    "t100.eic.noc_csr": [
+      "t100.eic.bar0.noc_csr"
+    ],
+    "t100.eic.pcr": [
+      "t100.eic.bar0.pcr"
+    ],
+    "t100.eic.send": [
+      "t100.eic.bar0.send"
+    ],
+    "t100.eic.smp": [
+      "t100.eic.bar0.smp"
+    ],
+    "t100.eic.tdma_n": [
+      "t100.eic.bar0.tdma.u_tdma_n"
+    ],
+    "t100.eic.tm": [
+      "t100.eic.bar0.sram"
+    ],
+    "t100.eic.xpu": [
+      "t100.eic.bar0.xpu"
+    ]
+  },
+  "components": {
+    "t100.apic.apic_stub": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.apic.apic_stub",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.apic.apic",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": null,
+      "canonical_form": "chip_set.chip.unit",
+      "chip": "apic",
+      "diagram": "APIC (optical TX/RX lanes)",
+      "instance": "u_apic",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "apic_stub"
+    },
+    "t100.eic.bar0.accum": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.accum",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "Accumulators",
+      "instance": "u_accum",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "accum"
+    },
+    "t100.eic.bar0.boot_seq": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.boot_seq",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "Boot sequence controller",
+      "instance": "u_boot_seq",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "boot_seq"
+    },
+    "t100.eic.bar0.dfe": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.dfe",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "DFE -- dataflow engine",
+      "instance": "u_dfe",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "dfe"
+    },
+    "t100.eic.bar0.fabio_initiator": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.fabio_initiator",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.fabio_init",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "MSIC interface (FABIO)",
+      "instance": "u_fabio_init",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "fabio_initiator"
+    },
+    "t100.eic.bar0.fep": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.fep",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "FEP -- front-end processor",
+      "instance": "u_fep",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "fep"
+    },
+    "t100.eic.bar0.hadamard_dec": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.hadamard_dec",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.had_dec",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "Hadamard decode",
+      "instance": "u_had_dec",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "hadamard_dec"
+    },
+    "t100.eic.bar0.hadamard_enc": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.hadamard_enc",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.had_enc",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "Hadamard encode",
+      "instance": "u_had_enc",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "hadamard_enc"
+    },
+    "t100.eic.bar0.hbm.u_hbm4e_0": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.hbm",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.hbm4e_0",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "HBM4E 0 (PHY + MC)",
+      "instance": "u_hbm4e_0",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "hbm"
+    },
+    "t100.eic.bar0.hbm.u_hbm4e_1": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.hbm",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.hbm4e_1",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "HBM4E 1 (PHY + MC)",
+      "instance": "u_hbm4e_1",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "hbm"
+    },
+    "t100.eic.bar0.hbm.u_hbm4e_2": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.hbm",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.hbm4e_2",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "HBM4E 2 (PHY + MC)",
+      "instance": "u_hbm4e_2",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "hbm"
+    },
+    "t100.eic.bar0.hbm.u_hbm4e_3": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.hbm",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.hbm4e_3",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "HBM4E 3 (PHY + MC)",
+      "instance": "u_hbm4e_3",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "hbm"
+    },
+    "t100.eic.bar0.hbm.u_hbm4e_4": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.hbm",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.hbm4e_4",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "HBM4E 4 (PHY + MC)",
+      "instance": "u_hbm4e_4",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "hbm"
+    },
+    "t100.eic.bar0.hbm.u_hbm4e_5": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.hbm",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.hbm4e_5",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "HBM4E 5 (PHY + MC)",
+      "instance": "u_hbm4e_5",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "hbm"
+    },
+    "t100.eic.bar0.host_dma": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.host_dma",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "Host DMA",
+      "instance": "u_host_dma",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "host_dma"
+    },
+    "t100.eic.bar0.msic_bridge": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.msic_bridge",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "MSIC interface",
+      "instance": "u_msic_bridge",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "msic_bridge"
+    },
+    "t100.eic.bar0.nic_bridge": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.nic_bridge",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "NIC bridge",
+      "instance": "u_nic_bridge",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "nic_bridge"
+    },
+    "t100.eic.bar0.nic_crypto": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.nic_crypto",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "NIC encrypt / decrypt",
+      "instance": "u_nic_crypto",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "nic_crypto"
+    },
+    "t100.eic.bar0.nic_dma": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.nic_dma",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "NIC DMA",
+      "instance": "u_nic_dma",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "nic_dma"
+    },
+    "t100.eic.bar0.noc_csr": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.noc_csr",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "Arteris NoC (low-speed)",
+      "instance": "u_noc_csr",
+      "readiness": {
+        "completion": 1.0,
+        "passing_tests": 14,
+        "planned_tests": 14,
+        "state": "no tag",
+        "test_status": "complete"
+      },
+      "unit": "noc_csr"
+    },
+    "t100.eic.bar0.noc_hs": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.noc_hs",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "High-speed NoC (custom)",
+      "instance": "u_noc_hs",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "noc_hs"
+    },
+    "t100.eic.bar0.opu_dma": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.opu_dma",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "Inter-OPU DMA",
+      "instance": "u_opu_dma",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "opu_dma"
+    },
+    "t100.eic.bar0.otp": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.otp",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "OTP",
+      "instance": "u_otp",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "otp"
+    },
+    "t100.eic.bar0.ovmm": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.ovmm",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "OVMM",
+      "instance": "u_ovmm",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "ovmm"
+    },
+    "t100.eic.bar0.ovmm_rx": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.ovmm_rx",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "RX (optical)",
+      "instance": "u_ovmm_rx",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "ovmm_rx"
+    },
+    "t100.eic.bar0.ovmm_tx": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.ovmm_tx",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "TX (optical)",
+      "instance": "u_ovmm_tx",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "ovmm_tx"
+    },
+    "t100.eic.bar0.pcie_ep.u_host_pcie": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcie_ep",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.host_pcie",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "Host PCIe",
+      "instance": "u_host_pcie",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcie_ep"
+    },
+    "t100.eic.bar0.pcie_ep.u_nic_pcie": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcie_ep",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.nic_pcie",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "NIC PCIe",
+      "instance": "u_nic_pcie",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcie_ep"
+    },
+    "t100.eic.bar0.pcie_ep.u_opu_pcie_0": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcie_ep",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.opu_pcie_0",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "OPU PCIe port 0",
+      "instance": "u_opu_pcie_0",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcie_ep"
+    },
+    "t100.eic.bar0.pcie_ep.u_opu_pcie_1": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcie_ep",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.opu_pcie_1",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "OPU PCIe port 1",
+      "instance": "u_opu_pcie_1",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcie_ep"
+    },
+    "t100.eic.bar0.pcie_ep.u_opu_pcie_2": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcie_ep",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.opu_pcie_2",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "OPU PCIe port 2",
+      "instance": "u_opu_pcie_2",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcie_ep"
+    },
+    "t100.eic.bar0.pcie_ep.u_opu_pcie_3": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcie_ep",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.opu_pcie_3",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "OPU PCIe port 3",
+      "instance": "u_opu_pcie_3",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcie_ep"
+    },
+    "t100.eic.bar0.pcie_ep.u_opu_pcie_4": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcie_ep",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.opu_pcie_4",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "OPU PCIe port 4",
+      "instance": "u_opu_pcie_4",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcie_ep"
+    },
+    "t100.eic.bar0.pcie_ep.u_opu_pcie_5": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcie_ep",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.opu_pcie_5",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "OPU PCIe port 5",
+      "instance": "u_opu_pcie_5",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcie_ep"
+    },
+    "t100.eic.bar0.pcie_ep.u_opu_pcie_6": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcie_ep",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.opu_pcie_6",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "OPU PCIe port 6",
+      "instance": "u_opu_pcie_6",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcie_ep"
+    },
+    "t100.eic.bar0.pcr": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.pcr",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "Power / Clock / Reset",
+      "instance": "u_pcr",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "pcr"
+    },
+    "t100.eic.bar0.qspi": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.qspi",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.fw_qspi",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "FW QSPI",
+      "instance": "u_fw_qspi",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "qspi"
+    },
+    "t100.eic.bar0.rot": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.rot",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "RoT processor",
+      "instance": "u_rot",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "rot"
+    },
+    "t100.eic.bar0.send": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.send",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "SEND (TM -> MSIC buffers)",
+      "instance": "u_send",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "send"
+    },
+    "t100.eic.bar0.serdes": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.serdes",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "40-80x SERDES",
+      "instance": "u_serdes",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "serdes"
+    },
+    "t100.eic.bar0.smp": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.smp",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "SMP -- system mgmt processor",
+      "instance": "u_smp",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "smp"
+    },
+    "t100.eic.bar0.sram": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.sram",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.tm",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "Tensor Memory (TM)",
+      "instance": "u_tm",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "sram"
+    },
+    "t100.eic.bar0.tdma.u_tdma_n": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.tdma",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.tdma_n",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "TDMA N (HBM4E 0-2 <-> TM)",
+      "instance": "u_tdma_n",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "tdma"
+    },
+    "t100.eic.bar0.tdma.u_tdma_s": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.tdma",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.tdma_s",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit.instance",
+      "chip": "eic",
+      "diagram": "TDMA S (HBM4E 3-5 <-> TM)",
+      "instance": "u_tdma_s",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "tdma"
+    },
+    "t100.eic.bar0.uart": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.uart",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.rot_uart",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "RoT UART",
+      "instance": "u_rot_uart",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no impl",
+        "test_status": "unknown"
+      },
+      "unit": "uart"
+    },
+    "t100.eic.bar0.vpu": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.vpu",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "VPU -- vector processing unit",
+      "instance": "u_vpu",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "vpu"
+    },
+    "t100.eic.bar0.xpu": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.xpu",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        }
+      ],
+      "bar": "bar0",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "XPU -- transpose unit",
+      "instance": "u_xpu",
+      "readiness": {
+        "completion": 1.0,
+        "passing_tests": 25,
+        "planned_tests": 25,
+        "state": "no tag",
+        "test_status": "complete"
+      },
+      "unit": "xpu"
+    },
+    "t100.eic.bar1.hti": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.eic.hti",
+          "namespace": "runtime_event",
+          "observed_in_source": true
+        },
+        {
+          "canonical": false,
+          "derivation": "chip_instance_short_form",
+          "id": "t100.eic.hib",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": "bar1",
+      "canonical_form": "chip_set.chip.bar.unit",
+      "chip": "eic",
+      "diagram": "HIB -- host interface block",
+      "instance": "u_hib",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "hti"
+    },
+    "t100.msic.msic": {
+      "aliases": [
+        {
+          "canonical": false,
+          "derivation": "chip_unit_short_form",
+          "id": "t100.msic.msic",
+          "namespace": "runtime_event",
+          "observed_in_source": false
+        }
+      ],
+      "bar": null,
+      "canonical_form": "chip_set.chip.unit",
+      "chip": "msic",
+      "diagram": "MSIC (meta-surface IC)",
+      "instance": "u_msic",
+      "readiness": {
+        "completion": null,
+        "passing_tests": 0,
+        "planned_tests": 0,
+        "state": "no plan",
+        "test_status": "unknown"
+      },
+      "unit": "msic"
+    }
+  },
+  "kind": "t100.status-overlay",
+  "namespaces": {
+    "canonical": {
+      "instance_suffix": "appended only when two manifest items share a canonical base",
+      "note": "off-die chips declare no bar, so their canonical id is <chip_set>.<chip>.<unit>",
+      "rule": "<chip_set>.<chip>.<bar_or_block>.<unit>",
+      "source": "t100.yaml"
+    },
+    "join_rule": "join a replay event on attrs.logical_unit_ref, which names a canonical component key directly. Where an event carries only a runtime attrs.component_path, resolve it through alias_index, which maps an observed runtime id to every canonical id deriving it; a multi-instance unit resolves to more than one.",
+    "runtime_event": {
+      "note": "aliases only; the runtime does not emit the canonical bar segment, so no alias is marked canonical",
+      "rule": "<chip_set>.<chip>.<unit_or_instance>",
+      "source": "component constructor ids in the model trees"
+    }
+  },
+  "provenance": {
+    "generator": {
+      "path": "scripts/generate_viewer_data.py",
+      "sha256": "c71ca751dbde96c49de6e3cc033a7310af678b3a0139dd81cc86bcf0b58d56a6"
+    },
+    "manifest": {
+      "path": "t100.yaml",
+      "revision": "71f4edfc09c3766d621914f93e18e3073abe9d74",
+      "sha256": "62b67caabab3cb91c447f0163ffd8e38b10da2eb4440aaa377d83daf9f257c77"
+    },
+    "status": {
+      "adapter": "weekly_ledger.v1",
+      "path": "status/weekly.jsonl",
+      "revision": "8582f323cb405ba8b9d77bd025e7adb42cd0a06b",
+      "scored": true,
+      "sha256": "1e149fb00ec999f9df0b883faa54d9d3c9dba8fae604d7a549e4d328889fbaf2",
+      "snapshot_commit": "c9120cd9e2f1603d7b51626c0a20642631f08536",
+      "week_ending": "2026-08-27"
+    }
+  },
+  "schema_version": 1,
+  "semantics": {
+    "complete": "test_status=complete requires measured passing == planned > 0",
+    "unknown": "null means the selected source made no measured claim",
+    "zero": "0 is retained when explicitly recorded by the selected source"
+  },
+  "unbound_runtime_ids": [
+    "t100.eic.cal_target",
+    "t100.hib.host_dma",
+    "t100.msic.ms_buf"
+  ]
+}

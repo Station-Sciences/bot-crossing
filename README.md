@@ -617,10 +617,51 @@ What it touches on disk, in full:
 | --- | --- |
 | Reads | Your harness's own session records and transcripts |
 | Writes | `data/colony.json`; for Cursor Open, a mode-`0600` request under `~/.cursor/` and, when needed, the bundled helper extension |
-| Sends | Nothing. No network calls, no telemetry, no account |
+| Sends | Nothing by default. The opt-in T100 GitHub/Jira readers send only explicitly joined item IDs; never prompts, transcripts, paths, filenames, environment data, or local presence |
 
 `data/colony.json` holds the names and paths of the repos you work in, so it is gitignored —
 worth knowing before you copy one into an issue.
+
+### T100 Work City
+
+The **T100** switch overlays the revision-pinned model ladder and generated
+`physical-layout.instances/v1` floorplan on one map. Capability and physical are
+styles on the same geometry. A unit gets silicon coordinates only from an exact
+`bind.path`; everything else remains in the unplaced tray.
+
+Confirmed local thread assignments are the `threadBindings` identity map in
+`data/colony.json`. The map stores target IDs and timestamps only, not prompts or
+transcripts. Candidate matching runs in the browser and requires confirmation for
+title/keyword matches.
+
+Remote team evidence is off unless explicitly enabled:
+
+```bash
+T100_GITHUB_ENABLED=1 T100_GITHUB_TOKEN=... \
+T100_JIRA_ENABLED=1 T100_JIRA_URL=https://example.atlassian.net \
+T100_JIRA_EMAIL=you@example.com T100_JIRA_TOKEN=... \
+T100_JOIN=/absolute/path/to/work-join.json npm start
+```
+
+`work-join.json` uses `t100.work-join/v1` and fully qualified external IDs:
+
+```json
+{
+  "schemaVersion": "t100.work-join/v1",
+  "github": [
+    { "repo": "OWNER/REPO", "number": 42, "kind": "pull",
+      "targets": ["t100.eic.bar0.vpu"] }
+  ],
+  "jira": [
+    { "key": "T100-7", "targets": ["unit_reset"] }
+  ]
+}
+```
+
+Adapters issue GET requests only, retain an ETag-backed last-good snapshot, and
+surface stale/error provenance. The joined metadata decorates units and rungs; it
+never changes ladder scores. A duplicate external ID mapped to several targets is
+reported as a conflict rather than resolved silently.
 
 ## Layout
 
@@ -631,8 +672,9 @@ server/
     claude-code.mjs
   lib/         filesystem helpers the adapters share
   scan.mjs     harness-agnostic: asks every detected harness, merges, sorts
-  api.mjs      /api/threads, /api/harnesses, /api/state, /api/open, /api/archive,
-               /api/new-session, /api/reveal
+  t100/        floorplan/scorer bridge, world model, team-evidence readers
+  api.mjs      /api/threads, /api/harnesses, /api/state, /api/open,
+               /api/new-session, /api/reveal, /api/t100/*
   serve.mjs    static server for the built app
 src/
   core/        settings, renderer + post chain, the Google Earth camera

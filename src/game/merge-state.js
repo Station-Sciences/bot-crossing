@@ -126,7 +126,7 @@ export function mergeState(base, local, remote) {
   const l = local || {}
   const r = remote || {}
   return {
-    version: r.version ?? l.version ?? 3,
+    version: r.version ?? l.version ?? 4,
     archived: mergeSet(b.archived, l.archived, r.archived),
     archivedAt: mergeMap(b.archivedAt, l.archivedAt, r.archivedAt),
     opened: mergeSet(b.opened, l.opened, r.opened),
@@ -135,6 +135,7 @@ export function mergeState(base, local, remote) {
     hiddenProjects: mergeSet(b.hiddenProjects, l.hiddenProjects, r.hiddenProjects),
     viewedAt: mergeMap(b.viewedAt, l.viewedAt, r.viewedAt),
     activeRoot: mergeScalar(b.activeRoot, l.activeRoot, r.activeRoot, ''),
+    threadBindings: mergeMap(b.threadBindings, l.threadBindings, r.threadBindings),
     settings: l.settings && typeof l.settings === 'object' ? l.settings : r.settings ?? null,
   }
 }

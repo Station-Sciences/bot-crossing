@@ -1467,3 +1467,138 @@ kbd {
   }
 }
 .bot-crossing-canvas { cursor: grab; }
+
+/* ── T100 Work City ──────────────────────────────────────────────────────────
+   A second top-level view. The view switch lives in the sidebar brandbar; the
+   colony chrome and the T100 panel trade places based on the active view. */
+
+/* Its own row under the brandbar: the bar already carries the title and four icon
+   buttons, and squeezing two labelled segments in there clipped "Bot Crossing". */
+.view-switch {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  margin: 9px 15px 0;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.view-switch button {
+  font: inherit;
+  font-size: 12px;
+  flex: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.view-switch button:hover {
+  color: var(--text);
+}
+.view-switch button[aria-pressed='true'] {
+  color: var(--text);
+  background: var(--accent);
+}
+
+/* Trade places: hide the colony body in T100, hide the T100 panel in colony. */
+.t100-panel { display: none; }
+.hud[data-view='t100'] .side-body { display: none; }
+.hud[data-view='t100'] .thread-pop { display: none !important; }
+.hud[data-view='t100'] .t100-panel { display: block; }
+
+.t100-panel {
+  padding: 10px 14px 18px;
+  overflow-y: auto;
+  color: var(--text);
+}
+.t100-panel h2 { margin: 2px 0 2px; font-size: 18px; }
+.t100-panel h3 { margin: 14px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.t100-panel .sub { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
+.t100-kicker { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--teal); }
+
+.t100-layers { display: inline-flex; gap: 2px; margin: 4px 0 10px; padding: 2px; border: 1px solid var(--line); border-radius: 10px; }
+.t100-layers button { font: inherit; font-size: 12px; color: var(--muted); background: transparent; border: 0; border-radius: 8px; padding: 4px 12px; cursor: pointer; }
+.t100-layers button.on { color: var(--text); background: rgba(255,255,255,0.10); }
+
+.t100-truth { display: grid; gap: 2px; font-size: 12px; color: var(--muted); padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; }
+.t100-truth b { color: var(--text); font-size: 12px; }
+.t100-link-legend { display: flex; flex-wrap: wrap; gap: 5px 10px; margin: -2px 0 7px; color: var(--dim); font-size: 10px; }
+.t100-link-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.t100-link-legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; background: #8b9baa; }
+.t100-link-legend i.bulk { height: 6px; background: #49c7ff; }
+.t100-link-legend i.control { background: #ffc857; }
+
+.t100-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.t100-controls label { font-size: 11px; color: var(--muted); display: inline-flex; flex-direction: column; gap: 2px; }
+.t100-controls .select { padding: 4px 6px; }
+.t100-progress { font-size: 11px; color: var(--dim); margin: 4px 0 2px; }
+.t100-replay-notice { font-size: 11px; margin: 2px 0; }
+.t100-replay-notice b { display: block; color: var(--amber); letter-spacing: 0.04em; }
+.t100-replay-notice span { color: var(--muted); }
+
+.t100-fields { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 12px; margin: 6px 0; }
+.t100-fields dt { color: var(--dim); }
+.t100-fields dd { margin: 0; color: var(--text); word-break: break-word; }
+
+.t100-phase { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text); margin: 2px 0 6px; }
+.t100-phase .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+.t100-facets { display: grid; gap: 3px; margin: 6px 0; }
+.t100-facet { display: grid; grid-template-columns: 90px 1fr auto; gap: 6px; font-size: 11px; padding: 3px 8px; border-radius: 8px; background: rgba(255,255,255,0.03); border-left: 3px solid var(--line-strong); }
+.t100-facet .fk { color: var(--muted); text-transform: capitalize; }
+.t100-facet .fs { color: var(--text); }
+.t100-facet .fe { color: var(--dim); font-size: 10px; }
+.t100-facet-passing { border-left-color: var(--green); }
+.t100-facet-implemented { border-left-color: var(--blue); }
+.t100-facet-planned, .t100-facet-declared { border-left-color: var(--amber); }
+.t100-facet-unknown, .t100-facet-absent { border-left-color: var(--dim); }
+
+.t100-rungs, .t100-conns { font-size: 11px; color: var(--muted); margin: 6px 0; }
+.t100-rung { display: inline-block; background: rgba(255,255,255,0.06); border-radius: 6px; padding: 1px 6px; margin: 2px 3px 0 0; font-size: 10px; color: var(--text); }
+
+.t100-attention-list { display: grid; gap: 4px; }
+/* Two rows: kind + subject, then the reason. The subject is what makes the queue
+   actionable — a list of reasons with no named subject is unreadable. */
+.t100-att-item { display: grid; grid-template-columns: auto 1fr auto; gap: 3px 8px; align-items: center; text-align: left; font: inherit; cursor: pointer; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: rgba(255,255,255,0.02); color: var(--text); }
+.t100-att-item:hover { background: rgba(255,255,255,0.06); }
+.t100-att-item .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--amber); }
+.t100-att-item .s { font-size: 11px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t100-att-item .r { grid-column: 1 / -1; font-size: 11px; color: var(--muted); }
+.t100-att-item .ec, .t100-att .ec { font-size: 10px; color: var(--dim); }
+.t100-att-item.t100-att-test-failed .k { color: var(--red); }
+.t100-att-item.t100-att-gate-mismatch .k { color: var(--amber); }
+.t100-att-item.t100-att-blocked .k { color: #d06be8; }
+.t100-att-item.t100-att-fixture .k { color: #5aa9e6; }
+.t100-att-item.t100-att-stale .k, .t100-att-item.t100-att-no-owner .k { color: var(--dim); }
+
+.t100-unit-attention { display: grid; gap: 3px; margin: 6px 0; }
+.t100-att { font-size: 11px; padding: 3px 8px; border-radius: 8px; background: rgba(240,82,82,0.10); color: var(--text); }
+.t100-freshness { margin-top: 8px; }
+.t100-provenance { color: var(--dim); font-size: 11px; }
+
+.t100-agents { margin-top: 12px; }
+.t100-agent-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 5px 0 7px; }
+.t100-agent-actions .sub { flex: 1 0 100%; }
+.t100-agent-actions .btn, .t100-agent-controls .btn { min-height: 25px; padding: 3px 7px; font-size: 10px; }
+.t100-agent-list { display: grid; gap: 6px; }
+.t100-agent-row { padding: 7px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,0.025); }
+.t100-agent-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px; }
+.t100-agent-head .pip { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
+.t100-agent-head .pip.live { background: var(--green); box-shadow: 0 0 7px var(--green); }
+.t100-agent-head .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; font-weight: 600; }
+.t100-agent-head .harness { color: var(--dim); font-size: 9px; }
+.t100-agent-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 5px; }
+.t100-agent-controls [data-target] { flex: 1; min-width: 90px; max-width: 150px; font-size: 10px; }
+.t100-anchor { color: var(--green); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.t100-work { display: grid; gap: 4px; margin-top: 7px; }
+.t100-work-item { display: grid; gap: 1px; padding: 5px 7px; border-left: 2px solid var(--accent); background: rgba(255,255,255,.025); font-size: 10px; }
+.t100-work-item span { color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.t100-work-item a, .t100-work-item b { color: var(--text); font-weight: 500; text-decoration: none; }
+.t100-work-item a:hover { text-decoration: underline; }
+.t100-interface { margin-top: 4px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; font-size: 10px; }
+.t100-interface summary { cursor: pointer; color: var(--text); }
+.t100-interface > div { margin-top: 3px; overflow-wrap: anywhere; }
+.t100-performance { color: var(--text); }
