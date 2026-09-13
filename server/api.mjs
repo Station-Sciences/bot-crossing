@@ -11,12 +11,40 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
 } from './scan.mjs'
+import { startWatcher } from './watch.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
 const STATE_FILE = path.join(DATA_DIR, 'colony.json')
 
 const STATE_VERSION = 2
+
+const sseClients = new Set()
+let watcher = null
+
+function ensureWatcher() {
+  if (watcher) return
+  watcher = startWatcher(async () => {
+    if (!sseClients.size) return
+    try {
+      const threads = await reconcileArchived(await scanThreads())
+      broadcastSse('threads', { threads, scannedAt: Date.now() })
+    } catch (err) {
+      console.warn('bot-crossing: watcher scan failed —', err?.message || err)
+    }
+  })
+}
+
+export function broadcastSse(event, data) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+  for (const client of sseClients) {
+    try {
+      client.write(payload)
+    } catch {
+      sseClients.delete(client)
+    }
+  }
+}
 
 /**
  * v1 keyed everything on a bare session id, because Claude Code was the only harness and its
@@ -375,6 +403,41 @@ export async function apiMiddleware(req, res, next) {
   }
 
   try {
+    if (url.pathname === '/api/events' && req.method === 'GET') {
+      ensureWatcher()
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+      })
+      res.write(': connected\n\n')
+      sseClients.add(res)
+
+      scanThreads()
+        .then((t) => reconcileArchived(t))
+        .then((threads) => {
+          try {
+            res.write(`event: threads\ndata: ${JSON.stringify({ threads, scannedAt: Date.now() })}\n\n`)
+          } catch {}
+        })
+        .catch(() => {})
+
+      const ping = setInterval(() => {
+        try {
+          res.write(': ping\n\n')
+        } catch {
+          clearInterval(ping)
+          sseClients.delete(res)
+        }
+      }, 25000)
+
+      req.on('close', () => {
+        clearInterval(ping)
+        sseClients.delete(res)
+      })
+      return
+    }
+
     if (url.pathname === '/api/threads' && req.method === 'GET') {
       const threads = await reconcileArchived(await scanThreads())
       // A harness that is present but cannot read its own store says so here, rather than

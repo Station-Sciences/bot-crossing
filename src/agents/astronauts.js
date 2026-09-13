@@ -651,8 +651,8 @@ export class Astronauts {
       const agent = this.agents[i]
       agent.stateAge += dt
       this._step(agent, dt, elapsed, anim)
-      this._animate(agent, dt, anim)
-      this._face(agent, dt)
+      this._animate(agent, dt, elapsed, anim)
+      this._face(agent, dt, elapsed)
 
       if (agent.state === 'gone') {
         this.agents.splice(i, 1)
@@ -749,8 +749,14 @@ export class Astronauts {
 
       case 'at-site': {
         if (agent.status === 'idle') {
-          // Idlers potter around their plot, and `_drift` owns their velocity outright.
-          this._drift(agent, dt, elapsed)
+          this._checkGreeting(agent, elapsed)
+          if (agent.greetUntil && agent.greetUntil > elapsed) {
+            agent.vel.set(0, 0, 0)
+            this._settle(agent, dt)
+          } else {
+            // Idlers potter around their plot, and `_drift` owns their velocity outright.
+            this._drift(agent, dt, elapsed)
+          }
         } else if (agent.status === 'working' && agent.anchor) {
           this._workRound(agent, dt, elapsed)
         } else {
@@ -915,6 +921,47 @@ export class Astronauts {
     return out
   }
 
+  /**
+   * When two idle astronauts cross paths, pause their drift, face each other, and wave!
+   */
+  _checkGreeting(agent, elapsed) {
+    if (agent.status !== 'idle' || agent.state !== 'at-site') return
+    if (agent.greetCooldown && agent.greetCooldown > elapsed) return
+    if (agent.greetUntil && agent.greetUntil > elapsed) return
+
+    const bx = (agent.pos.x / 2) | 0
+    const bz = (agent.pos.z / 2) | 0
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oz = -1; oz <= 1; oz++) {
+        const list = this._buckets.get((bx + ox) * 10007 + (bz + oz))
+        if (!list) continue
+        for (const other of list) {
+          if (other === agent || other.status !== 'idle' || other.state !== 'at-site') continue
+          if (other.greetCooldown && other.greetCooldown > elapsed) continue
+          if (other.greetUntil && other.greetUntil > elapsed) continue
+          const dx = other.pos.x - agent.pos.x
+          const dz = other.pos.z - agent.pos.z
+          const d2 = dx * dx + dz * dz
+          if (d2 < 1.6 * 1.6 && d2 > 0.25 * 0.25) {
+            const duration = 2.0
+            agent.greetUntil = elapsed + duration
+            agent.greetCooldown = elapsed + 16
+            agent.targetYaw = Math.atan2(dx, dz)
+            agent.faceFrame = FACE.happy
+            agent.blinkAt = 2.4
+
+            other.greetUntil = elapsed + duration
+            other.greetCooldown = elapsed + 16
+            other.targetYaw = Math.atan2(-dx, -dz)
+            other.faceFrame = FACE.happy
+            other.blinkAt = 2.4
+            return
+          }
+        }
+      }
+    }
+  }
+
   /** A slow wander inside the plot, re-targeted every few seconds. */
   _drift(agent, dt, elapsed) {
     if (elapsed > agent.wanderAt) {
@@ -1037,9 +1084,14 @@ export class Astronauts {
   }
 
   /** Pick this frame's face: a status loop, interrupted by the agent's own blink clock. */
-  _face(agent, dt) {
+  _face(agent, dt, elapsed) {
     agent.faceTimer += dt
     agent.blinkAt -= dt
+
+    if (agent.greetUntil && agent.greetUntil > elapsed) {
+      agent.faceFrame = FACE.happy
+      return
+    }
 
     if (agent.state === 'spawning' && agent.stateAge < 0.8) {
       agent.faceFrame = FACE.boot
@@ -1079,7 +1131,7 @@ export class Astronauts {
    * cannot moonwalk — the same rule the old hand-written cycle followed, applied to a real
    * one instead.
    */
-  _animate(agent, dt, anim) {
+  _animate(agent, dt, elapsed, anim) {
     const rig = this.rig
     if (!rig) return
 
@@ -1090,6 +1142,7 @@ export class Astronauts {
     const speed = agent.groundSpeed || 0
     let key
     if (agent.state === 'spawning') key = 'spawn'
+    else if (agent.greetUntil && agent.greetUntil > elapsed) key = 'wave'
     else if (speed > 0.12) key = speed > WALK_SPEED * 1.25 ? 'run' : 'walk'
     else {
       switch (agent.status) {

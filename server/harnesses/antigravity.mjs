@@ -47,6 +47,26 @@ function cleanPrompt(raw) {
     .trim()
 }
 
+function summarizeToolCall(call) {
+  if (!call) return ''
+  const name = call.name || 'tool'
+  const args = call.args || {}
+  const target =
+    args.CommandLine ||
+    args.TargetFile ||
+    args.AbsolutePath ||
+    args.DirectoryPath ||
+    args.Query ||
+    args.Url ||
+    ''
+  if (target) {
+    const cleanTarget = String(target).split('\n')[0].trim()
+    const short = cleanTarget.length > 35 ? cleanTarget.slice(0, 32) + '…' : cleanTarget
+    return `${name}: ${short}`
+  }
+  return name
+}
+
 function findGitRoot(startDir) {
   let cur = path.resolve(startDir)
   while (cur && cur !== path.dirname(cur)) {
@@ -242,6 +262,46 @@ async function scanThread(dir) {
       : firstPrompt
     : 'Antigravity Session'
 
+  let activeTool = ''
+  const recentLogs = []
+  for (let i = tailRecords.length - 1; i >= 0; i--) {
+    const r = tailRecords[i]
+    if (r.type === 'USER_INPUT' || r.type === 'USER_EXPLICIT') {
+      const p = cleanPrompt(r.content || '')
+      if (p && recentLogs.length < 5) {
+        recentLogs.unshift({ type: 'user', text: p.length > 80 ? p.slice(0, 77) + '…' : p, time: r.created_at })
+      }
+    } else if (Array.isArray(r.tool_calls) && r.tool_calls.length > 0) {
+      for (let j = r.tool_calls.length - 1; j >= 0; j--) {
+        const tc = r.tool_calls[j]
+        const toolStr = summarizeToolCall(tc)
+        if (!activeTool) activeTool = toolStr
+        if (recentLogs.length < 5) {
+          recentLogs.unshift({ type: 'tool', text: toolStr, time: r.created_at })
+        }
+      }
+    } else if (r.type === 'PLANNER_RESPONSE' && r.content) {
+      const cleanC = r.content.replace(/\s+/g, ' ').trim()
+      if (cleanC && recentLogs.length < 5) {
+        recentLogs.unshift({ type: 'assistant', text: cleanC.length > 80 ? cleanC.slice(0, 77) + '…' : cleanC, time: r.created_at })
+      }
+    }
+  }
+
+  let lastAction = ''
+  if (isWaiting) {
+    if (pendingQuestion) lastAction = 'Waiting for user answer'
+    else if (pendingFeedback) lastAction = 'Waiting for plan review'
+    else if (pendingPermission) lastAction = 'Waiting for tool approval'
+    else lastAction = 'Waiting for user reply'
+  } else if (running) {
+    lastAction = activeTool || 'Working on task…'
+  } else if (hasError) {
+    lastAction = 'Error encountered'
+  } else {
+    lastAction = 'Idle'
+  }
+
   return {
     id: ID(dirName),
     title,
@@ -258,6 +318,8 @@ async function scanThread(dir) {
     running,
     unread,
     hasError,
+    lastAction,
+    recentLogs,
     starred: false,
     routine: '',
     prState: '',

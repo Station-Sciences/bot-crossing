@@ -44,6 +44,11 @@ const ICON = {
   copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>`,
   locate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.6"/><path d="M12 1.8v2.6M12 19.6v2.6M1.8 12h2.6M19.6 12h2.6"/></svg>`,
   orbit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><ellipse cx="12" cy="12" rx="10.2" ry="4.6" transform="rotate(-24 12 12)"/><circle cx="21" cy="8.2" r="1.5" fill="currentColor" stroke="none"/></svg>`,
+  sound: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`,
+  soundMute: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`,
+  activity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
+  pip: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="8" height="7" rx="1"/><polygon points="12 11 16 11 16 15" fill="none"/></svg>`,
+  monument: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 20 8.5 20 22 4 22 4 8.5 12 2"/><path d="M12 22V12"/><path d="M9 12h6"/></svg>`,
 }
 
 const STAT_DEFS = [
@@ -250,6 +255,38 @@ export class Hud {
       this._toggle('Show FPS', 'showFps')
     )
     body.appendChild(view)
+
+    // Audio.
+    const audio = group('Audio')
+    audio.append(
+      this._toggle('Sound effects', 'soundEnabled', 'Synthesized retro SFX for interactions and status changes.'),
+      this._slider('SFX volume', 'sfxVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
+      this._toggle('Ambient soundscape', 'ambientEnabled', 'Procedural atmospheric background sound tailored to each planet.'),
+      this._slider('Ambient volume', 'ambientVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`)
+    )
+    body.appendChild(audio)
+
+    // Notifications.
+    const notifs = group('Notifications')
+    notifs.append(
+      this._toggle(
+        'Desktop notifications',
+        'desktopNotifications',
+        'Send system notifications when an agent asks a question or encounters an error.',
+        async (enabled) => {
+          if (enabled && this.actions.requestNotificationPermission) {
+            const granted = await this.actions.requestNotificationPermission()
+            if (!granted) {
+              this.settings.set('desktopNotifications', false)
+              this.toast('Notification permission not granted', 'err')
+            } else {
+              this.toast('Desktop notifications enabled')
+            }
+          }
+        }
+      )
+    )
+    body.appendChild(notifs)
   }
 
   _row(label, hint) {
@@ -262,13 +299,17 @@ export class Hud {
     return row
   }
 
-  _toggle(label, key, hint) {
+  _toggle(label, key, hint, onToggle) {
     const row = this._row(label, hint)
     const b = document.createElement('button')
     b.type = 'button'
     b.className = 'toggle'
     b.setAttribute('role', 'switch')
-    b.addEventListener('click', () => this.settings.set(key, !this.settings.get(key)))
+    b.addEventListener('click', async () => {
+      const next = !this.settings.get(key)
+      this.settings.set(key, next)
+      if (onToggle) await onToggle(next)
+    })
     row.appendChild(b)
     this.controls.push({
       el: row,
@@ -349,6 +390,19 @@ export class Hud {
   _wire() {
     const on = (sel, ev, fn) => this.$(sel).addEventListener(ev, fn)
 
+    on('#btn-sound', 'click', () => {
+      const current = Boolean(this.settings.get('soundEnabled'))
+      this.settings.set('soundEnabled', !current)
+      this.actions.playClick?.()
+    })
+    on('#btn-activity', 'click', () => {
+      this.toggleActivityDrawer()
+      this.actions.playClick?.()
+    })
+    on('#btn-close-activity', 'click', () => {
+      this.toggleActivityDrawer(false)
+      this.actions.playClick?.()
+    })
     on('#btn-settings', 'click', () => this.toggleSettings())
     on('#btn-close-settings', 'click', () => this.toggleSettings(false))
     on('#btn-hide', 'click', () => this.toggleUi())
@@ -376,6 +430,23 @@ export class Hud {
     this.$('.help .sheet').addEventListener('click', (e) => e.stopPropagation())
     on('#btn-help-close', 'click', () => this.toggleHelp(false))
 
+    on('#btn-pip', 'click', () => {
+      this.actions.togglePip?.()
+      this.actions.playClick?.()
+    })
+    on('#btn-colony', 'click', () => {
+      this.toggleColony()
+      this.actions.playClick?.()
+    })
+    on('#btn-close-colony', 'click', () => {
+      this.toggleColony(false)
+      this.actions.playClick?.()
+    })
+    on('.colony-modal', 'click', (e) => {
+      if (e.target === this.$('.colony-modal')) this.toggleColony(false)
+    })
+    this.$('.colony-modal .sheet')?.addEventListener('click', (e) => e.stopPropagation())
+
     this.settings.onChange(() => this.syncSettings())
   }
 
@@ -384,6 +455,13 @@ export class Hud {
   syncSettings() {
     for (const c of this.controls) c.sync()
     this.$('.fps').classList.toggle('on', Boolean(this.settings.get('showFps')))
+    const soundOn = Boolean(this.settings.get('soundEnabled'))
+    const btnSound = this.$('#btn-sound')
+    if (btnSound) {
+      btnSound.innerHTML = soundOn ? ICON.sound : ICON.soundMute
+      btnSound.setAttribute('aria-pressed', String(soundOn))
+      btnSound.title = soundOn ? 'Sound on (click to mute)' : 'Sound muted (click to unmute)'
+    }
   }
 
   setStats(stats) {
@@ -579,6 +657,7 @@ export class Hud {
     if (!agent || !thread) {
       card.classList.remove('on')
       this.selected = null
+      this.toggleActivityDrawer(false)
       return
     }
     this.selected = { agent, thread }
@@ -597,6 +676,34 @@ export class Hud {
     bits.push(`<span>${ago(thread.lastActivityAt)}</span>`)
     meta.innerHTML = bits.join('')
 
+    // Live Thought Bubble — only shown when agent is active (running, waiting, or error)
+    const bubble = this.$('.thread-pop .thought-bubble')
+    const isLive = Boolean(thread.running || thread.unread || thread.hasError)
+    const action = thread.lastAction
+    if (isLive && action && action !== 'Idle') {
+      bubble.hidden = false
+      bubble.querySelector('.thought-text').textContent = action
+      const dot = bubble.querySelector('.pulse-dot')
+      if (dot) {
+        if (thread.hasError) {
+          dot.style.background = '#e88b8b'
+          dot.style.boxShadow = '0 0 8px #e88b8b'
+        } else if (thread.unread) {
+          dot.style.background = '#8fb4ee'
+          dot.style.boxShadow = '0 0 8px #8fb4ee'
+        } else {
+          dot.style.background = 'var(--teal)'
+          dot.style.boxShadow = '0 0 8px var(--teal)'
+        }
+      }
+    } else {
+      bubble.hidden = true
+    }
+
+    if (!this.$('.activity-drawer').classList.contains('closed')) {
+      this._updateActivityDrawer(thread)
+    }
+
     const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
     this.$('.thread-pop .progress > i').style.width = `${pct}%`
     this.$('.thread-pop .progress > i').style.background = hex(agent.trim.getHex())
@@ -609,6 +716,50 @@ export class Hud {
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
     this.$('#btn-viewed').hidden = !thread.unread
+  }
+
+  toggleActivityDrawer(open = null) {
+    const drawer = this.$('.activity-drawer')
+    if (!drawer) return
+    const next = open ?? drawer.classList.contains('closed')
+    drawer.classList.toggle('closed', !next)
+    if (next && this.selected?.thread) {
+      this._updateActivityDrawer(this.selected.thread)
+    }
+  }
+
+  _updateActivityDrawer(thread) {
+    const drawer = this.$('.activity-drawer')
+    if (!drawer || !thread) return
+    drawer.querySelector('.activity-title').textContent = thread.project
+      ? `${thread.project} · Activity Logs`
+      : 'Activity Logs'
+    const promptText = drawer.querySelector('.activity-prompt-text')
+    promptText.textContent = thread.preview || thread.title || 'No prompt recorded'
+
+    const feed = drawer.querySelector('.activity-feed')
+    feed.innerHTML = ''
+    const logs = thread.recentLogs || []
+    if (!logs.length) {
+      feed.innerHTML = `<div class="activity-item" style="color:var(--muted)">No recent activity records found in session transcript.</div>`
+      return
+    }
+    for (const log of logs) {
+      const item = document.createElement('div')
+      item.className = 'activity-item'
+      const type = log.type || 'tool'
+      const timeStr = log.time
+        ? new Date(log.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : ''
+      item.innerHTML = `
+        <div class="activity-item-head">
+          <span class="activity-item-type ${escapeHtml(type)}">${escapeHtml(type)}</span>
+          <span style="color:var(--muted)">${escapeHtml(timeStr)}</span>
+        </div>
+        <div class="activity-item-content">${escapeHtml(log.text || '')}</div>
+      `
+      feed.appendChild(item)
+    }
   }
 
   /**
@@ -769,6 +920,116 @@ export class Hud {
     el.classList.toggle('open', open)
   }
 
+  updatePipState(active) {
+    const btn = this.$('#btn-pip')
+    if (btn) {
+      btn.setAttribute('aria-pressed', String(Boolean(active)))
+      btn.classList.toggle('active', Boolean(active))
+      btn.title = active ? 'Exit Picture-in-Picture' : 'Picture-in-Picture Companion Mode'
+    }
+  }
+
+  setColonyData(threads, planet) {
+    this._colonyThreads = threads || []
+    this._colonyPlanet = planet || null
+    if (this.$('.colony-modal')?.classList.contains('open')) {
+      this.renderColonyOverview()
+    }
+  }
+
+  toggleColony(force) {
+    const el = this.$('.colony-modal')
+    if (!el) return
+    const open = force ?? !el.classList.contains('open')
+    el.classList.toggle('open', open)
+    if (open) {
+      this.renderColonyOverview()
+    }
+  }
+
+  renderColonyOverview() {
+    const el = this.$('.colony-modal')
+    if (!el) return
+
+    const threads = this._colonyThreads || []
+    const planet = this._colonyPlanet
+
+    if (planet) {
+      const nameEl = this.$('.colony-name')
+      if (nameEl) nameEl.textContent = `${planet.name} Station`
+      const subEl = this.$('.colony-planet-sub')
+      if (subEl) subEl.textContent = planet.blurb || 'Planetary Base'
+    }
+
+    const total = threads.length
+    let working = 0
+    let waiting = 0
+    let blocked = 0
+    let shipped = 0
+
+    const harnessCounts = new Map()
+    const projectCounts = new Map()
+
+    for (const t of threads) {
+      if (t.status === 'working') working++
+      else if (t.status === 'waiting') waiting++
+      else if (t.status === 'blocked') blocked++
+      if (t.status === 'celebrating' || t.prState === 'merged') shipped++
+
+      const h = t.harnessName || t.harness || 'Agent'
+      harnessCounts.set(h, (harnessCounts.get(h) || 0) + 1)
+
+      const p = t.project || 'unknown'
+      projectCounts.set(p, (projectCounts.get(p) || 0) + 1)
+    }
+
+    let rank = 'Class I Frontier Base'
+    if (total >= 30) rank = 'Class IV Interstellar Metropolis'
+    else if (total >= 15) rank = 'Class III Orbital Citadel'
+    else if (total >= 5) rank = 'Class II Settler Habitat'
+    const rankEl = this.$('.colony-rank-badge')
+    if (rankEl) rankEl.textContent = rank
+
+    const setVal = (sel, val) => {
+      const target = this.$(sel)
+      if (target) target.textContent = String(val)
+    }
+    setVal('.stat-total-crew', total)
+    setVal('.stat-working', working)
+    setVal('.stat-waiting', waiting)
+    setVal('.stat-shipped', shipped)
+
+    const hList = this.$('.colony-harness-list')
+    if (hList) {
+      hList.innerHTML = ''
+      if (!harnessCounts.size) {
+        hList.innerHTML = '<span style="color:var(--muted);font-size:12px">No active harnesses detected</span>'
+      } else {
+        for (const [name, count] of harnessCounts.entries()) {
+          const chip = document.createElement('div')
+          chip.className = 'colony-harness-chip'
+          chip.innerHTML = `<span class="h-dot"></span><strong>${escapeHtml(name)}</strong><span class="count-tag">${count}</span>`
+          hList.appendChild(chip)
+        }
+      }
+    }
+
+    const pList = this.$('.colony-projects-list')
+    if (pList) {
+      pList.innerHTML = ''
+      if (!projectCounts.size) {
+        pList.innerHTML = '<span style="color:var(--muted);font-size:12px">No repo plots established yet</span>'
+      } else {
+        for (const [name, count] of projectCounts.entries()) {
+          const row = document.createElement('div')
+          row.className = 'colony-project-row'
+          row.innerHTML = `<span class="p-name">${escapeHtml(name)}</span><span class="p-count">${count} thread${count === 1 ? '' : 's'}</span>`
+          pList.appendChild(row)
+        }
+      }
+    }
+  }
+
   /**
    * Dismiss everything. This is the mode the game is really meant to be left in — the
    * colony carries its own state above the astronauts' heads, so the panels are for
@@ -906,6 +1167,8 @@ const TEMPLATE = `
 <aside class="side panel">
   <header class="brandbar">
     <div class="brand"><i class="dot"></i>Bot Crossing</div>
+    <button class="btn icon ghost" id="btn-colony" title="Colony Station Overview (M)">${ICON.monument}</button>
+    <button class="btn icon ghost" id="btn-sound" title="Sound (click to toggle mute)">${ICON.sound}</button>
     <button class="btn icon ghost" id="btn-shot" title="Screenshot (P)">${ICON.camera}</button>
     <button class="btn icon ghost" id="btn-help" title="Help (?)">${ICON.help}</button>
     <button class="btn icon ghost" id="btn-hide" title="Hide all UI (H)">${ICON.eye}</button>
@@ -953,6 +1216,7 @@ const TEMPLATE = `
 <div class="rail panel">
   <button class="btn icon" id="btn-home" title="Reset the view (0)">${ICON.home}</button>
   <button class="btn icon" id="btn-next" title="Next astronaut waiting on you (N)">${ICON.next}</button>
+  <button class="btn icon" id="btn-pip" title="Picture-in-Picture Companion Mode">${ICON.pip}</button>
   <div class="sep"></div>
   <button class="btn icon" id="btn-orbit" title="Orbit mode — sweep around the colony (O)" aria-pressed="false">${ICON.orbit}</button>
   <button class="btn icon" id="btn-planet" title="Change planet (Tab)">${ICON.globe}</button>
@@ -962,6 +1226,21 @@ const TEMPLATE = `
 <div class="settings panel closed">
   <header>Settings <button class="btn icon ghost" id="btn-close-settings" title="Close">${ICON.close}</button></header>
   <div class="body"></div>
+</div>
+
+<div class="activity-drawer panel closed">
+  <header>
+    <span class="activity-title">Activity Logs</span>
+    <button class="btn icon ghost" id="btn-close-activity" title="Close">${ICON.close}</button>
+  </header>
+  <div class="activity-body">
+    <div class="activity-prompt-box">
+      <div class="activity-prompt-label">Initial Request</div>
+      <div class="activity-prompt-text"></div>
+    </div>
+    <div class="activity-feed-label">Recent Steps &amp; Tools</div>
+    <div class="activity-feed"></div>
+  </div>
 </div>
 
 <div class="thread-pop panel">
@@ -974,9 +1253,14 @@ const TEMPLATE = `
     </div>
     <button class="btn icon ghost" id="btn-deselect" title="Deselect (Esc)">${ICON.close}</button>
   </div>
+  <div class="thought-bubble" hidden>
+    <i class="pulse-dot"></i>
+    <span class="thought-text"></span>
+  </div>
   <div class="progress"><i></i></div>
   <div class="pair">
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
+    <button class="btn" id="btn-activity" title="View activity logs">${ICON.activity} Logs</button>
     <button class="btn" id="btn-viewed" title="Stop this thread asking for you until it moves on again (V)">${ICON.eye} Viewed</button>
     <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>
   </div>
@@ -1011,6 +1295,7 @@ const TEMPLATE = `
         <div class="k"><span>Orbit mode</span><kbd>O</kbd></div>
         <div class="k"><span>Change planet</span><kbd>Tab</kbd></div>
         <div class="k"><span>Time of day</span><kbd>L</kbd></div>
+        <div class="k"><span>Colony overview</span><kbd>M</kbd></div>
         <div class="k"><span>Deselect</span><kbd>Esc</kbd></div>
         <div class="k"><span>This sheet</span><kbd>?</kbd></div>
       </div>
@@ -1024,6 +1309,51 @@ const TEMPLATE = `
     </div>
     <div style="margin-top:18px;display:flex;justify-content:flex-end">
       <button class="btn primary" id="btn-help-close">Got it</button>
+    </div>
+  </div>
+</div>
+
+<div class="colony-modal">
+  <div class="sheet panel">
+    <div class="colony-header">
+      <div class="colony-title">
+        <span class="station-icon">${ICON.monument}</span>
+        <div>
+          <h2 class="colony-name">Colony Station</h2>
+          <div class="colony-planet-sub">Orbiting Planet</div>
+        </div>
+      </div>
+      <div class="colony-rank-badge">Class I Frontier Base</div>
+      <button class="btn icon ghost" id="btn-close-colony" title="Close">${ICON.close}</button>
+    </div>
+
+    <div class="colony-stats-grid">
+      <div class="colony-stat-card">
+        <div class="val stat-total-crew" style="color:var(--text)">0</div>
+        <div class="lbl">Total Crew</div>
+      </div>
+      <div class="colony-stat-card">
+        <div class="val stat-working" style="color:var(--green)">0</div>
+        <div class="lbl">Building</div>
+      </div>
+      <div class="colony-stat-card">
+        <div class="val stat-waiting" style="color:var(--blue)">0</div>
+        <div class="lbl">Need Reply</div>
+      </div>
+      <div class="colony-stat-card">
+        <div class="val stat-shipped" style="color:var(--amber)">0</div>
+        <div class="lbl">Shipped PRs</div>
+      </div>
+    </div>
+
+    <div class="colony-harnesses-box">
+      <div class="colony-section-title">Active AI Harnesses</div>
+      <div class="colony-harness-list"></div>
+    </div>
+
+    <div class="colony-projects-box">
+      <div class="colony-section-title">Station Projects &amp; Plots</div>
+      <div class="colony-projects-list"></div>
     </div>
   </div>
 </div>

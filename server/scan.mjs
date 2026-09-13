@@ -82,7 +82,13 @@ export async function scanThreads() {
       }
     })
   )
-  const threads = disambiguateProjects(lists.flat())
+  const threads = disambiguateProjects(lists.flat()).map((t) => ({
+    lastAction:
+      t.lastAction ||
+      (t.running ? 'Working on task…' : t.unread ? 'Waiting for reply' : t.hasError ? 'Error encountered' : 'Idle'),
+    recentLogs: t.recentLogs || [],
+    ...t,
+  }))
   threads.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   return threads
 }

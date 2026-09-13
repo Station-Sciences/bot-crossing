@@ -92,3 +92,31 @@ export const openThread = (thread) => post('/api/open', { harness: thread.harnes
 export const newSession = (folder, harness) => post('/api/new-session', { folder, harness })
 
 export const revealFolder = (folder) => post('/api/reveal', { folder })
+
+/**
+ * Subscribe to server-sent events for real-time thread changes.
+ * Returns an unsubscribe cleanup function.
+ */
+export function subscribeEvents(onMessage, onError) {
+  if (typeof window === 'undefined' || !window.EventSource) return () => {}
+  try {
+    const es = new EventSource('/api/events')
+    es.addEventListener('threads', (e) => {
+      try {
+        const data = JSON.parse(e.data)
+        onMessage?.(data)
+      } catch {}
+    })
+    es.onerror = (err) => {
+      onError?.(err)
+    }
+    return () => {
+      try {
+        es.close()
+      } catch {}
+    }
+  } catch {
+    return () => {}
+  }
+}
+

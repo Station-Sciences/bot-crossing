@@ -155,6 +155,15 @@ const DEFAULTS = {
   showFps: false,
   showLabels: true,
   reducedMotion: false,
+
+  // Audio
+  soundEnabled: true,
+  sfxVolume: 0.7,
+  ambientEnabled: true,
+  ambientVolume: 0.4,
+
+  // Notifications
+  desktopNotifications: false,
 }
 
 /** Keys whose change forces a full rebuild of the world (terrain, scatter, sky). */

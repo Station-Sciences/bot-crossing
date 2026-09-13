@@ -208,24 +208,66 @@ const TAIL_BYTES = 64 * 1024
  *
  * Only threads that could plausibly be running pay for this, so it costs one small read each.
  */
-async function awaitingReply(file) {
+function summarizeClaudeTool(c) {
+  if (!c || c.type !== 'tool_use') return ''
+  const name = c.name || 'tool'
+  const input = c.input || {}
+  const target = input.command || input.file_path || input.path || input.pattern || input.query || ''
+  if (target) {
+    const clean = String(target).split('\n')[0].trim()
+    const short = clean.length > 35 ? clean.slice(0, 32) + '…' : clean
+    return `${name}: ${short}`
+  }
+  return name
+}
+
+async function inspectTranscriptTail(file) {
   let records
   try {
     records = jsonLines(await readTail(file, TAIL_BYTES))
   } catch {
-    return false
+    return { waiting: false, lastAction: '', recentLogs: [] }
   }
+  if (!records.length) return { waiting: false, lastAction: '', recentLogs: [] }
+
+  let waiting = false
+  let lastAction = ''
+  const recentLogs = []
+
   for (let i = records.length - 1; i >= 0; i--) {
     const r = records[i]
-    // A user turn, a tool result or an attachment all mean the model speaks next — whatever the
-    // process is doing, it is not waiting on anyone.
-    if (r.type === 'user') return false
-    if (r.type !== 'assistant') continue
-    const content = r.message?.content
-    const calling = Array.isArray(content) && content.some((c) => c?.type === 'tool_use')
-    return !calling && r.message?.stop_reason !== 'tool_use'
+    if (r.type === 'user') {
+      const text = cleanPrompt(firstText(r.message?.content))
+      if (text && recentLogs.length < 5) recentLogs.unshift({ type: 'user', text: text.length > 80 ? text.slice(0, 77) + '…' : text })
+    } else if (r.type === 'assistant') {
+      const content = r.message?.content
+      if (Array.isArray(content)) {
+        for (let j = content.length - 1; j >= 0; j--) {
+          const part = content[j]
+          if (part?.type === 'tool_use') {
+            const summary = summarizeClaudeTool(part)
+            if (!lastAction) lastAction = summary
+            if (recentLogs.length < 5) recentLogs.unshift({ type: 'tool', text: summary })
+          } else if (part?.type === 'text' && part.text) {
+            const t = part.text.replace(/\s+/g, ' ').trim()
+            if (t && recentLogs.length < 5) recentLogs.unshift({ type: 'assistant', text: t.length > 80 ? t.slice(0, 77) + '…' : t })
+          }
+        }
+        if (!waiting) {
+          const calling = content.some((c) => c?.type === 'tool_use')
+          waiting = !calling && r.message?.stop_reason !== 'tool_use'
+        }
+      } else if (!waiting) {
+        waiting = r.message?.stop_reason !== 'tool_use'
+      }
+    }
   }
-  return false
+
+  return { waiting, lastAction, recentLogs }
+}
+
+async function awaitingReply(file) {
+  return (await inspectTranscriptTail(file)).waiting
 }
 
 /** Transcript metadata is expensive to parse, so keep it until the file changes. */
@@ -470,12 +512,30 @@ async function scanThreads() {
     const seenAt = thread.recordActivityAt ?? thread.lastActivityAt
     thread.unread = thread.desktopSessionIds.length > 0 && seenAt > thread.lastFocusedAt
     const fresh = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
-    const waiting =
-      thread.hasLiveProcess && fresh && thread.transcriptFile ? await awaitingReply(thread.transcriptFile) : false
+    let waiting = false
+    let lastAction = ''
+    let recentLogs = []
+    if (thread.transcriptFile) {
+      const tail = await inspectTranscriptTail(thread.transcriptFile)
+      waiting = thread.hasLiveProcess && fresh && tail.waiting
+      lastAction = tail.lastAction
+      recentLogs = tail.recentLogs
+    }
     thread.running = thread.hasLiveProcess && fresh && !waiting
     // A thread that handed the turn back wants you, whether or not the desktop app has ever seen
     // it — the only way a terminal-only thread can ask for anything at all.
-    if (waiting) thread.unread = true
+    if (waiting) {
+      thread.unread = true
+      lastAction = 'Waiting for user reply'
+    } else if (thread.running) {
+      lastAction = lastAction || 'Working on task…'
+    } else if (thread.hasError) {
+      lastAction = 'Error encountered'
+    } else {
+      lastAction = 'Idle'
+    }
+    thread.lastAction = lastAction
+    thread.recentLogs = recentLogs
   }
   return threads.map(toThread)
 }

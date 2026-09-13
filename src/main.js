@@ -9,6 +9,8 @@ import { PLANETS } from './world/planet.js'
 import { loadKit } from './world/kit.js'
 import { crewRig, loadCrew } from './agents/crew.js'
 import { TIMES } from './world/sky.js'
+import { SoundManager } from './core/audio.js'
+import { NotificationManager } from './core/notifications.js'
 import {
   fetchThreads,
   fetchState,
@@ -16,6 +18,7 @@ import {
   openThread,
   newSession,
   revealFolder,
+  subscribeEvents,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 
@@ -43,6 +46,9 @@ app.insertAdjacentHTML(
 const settings = new Settings()
 if (!hasStoredSettings()) settings.applyPreset(DEFAULT_PRESET)
 
+const sound = new SoundManager(settings)
+const notifications = new NotificationManager(settings)
+
 const engine = new Engine(settings).mount(app)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
@@ -61,9 +67,72 @@ let statusCursor = 0
 let pendingSave = 0
 const hoverGround = new THREE.Vector3()
 
+// ── picture-in-picture companion monitor ───────────────────────────────────────────────
+
+let pipVideo = null
+
+function getPipVideo() {
+  if (!pipVideo) {
+    pipVideo = document.createElement('video')
+    pipVideo.muted = true
+    pipVideo.playsInline = true
+    pipVideo.style.position = 'fixed'
+    pipVideo.style.pointerEvents = 'none'
+    pipVideo.style.opacity = '0'
+    pipVideo.style.width = '1px'
+    pipVideo.style.height = '1px'
+    pipVideo.style.bottom = '0'
+    pipVideo.style.left = '0'
+    pipVideo.setAttribute('aria-hidden', 'true')
+    document.body.appendChild(pipVideo)
+
+    pipVideo.addEventListener('leavepictureinpicture', () => {
+      hud.updatePipState(false)
+    })
+    pipVideo.addEventListener('enterpictureinpicture', () => {
+      hud.updatePipState(true)
+    })
+  }
+  return pipVideo
+}
+
+async function togglePip() {
+  if (typeof document === 'undefined' || !document.pictureInPictureEnabled) {
+    hud.toast('Picture-in-Picture is not supported in this browser', 'err')
+    return false
+  }
+
+  if (document.pictureInPictureElement) {
+    try {
+      await document.exitPictureInPicture()
+      hud.hint('Picture-in-Picture closed')
+      return false
+    } catch (err) {
+      console.warn('Exit PiP failed', err)
+    }
+  }
+
+  try {
+    const video = getPipVideo()
+    if (!video.srcObject) {
+      const stream = engine.canvas.captureStream(30)
+      video.srcObject = stream
+    }
+    await video.play()
+    await video.requestPictureInPicture()
+    hud.hint('Picture-in-Picture companion mode active')
+    return true
+  } catch (err) {
+    console.error('PiP failed', err)
+    hud.toast('Could not start Picture-in-Picture', 'err')
+    return false
+  }
+}
+
 // ── actions the HUD can trigger ────────────────────────────────────────────────────────
 
 const actions = {
+  playClick: () => sound.playClick(),
   resetView: () => rig.resetView(),
 
   screenshot: () => {
@@ -78,6 +147,10 @@ const actions = {
     hud.toast('Screenshot saved')
   },
 
+  togglePip: () => togglePip(),
+  toggleColony: () => hud.toggleColony(),
+  requestNotificationPermission: () => notifications.requestPermission(),
+
   /** Google Earth's auto-rotate: a slow sweep around whatever is centred. */
   toggleOrbit: () => {
     const on = rig.toggleOrbit()
@@ -90,6 +163,7 @@ const actions = {
     const next = ids[(ids.indexOf(settings.get('planet')) + 1) % ids.length]
     settings.set('planet', next)
     hud.hint(`${PLANETS[next].name} — ${PLANETS[next].blurb}`)
+    hud.setColonyData(threads, PLANETS[next])
   },
 
   cycleTime: () => {
@@ -292,6 +366,7 @@ function select(id, { fly = false } = {}) {
   colony.astronauts.setSelected(agent)
   const thread = threads.find((t) => t.id === id) || agent.thread
   hud.setSelection(agent, thread)
+  sound.playSelect()
   // Picking somebody is also picking the zone they are standing on: the sidebar follows.
   if (thread?.project && colony.plots.has(thread.project)) selectedProject = thread.project
   syncProject()
@@ -304,6 +379,7 @@ function select(id, { fly = false } = {}) {
 function selectProject(name, { fly = false } = {}) {
   if (!name || !colony.plots.has(name)) return
   selectedProject = name
+  sound.playClick()
   const current = threads.find((t) => t.id === selectedId)
   if (current && current.project !== name) select(null, {})
   else syncProject()
@@ -553,6 +629,10 @@ window.addEventListener('keydown', (e) => {
     case 'C':
       if (selectedProject) actions.newConversation()
       break
+    case 'm':
+    case 'M':
+      actions.toggleColony()
+      break
     case '?':
       hud.toggleHelp()
       break
@@ -584,6 +664,7 @@ window.addEventListener('keydown', (e) => {
     // One step at a time, outward: the thread, then the zone it belongs to.
     case 'Escape':
       if (document.querySelector('.help.open')) hud.toggleHelp(false)
+      else if (document.querySelector('.colony-modal.open')) hud.toggleColony(false)
       else if (selectedId) select(null, {})
       else if (selectedProject) actions.closeProject()
       break
@@ -591,6 +672,60 @@ window.addEventListener('keydown', (e) => {
 })
 
 // ── data ──────────────────────────────────────────────────────────────────────────────
+
+let prevStatusMap = new Map()
+
+function detectSoundTriggers(nextThreads) {
+  let playAtt = false
+  let playCeleb = false
+  let playErr = false
+
+  for (const t of nextThreads) {
+    const prev = prevStatusMap.get(t.id)
+    if (!prev) continue
+    if (!prev.unread && t.unread) {
+      playAtt = true
+      notifications.notify(
+        `Bot Crossing · ${t.project || 'Agent'}`,
+        {
+          body: `"${(t.title || 'Task').slice(0, 50)}" needs your reply!`,
+          tag: `att-${t.id}`,
+        },
+        () => select(t.id, { fly: true })
+      )
+    }
+    if (prev.prState !== 'merged' && t.prState === 'merged') {
+      playCeleb = true
+      notifications.notify(
+        `Bot Crossing · PR Merged!`,
+        {
+          body: `${t.project || 'Project'}: ${(t.title || 'Task').slice(0, 50)} landed!`,
+          tag: `merge-${t.id}`,
+        },
+        () => select(t.id, { fly: true })
+      )
+    }
+    if (!prev.hasError && t.hasError) {
+      playErr = true
+      notifications.notify(
+        `Bot Crossing · Error`,
+        {
+          body: `Error in ${t.project || 'thread'}: ${(t.title || '').slice(0, 50)}`,
+          tag: `err-${t.id}`,
+        },
+        () => select(t.id, { fly: true })
+      )
+    }
+  }
+
+  if (playCeleb) sound.playCelebration()
+  else if (playAtt) sound.playAttention()
+  else if (playErr) sound.playError()
+
+  prevStatusMap = new Map(
+    nextThreads.map((t) => [t.id, { unread: t.unread, prState: t.prState, hasError: t.hasError }])
+  )
+}
 
 function applyThreads(list) {
   // A thread you have said you looked at stops counting as unread until it moves on again.
@@ -601,6 +736,7 @@ function applyThreads(list) {
     return at && t.lastActivityAt <= at ? { ...t, unread: false } : t
   })
   list = threads
+  detectSoundTriggers(list)
   const archivedSet = new Set(state.archived)
   const hiddenSet = new Set(state.hiddenProjects || [])
 
@@ -619,6 +755,7 @@ function applyThreads(list) {
 
   const stats = colony.setThreads(list, archivedSet, hiddenSet, known)
   hud.setStats(stats)
+  hud.setColonyData(list, colony.planet)
 
   legendProjects = colony.plotOrder
     .map((plot) => ({
@@ -709,6 +846,12 @@ async function boot() {
   if (!kitError) colony.onAssetsReady()
 
   await poll()
+  // Connect real-time Server-Sent Events (SSE) from file-watcher
+  subscribeEvents((data) => {
+    if (data?.threads) {
+      applyThreads(data.threads)
+    }
+  })
   setInterval(poll, POLL_MS)
   window.addEventListener('focus', poll)
   // A tab that was hidden for an hour should catch up the moment it comes back.
