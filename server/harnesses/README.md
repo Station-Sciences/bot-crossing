@@ -137,6 +137,8 @@ Verified on a real machine:
 - **Codex CLI** — transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-<iso>-<uuid>.jsonl`,
   with records shaped `{ timestamp, type, payload }`, and what looks like an index at
   `~/.codex/session_index.jsonl`. Not implemented yet.
+- **Antigravity** — transcripts in `~/.gemini/antigravity-ide/brain/<uuid>/.system_generated/logs/transcript.jsonl`
+  and session metadata in `~/.gemini/antigravity-ide/conversations/*.db`. Implemented in `antigravity.mjs`.
 
 For anything else, the fastest way in is usually to start a throwaway session in that harness
 and watch which files change:

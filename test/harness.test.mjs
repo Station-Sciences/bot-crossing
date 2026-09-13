@@ -241,3 +241,288 @@ test('Cursor offers a folder link but never a per-thread one it cannot honour', 
   assert.equal(h.newSession('relative/path').ok, false)
   await fsp.rm(home, { recursive: true, force: true })
 })
+
+// ── Antigravity, faked on disk ────────────────────────────────────────────────
+
+async function fakeAntigravity(records) {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'antigravity-fixture-'))
+  const dir = path.join(home, SESSION_ID, '.system_generated', 'logs')
+  await fsp.mkdir(dir, { recursive: true })
+  await fsp.writeFile(path.join(dir, 'transcript.jsonl'), records.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  return home
+}
+
+async function antigravityWith(home) {
+  process.env.BOT_CROSSING_ANTIGRAVITY_DIR = home
+  const mod = await import(`../server/harnesses/antigravity.mjs?${home}`)
+  return mod.default
+}
+
+test('an Antigravity transcript yields a thread with cleaned prompt as title', async () => {
+  const home = await fakeAntigravity([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: '2026-09-13T10:00:00Z',
+      content: '<USER_REQUEST>\nbuild a space station\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: /tmp/my-space-app/main.js\n</ADDITIONAL_METADATA>',
+    },
+    {
+      step_index: 2,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-09-13T10:01:00Z',
+      content: 'I will build it.',
+    },
+  ])
+  const h = await antigravityWith(home)
+  assert.equal(await h.detect(), true)
+  const [t] = await h.scanThreads()
+  assert.equal(t.id, `antigravity:${SESSION_ID}`)
+  assert.equal(t.title, 'build a space station')
+  assert.equal(t.project, 'my-space-app')
+  assert.equal(t.running, false)
+  assert.equal(t.unread, false)
+  assert.equal(t.hasError, false)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity pending ask_question is detected as unread/waiting', async () => {
+  const home = await fakeAntigravity([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: new Date().toISOString(),
+      content: '<USER_REQUEST>\nneed advice\n</USER_REQUEST>',
+    },
+    {
+      step_index: 2,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'RUNNING',
+      created_at: new Date().toISOString(),
+      tool_calls: [
+        {
+          name: 'ask_question',
+          args: { questions: [{ question: 'Which path?', options: ['A', 'B'] }] },
+        },
+      ],
+    },
+  ])
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, false)
+  assert.equal(t.unread, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity pending artifact review is detected as unread/waiting', async () => {
+  const home = await fakeAntigravity([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: new Date().toISOString(),
+      content: '<USER_REQUEST>\nmake a plan\n</USER_REQUEST>',
+    },
+    {
+      step_index: 2,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: new Date().toISOString(),
+      tool_calls: [
+        {
+          name: 'write_to_file',
+          args: {
+            TargetFile: '/path/plan.md',
+            ArtifactMetadata: { RequestFeedback: true, Summary: 'test plan', UserFacing: true },
+          },
+        },
+      ],
+    },
+    {
+      step_index: 3,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: new Date().toISOString(),
+      content: 'Here is the plan for your review.',
+    },
+  ])
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, false)
+  assert.equal(t.unread, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity running turn is detected as running', async () => {
+  const home = await fakeAntigravity([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: new Date().toISOString(),
+      content: '<USER_REQUEST>\nworking now\n</USER_REQUEST>',
+    },
+    {
+      step_index: 2,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'RUNNING',
+      created_at: new Date().toISOString(),
+    },
+  ])
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity turn with tool execution is detected as running', async () => {
+  const home = await fakeAntigravity([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: new Date().toISOString(),
+      content: '<USER_REQUEST>\nrun tests\n</USER_REQUEST>',
+    },
+    {
+      step_index: 2,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: new Date().toISOString(),
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'npm test' } }],
+    },
+    {
+      step_index: 3,
+      source: 'MODEL',
+      type: 'RUN_COMMAND',
+      status: 'DONE',
+      created_at: new Date().toISOString(),
+      content: 'Tests running...',
+    },
+  ])
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, true)
+  assert.equal(t.unread, false)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity tool call pending user permission for >3s is detected as unread/waiting', async () => {
+  const home = await fakeAntigravity([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: new Date(Date.now() - 10000).toISOString(),
+      content: '<USER_REQUEST>\nquery db\n</USER_REQUEST>',
+    },
+    {
+      step_index: 2,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: new Date(Date.now() - 10000).toISOString(),
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'node -e sqlite' } }],
+    },
+  ])
+  const transcriptPath = path.join(home, SESSION_ID, '.system_generated', 'logs', 'transcript.jsonl')
+  const tenSecsAgo = new Date(Date.now() - 10000)
+  await fsp.utimes(transcriptPath, tenSecsAgo, tenSecsAgo)
+
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, false)
+  assert.equal(t.unread, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an absent Antigravity is not detected', async () => {
+  const home = path.join(os.tmpdir(), 'antigravity-absent-' + SESSION_ID)
+  const h = await antigravityWith(home)
+  assert.equal(await h.detect(), false)
+  assert.deepEqual(await h.scanThreads(), [])
+})
+
+test('an Antigravity transcript older than 7 days is skipped by default', async () => {
+  const home = await fakeAntigravity([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: '2026-06-01T10:00:00Z',
+      content: '<USER_REQUEST>\nold chat\n</USER_REQUEST>',
+    },
+  ])
+  const transcriptPath = path.join(home, SESSION_ID, '.system_generated', 'logs', 'transcript.jsonl')
+  const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000)
+  await fsp.utimes(transcriptPath, tenDaysAgo, tenDaysAgo)
+
+  const h = await antigravityWith(home)
+  const threads = await h.scanThreads()
+  assert.equal(threads.length, 0)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity transcript older than 7 days is included if MAX_DAYS allows it', async () => {
+  const home = await fakeAntigravity([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: '2026-06-01T10:00:00Z',
+      content: '<USER_REQUEST>\nold chat\n</USER_REQUEST>',
+    },
+  ])
+  const transcriptPath = path.join(home, SESSION_ID, '.system_generated', 'logs', 'transcript.jsonl')
+  const tenDaysAgo = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000)
+  await fsp.utimes(transcriptPath, tenDaysAgo, tenDaysAgo)
+
+  process.env.BOT_CROSSING_ANTIGRAVITY_MAX_DAYS = '14'
+  const h = await antigravityWith(home)
+  const threads = await h.scanThreads()
+  delete process.env.BOT_CROSSING_ANTIGRAVITY_MAX_DAYS
+  assert.equal(threads.length, 1)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity thread with projectPath has canOpen=true and openThread returns URL', async () => {
+  const home = await fakeAntigravity([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: new Date().toISOString(),
+      content: '<USER_REQUEST>\ncheck files\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: /home/rayrayaray/Project/my-app/index.js\n</ADDITIONAL_METADATA>',
+    },
+  ])
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.canOpen, true)
+  assert.equal(t.cwd, '/home/rayrayaray/Project/my-app')
+
+  const res = await h.openThread(t.ref)
+  assert.equal(res.ok, true)
+  assert.equal(res.url, 'antigravity-ide://file/home/rayrayaray/Project/my-app')
+
+  const noDirRes = await h.openThread({})
+  assert.equal(noDirRes.ok, false)
+
+  await fsp.rm(home, { recursive: true, force: true })
+})

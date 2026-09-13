@@ -200,6 +200,19 @@ async function present(result) {
     return { ok: true, url: result.url }
   }
 
+  if (result.command && result.command.terminal === false) {
+    if (!result.command.cwd) return { ok: false, error: 'That thread has no folder on record to resume in' }
+    const cwd = await resolveFolder(result.command.cwd)
+    if (!cwd) return { ok: false, error: 'The folder that thread ran in is not on this machine any more' }
+    const enterable = await fsp.access(cwd, fsp.constants.X_OK).then(() => true, () => false)
+    if (!enterable) return { ok: false, error: 'The folder that thread ran in cannot be entered' }
+    const [cmd, ...args] = result.command.argv
+    const child = spawn(cmd, args, { cwd, stdio: 'ignore', detached: true })
+    child.on('error', () => {})
+    child.unref()
+    return { ok: true, command: result.command }
+  }
+
   if (result.url && (await schemeHasHandler(result.url))) {
     launch(result.url)
     return { ok: true, url: result.url }
