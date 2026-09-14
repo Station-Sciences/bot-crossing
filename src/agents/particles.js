@@ -352,6 +352,51 @@ export class Particles {
     )
   }
 
+  weather(dt, camera, weatherState) {
+    if (!this.enabled || !weatherState) return
+    const { storm = 0, aurora = 0 } = weatherState
+
+    if (storm > 0.08 && Math.random() < storm * 0.7) {
+      const a = Math.random() * Math.PI * 2
+      const r = 6 + Math.random() * 24
+      const x = camera.position.x + Math.cos(a) * r
+      const z = camera.position.z + Math.sin(a) * r
+      this.glow.spawn(
+        x,
+        0.3 + Math.random() * 2.5,
+        z,
+        (Math.random() - 0.5) * 0.6,
+        0.2 + Math.random() * 0.4,
+        (Math.random() - 0.5) * 0.6,
+        2.6, 0.45, 0.3,
+        0.08,
+        1.2 + Math.random() * 1.2,
+        0.9,
+        -0.2
+      )
+    }
+
+    if (aurora > 0.08 && Math.random() < aurora * 0.8) {
+      const a = Math.random() * Math.PI * 2
+      const r = 8 + Math.random() * 28
+      const x = camera.position.x + Math.cos(a) * r
+      const z = camera.position.z + Math.sin(a) * r
+      this.glow.spawn(
+        x,
+        1.5 + Math.random() * 5.5,
+        z,
+        (Math.random() - 0.5) * 0.25,
+        -0.1 - Math.random() * 0.25,
+        (Math.random() - 0.5) * 0.25,
+        0.5, 2.4, 1.5,
+        0.07,
+        1.8 + Math.random() * 1.8,
+        0.4,
+        0.0
+      )
+    }
+  }
+
   update(dt) {
     if (!this.enabled) return
     this.glow.update(dt)

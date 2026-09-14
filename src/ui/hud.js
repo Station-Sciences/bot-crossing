@@ -247,6 +247,11 @@ export class Hud {
         'Hide dormant repos',
         'hideDormant',
         'Takes a repo off the map when every thread in it has been quiet for three days. Its threads are untouched, and it comes back to the same ground the moment one wakes up.'
+      ),
+      this._toggle(
+        'Git weather',
+        'gitWeather',
+        'Dynamically shifts sky atmosphere, fog, and cosmic static based on live Git & CI status (stormy when blocked, golden auroral stardust when shipped).'
       )
     )
     view.append(

@@ -232,7 +232,20 @@ async function inspectTranscriptTail(file) {
 
   let waiting = false
   let lastAction = ''
+  let subagentActive = false
+  let rawToolName = ''
   const recentLogs = []
+
+  function categorizeClaudeTool(name) {
+    if (!name) return 'idle'
+    const lower = name.toLowerCase()
+    if (lower === 'task') return 'subagent'
+    if (lower.includes('read') || lower === 'view') return 'read'
+    if (lower.includes('edit') || lower.includes('write')) return 'edit'
+    if (lower.includes('grep') || lower.includes('glob') || lower.includes('search')) return 'search'
+    if (lower === 'bash' || lower.includes('command')) return 'build'
+    return 'edit'
+  }
 
   for (let i = records.length - 1; i >= 0; i--) {
     const r = records[i]
@@ -245,6 +258,8 @@ async function inspectTranscriptTail(file) {
         for (let j = content.length - 1; j >= 0; j--) {
           const part = content[j]
           if (part?.type === 'tool_use') {
+            if (!rawToolName && part.name) rawToolName = part.name
+            if (part.name?.toLowerCase() === 'task') subagentActive = true
             const summary = summarizeClaudeTool(part)
             if (!lastAction) lastAction = summary
             if (recentLogs.length < 5) recentLogs.unshift({ type: 'tool', text: summary })
@@ -263,7 +278,7 @@ async function inspectTranscriptTail(file) {
     }
   }
 
-  return { waiting, lastAction, recentLogs }
+  return { waiting, lastAction, recentLogs, subagentActive, activeToolCategory: categorizeClaudeTool(rawToolName) }
 }
 
 async function awaitingReply(file) {
@@ -521,6 +536,11 @@ async function scanThreads() {
       waiting = thread.hasLiveProcess && fresh && tail.waiting
       lastAction = tail.lastAction
       recentLogs = tail.recentLogs
+      thread.subagentActive = Boolean(thread.hasLiveProcess && fresh && tail.subagentActive)
+      thread.activeToolCategory = tail.activeToolCategory || 'edit'
+    } else {
+      thread.subagentActive = false
+      thread.activeToolCategory = 'idle'
     }
     thread.running = thread.hasLiveProcess && fresh && !waiting
     // A thread that handed the turn back wants you, whether or not the desktop app has ever seen

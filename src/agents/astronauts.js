@@ -196,6 +196,8 @@ export class Astronauts {
     // The hammer, held in the right hand while a thread is running. Wood and steel rather
     // than suit white, so it reads as a tool at the distance the colony is watched from.
     parts.hammer = this._mesh(hammerGeometry(R), suit(0.62, { vertexColors: true }), capacity, true)
+    // The datapad (mini tablet), held when reading or researching files.
+    parts.datapad = this._mesh(datapadGeometry(R), suit(0.45, { vertexColors: true }), capacity, true)
 
     // Face: the features only, drawn straight onto the visor beneath. Built as a sphere cap
     // a hair larger than the visor, so it lies exactly on the curved surface instead of
@@ -1192,7 +1194,7 @@ export class Astronauts {
   // ── writing the instance buffers ────────────────────────────────────────────────────
 
   _writeMatrices(elapsed, anim) {
-    const { helmet, visor, pack, antenna, tip, lamp, face, hammer } = this.parts
+    const { helmet, visor, pack, antenna, tip, lamp, face, hammer, datapad } = this.parts
     const rig = this.rig
     const crew = this.crew
     const root = this._m
@@ -1207,7 +1209,8 @@ export class Astronauts {
     const crewFrames = this.crewFrameAttr?.array
 
     let i = 0
-    let hands = 0
+    let hammers = 0
+    let datapads = 0
     let staticDirty = false
     for (const agent of this.agents) {
       // Never write past the end of the instance buffers. Going over is not a rendering
@@ -1253,12 +1256,16 @@ export class Astronauts {
         setPart(child, worn, pack, i, 0, P.packUp, P.packZ, 0, 0, 0)
         setPart(child, worn, lamp, i, 0, P.lightY, P.lightZ, 0, 0, 0)
 
-        // The hammer only exists while a thread is running, so it gets its own instance
-        // counter — an unused slot in the middle of an instanced mesh still draws.
+        // The tool held in hand while a thread is running (clipKey === 'work')
         if (agent.clipKey === 'work') {
           attachMatrixAt(rig, agent.frame, this.handSlot, bone)
           worn.multiplyMatrices(root, bone)
-          setPart(child, worn, hammer, hands++, P.gripX, P.gripY, P.gripZ, P.gripRx, 0, P.gripRz)
+          const cat = agent.thread?.activeToolCategory
+          if (cat === 'read' || cat === 'search') {
+            setPart(child, worn, datapad, datapads++, P.gripX, P.gripY + 0.05, P.gripZ, P.gripRx - 0.25, 0.15, P.gripRz)
+          } else {
+            setPart(child, worn, hammer, hammers++, P.gripX, P.gripY, P.gripZ, P.gripRx, 0, P.gripRz)
+          }
         }
       }
 
@@ -1295,7 +1302,7 @@ export class Astronauts {
     // The glowing parts pulse every frame; the rest only re-upload when something moved slot.
     const animated = new Set(['tip', 'lamp'])
     for (const [name, mesh] of Object.entries(this.parts)) {
-      mesh.count = name === 'hammer' ? hands : n
+      mesh.count = name === 'hammer' ? hammers : name === 'datapad' ? datapads : n
       mesh.instanceMatrix.needsUpdate = true
       if (mesh.instanceColor && (staticDirty || animated.has(name))) mesh.instanceColor.needsUpdate = true
     }
@@ -1472,6 +1479,24 @@ function hammerGeometry(R) {
   const merged = BufferGeometryUtils.mergeGeometries([shaft, head], false)
   shaft.dispose()
   head.dispose()
+  return merged
+}
+
+/**
+ * A sleek holographic datapad tablet, held while reading or searching files.
+ */
+function datapadGeometry(R) {
+  const body = roundedBox(R * 0.42, R * 0.56, R * 0.04, R * 0.02)
+  body.translate(0, R * 0.28, R * 0.06)
+  paint(body, 0x1a2230)
+
+  const screen = roundedBox(R * 0.36, R * 0.48, R * 0.02, R * 0.015)
+  screen.translate(0, R * 0.28, R * 0.078)
+  paint(screen, 0x4fe3c1)
+
+  const merged = BufferGeometryUtils.mergeGeometries([body, screen], false)
+  body.dispose()
+  screen.dispose()
   return merged
 }
 

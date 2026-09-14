@@ -357,6 +357,31 @@ async function scanThread(dir) {
     if (gitBranch && gitBranch !== 'master' && gitBranch !== 'main') break
   }
 
+  function categorizeTool(toolName) {
+    if (!toolName) return 'idle'
+    if (toolName === 'invoke_subagent' || toolName === 'browser_subagent') return 'subagent'
+    if (toolName === 'view_file' || toolName === 'read_url_content' || toolName === 'read_resource') return 'read'
+    if (toolName === 'replace_file_content' || toolName === 'write_to_file' || toolName === 'multi_replace_file_content') return 'edit'
+    if (toolName === 'grep_search' || toolName === 'search_web' || toolName === 'list_dir' || toolName.includes('explore')) return 'search'
+    if (toolName === 'run_command' || toolName === 'run_interactive_command') return 'build'
+    return 'edit'
+  }
+
+  let subagentActive = false
+  let rawToolName = ''
+  for (let i = tailRecords.length - 1; i >= 0; i--) {
+    const r = tailRecords[i]
+    if (r.type === 'USER_INPUT' || r.type === 'USER_EXPLICIT') break
+    if (Array.isArray(r.tool_calls) && r.tool_calls.length > 0) {
+      if (!rawToolName && r.tool_calls[0]?.name) {
+        rawToolName = r.tool_calls[0].name
+      }
+      if (r.tool_calls.some((c) => c?.name === 'invoke_subagent' || c?.name === 'browser_subagent')) {
+        subagentActive = true
+      }
+    }
+  }
+
   return {
     id: ID(dirName),
     title,
@@ -375,6 +400,8 @@ async function scanThread(dir) {
     hasError,
     lastAction,
     recentLogs,
+    subagentActive: Boolean(running && subagentActive),
+    activeToolCategory: categorizeTool(rawToolName),
     starred: false,
     routine: '',
     prState: '',

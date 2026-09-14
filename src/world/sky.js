@@ -450,6 +450,30 @@ export class Sky {
     this._envDirty = true
   }
 
+  applyWeather(weather) {
+    if (!weather || !this.planet) return
+    const { storm = 0, aurora = 0 } = weather
+    const planet = this.planet
+
+    if (storm > 0.01) {
+      const stormColor = new THREE.Color(0x3d1c1c)
+      this.domeUniforms.uHorizon.value.lerp(stormColor, storm * 0.42)
+      this.scene.fog.color.lerp(stormColor, storm * 0.5)
+      this.scene.fog.far = THREE.MathUtils.lerp(planet.fog.far, planet.fog.far * 0.72, storm)
+      this._envDirty = true
+    } else if (aurora > 0.01) {
+      const auroraColor = new THREE.Color(0x184f3e)
+      const goldWarmth = new THREE.Color(0x4a3d1c)
+      this.domeUniforms.uTop.value.lerp(auroraColor, aurora * 0.38)
+      this.domeUniforms.uHorizon.value.lerp(goldWarmth, aurora * 0.25)
+      this.scene.fog.color.lerp(auroraColor, aurora * 0.2)
+      this.scene.fog.far = planet.fog.far
+      this._envDirty = true
+    } else {
+      this.scene.fog.far = planet.fog.far
+    }
+  }
+
   onSettingsChanged(changed) {
     if (changed.has('shadows')) {
       const size = this.settings.shadowSize

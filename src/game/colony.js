@@ -20,6 +20,8 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
+import { SubagentDrones } from '../agents/drones.js'
+import { WeatherSystem } from '../world/weather.js'
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -146,6 +148,8 @@ export class Colony {
     this.indicators = new Indicators(scene, settings, MAX_AGENT_CAP)
     this.particles = new Particles(scene, settings)
     this.scaffolds = new Scaffolds(scene, 320)
+    this.drones = new SubagentDrones(scene, settings)
+    this.weather = new WeatherSystem(settings)
     this.nav = new Navigation()
     this.astronauts.setNavigation(this.nav)
 
@@ -252,6 +256,7 @@ export class Colony {
     this.sky.onSettingsChanged(changed)
     this.astronauts.onSettingsChanged(changed)
     this.particles.onSettingsChanged(changed)
+    if (changed.has('gitWeather')) this.weather.updateStatus([...this.threads.values()])
     if (changed.has('showLabels')) this._syncLabels()
     if (changed.has('timeOfDay')) this.sky.setTime(this.settings.get('timeOfDay'))
   }
@@ -266,6 +271,7 @@ export class Colony {
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
     const now = Date.now()
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
+    this.weather.updateStatus(live)
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
     const byProject = new Map()
@@ -726,10 +732,13 @@ export class Colony {
     // One write turns every rotor in the colony.
     buildingUniforms.uTime.value = elapsed
     this.ship.update(dt, elapsed, night)
-
     this._growBuildings(dt)
+    this.weather.tick(dt)
+    this.sky.applyWeather(this.weather.state)
+    this.particles.weather(dt, this.camera, this.weather.state)
     this.astronauts.update(dt, elapsed)
     this.astronauts.updateRings(elapsed)
+    this.drones.update(this.astronauts.agents, dt, elapsed)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))
     this._emit(dt, elapsed)
     this.particles.ambient(dt, this.camera, this.planet)
@@ -879,6 +888,7 @@ export class Colony {
     this.sky.dispose()
     this.ship.dispose()
     this.astronauts.dispose()
+    this.drones.dispose()
     this.indicators.dispose()
     this.particles.dispose()
     this.scaffolds.dispose()
