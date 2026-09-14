@@ -63,7 +63,7 @@ const CLIP = {
   interact: { name: 'Interact', loop: true },
 }
 
-const CREW_URL = `${import.meta.env.BASE_URL}assets/crew.glb`
+const CREW_URL = `${import.meta.env?.BASE_URL || '/'}assets/crew.glb`
 
 /**
  * The mannequin's own head is left out of the body: the colony puts its own helmet, visor

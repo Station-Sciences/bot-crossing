@@ -672,6 +672,14 @@ export class Hud {
     // The repo is the panel's own heading now, so the card says what the *thread* is.
     if (thread.worktree) bits.push(`<span class="tag">⑂ ${escapeHtml(thread.worktree)}</span>`)
     if (thread.gitBranch) bits.push(`<span class="tag">${escapeHtml(thread.gitBranch)}</span>`)
+    if (thread.prNumber) {
+      const isMerged = String(thread.prState || '').toLowerCase() === 'merged'
+      const label = isMerged ? `✓ PR #${thread.prNumber}` : `PR #${thread.prNumber} (${thread.prState || 'open'})`
+      const prLink = thread.prUrl
+        ? `<a href="${escapeHtml(thread.prUrl)}" target="_blank" rel="noopener noreferrer" class="tag pr-tag ${isMerged ? 'merged' : 'open'}" style="text-decoration:none;color:${isMerged ? 'var(--amber)' : 'var(--teal)'}" title="${escapeHtml(thread.prTitle || '')}">${label} ↗</a>`
+        : `<span class="tag pr-tag ${isMerged ? 'merged' : 'open'}" style="color:${isMerged ? 'var(--amber)' : 'var(--teal)'}">${label}</span>`
+      bits.push(prLink)
+    }
     if (thread.model) bits.push(`<span class="tag">${escapeHtml(shortModel(thread.model))}</span>`)
     bits.push(`<span>${ago(thread.lastActivityAt)}</span>`)
     meta.innerHTML = bits.join('')
@@ -974,7 +982,7 @@ export class Hud {
       if (t.status === 'working') working++
       else if (t.status === 'waiting') waiting++
       else if (t.status === 'blocked') blocked++
-      if (t.status === 'celebrating' || t.prState === 'merged') shipped++
+      if (t.status === 'celebrating' || String(t.prState || '').toLowerCase() === 'merged') shipped++
 
       const h = t.harnessName || t.harness || 'Agent'
       harnessCounts.set(h, (harnessCounts.get(h) || 0) + 1)

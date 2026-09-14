@@ -7,6 +7,7 @@
  * in `server/harnesses/` — see the README there.
  */
 import { HARNESSES, detectedHarnesses, harnessById } from './harnesses/index.mjs'
+import { enrichThreadsWithGitHubPRs } from './lib/github.mjs'
 
 /**
  * A project's ground is keyed on its name, and a name is the last segment of its path — so two
@@ -90,7 +91,12 @@ export async function scanThreads() {
     ...t,
   }))
   threads.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
-  return threads
+  try {
+    return await enrichThreadsWithGitHubPRs(threads)
+  } catch (err) {
+    console.warn('bot-crossing: github PR enrichment failed —', err?.message || err)
+    return threads
+  }
 }
 
 /** What the HUD shows in the harness list: who is installed, and what they can do. */

@@ -694,7 +694,9 @@ function detectSoundTriggers(nextThreads) {
         () => select(t.id, { fly: true })
       )
     }
-    if (prev.prState !== 'merged' && t.prState === 'merged') {
+    const prevMerged = String(prev.prState || '').toLowerCase() === 'merged'
+    const nextMerged = String(t.prState || '').toLowerCase() === 'merged'
+    if (!prevMerged && nextMerged) {
       playCeleb = true
       notifications.notify(
         `Bot Crossing · PR Merged!`,
@@ -723,7 +725,10 @@ function detectSoundTriggers(nextThreads) {
   else if (playErr) sound.playError()
 
   prevStatusMap = new Map(
-    nextThreads.map((t) => [t.id, { unread: t.unread, prState: t.prState, hasError: t.hasError }])
+    nextThreads.map((t) => [
+      t.id,
+      { unread: t.unread, prState: String(t.prState || '').toLowerCase(), hasError: t.hasError },
+    ])
   )
 }
 

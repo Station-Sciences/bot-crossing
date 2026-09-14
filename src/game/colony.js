@@ -65,7 +65,7 @@ export const STATUS_LABEL = {
 export function statusFor(thread, now = Date.now()) {
   if (thread.hasError) return 'blocked'
   if (thread.running) return 'working'
-  if (thread.prState === 'MERGED') return 'celebrating'
+  if (String(thread.prState || '').toLowerCase() === 'merged') return 'celebrating'
   if (thread.unread) return 'waiting'
   if (now - thread.lastActivityAt > STALE_MS) return 'sleeping'
   return 'idle'

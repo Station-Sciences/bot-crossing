@@ -526,3 +526,162 @@ test('an Antigravity thread with projectPath has canOpen=true and openThread ret
 
   await fsp.rm(home, { recursive: true, force: true })
 })
+
+// ── Cline & Roo Code, faked on disk ───────────────────────────────────────────
+
+async function fakeVSCodeTask(harnessPrefix, taskId, { uiMessages, metadata, apiHistory }) {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), `${harnessPrefix}-fixture-`))
+  const taskDir = path.join(home, taskId)
+  await fsp.mkdir(taskDir, { recursive: true })
+
+  if (uiMessages !== undefined) {
+    await fsp.writeFile(path.join(taskDir, 'ui_messages.json'), JSON.stringify(uiMessages))
+  }
+  if (metadata !== undefined) {
+    await fsp.writeFile(path.join(taskDir, 'task_metadata.json'), JSON.stringify(metadata))
+  }
+  if (apiHistory !== undefined) {
+    await fsp.writeFile(path.join(taskDir, 'api_conversation_history.json'), JSON.stringify(apiHistory))
+  }
+  return home
+}
+
+async function clineWith(home) {
+  process.env.BOT_CROSSING_CLINE_DIR = home
+  const mod = await import(`../server/harnesses/cline.mjs?${home}`)
+  return mod.default
+}
+
+async function rooWith(home) {
+  process.env.BOT_CROSSING_ROO_CODE_DIR = home
+  const mod = await import(`../server/harnesses/roo-code.mjs?${home}`)
+  return mod.default
+}
+
+test('a Cline task yields a thread with prompt, cwd, model, and correct prefixed ID', async () => {
+  const home = await fakeVSCodeTask('cline', SESSION_ID, {
+    uiMessages: [{ ts: Date.now(), type: 'say', say: 'task', text: 'Refactor auth controller' }],
+    metadata: { cwd: '/tmp/my-web-project', model: 'claude-3-7-sonnet' },
+  })
+  const h = await clineWith(home)
+  assert.equal(await h.detect(), true)
+
+  const [t] = await h.scanThreads()
+  assert.equal(t.id, `cline:${SESSION_ID}`, 'ids are prefixed')
+  assert.equal(t.title, 'Refactor auth controller')
+  assert.equal(t.project, 'my-web-project')
+  assert.equal(t.model, 'claude-3-7-sonnet')
+  assert.equal(t.running, true)
+  assert.equal(t.unread, false)
+  assert.equal(t.hasError, false)
+  assert.ok(t.sizeBytes > 0)
+  assert.equal(t.canOpen, true)
+
+  delete process.env.BOT_CROSSING_CLINE_DIR
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('a Cline task waiting on user approval (type: ask) is detected as unread', async () => {
+  const home = await fakeVSCodeTask('cline', SESSION_ID, {
+    uiMessages: [
+      { ts: Date.now() - 5000, type: 'say', say: 'task', text: 'Install dependencies' },
+      { ts: Date.now(), type: 'ask', ask: 'tool', text: 'Run npm install?' },
+    ],
+    metadata: { cwd: '/tmp/my-web-project' },
+  })
+  const h = await clineWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.unread, true, 'an ask waiting for user input holds the ? badge')
+  assert.equal(t.running, false)
+
+  delete process.env.BOT_CROSSING_CLINE_DIR
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('a Cline task with error reports hasError: true', async () => {
+  const home = await fakeVSCodeTask('cline', SESSION_ID, {
+    uiMessages: [
+      { ts: Date.now() - 5000, type: 'say', say: 'task', text: 'Run test' },
+      { ts: Date.now(), type: 'say', say: 'error', text: 'Test failed with exit 1' },
+    ],
+    metadata: { cwd: '/tmp/my-web-project' },
+  })
+  const h = await clineWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.hasError, true)
+
+  delete process.env.BOT_CROSSING_CLINE_DIR
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('a Cline task extracts cwd from environment_details in conversation history if metadata is missing', async () => {
+  const home = await fakeVSCodeTask('cline', SESSION_ID, {
+    uiMessages: [{ ts: Date.now(), type: 'say', say: 'task', text: 'Fix bug' }],
+    apiHistory: [
+      {
+        role: 'user',
+        content: '<environment_details>\n# Current Working Directory\n/tmp/inferred-project\n</environment_details>\nFix bug',
+      },
+    ],
+  })
+  const h = await clineWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.project, 'inferred-project')
+  assert.equal(t.cwd, '/tmp/inferred-project')
+
+  delete process.env.BOT_CROSSING_CLINE_DIR
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('Cline openThread and newSession generate vscode:// URLs', async () => {
+  const home = await fakeVSCodeTask('cline', SESSION_ID, {
+    uiMessages: [{ ts: Date.now(), type: 'say', text: 'Task' }],
+    metadata: { cwd: '/tmp/openable-project' },
+  })
+  const h = await clineWith(home)
+  const opened = await h.newSession('/tmp/openable-project')
+  assert.equal(opened.ok, true)
+  assert.equal(schemeOf(opened.url), 'vscode')
+  assert.equal(opened.url, 'vscode://file/tmp/openable-project')
+
+  const threadOpen = await h.openThread({ cwd: '/tmp/openable-project' })
+  assert.equal(threadOpen.ok, true)
+  assert.equal(threadOpen.url, 'vscode://file/tmp/openable-project')
+
+  const noCwd = await h.openThread({})
+  assert.equal(noCwd.ok, false)
+
+  delete process.env.BOT_CROSSING_CLINE_DIR
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('a Roo Code task yields a thread with roo-code: prefix and correct fields', async () => {
+  const home = await fakeVSCodeTask('roo-code', SESSION_ID, {
+    uiMessages: [{ ts: Date.now(), type: 'say', say: 'task', text: 'Create landing page' }],
+    metadata: { cwd: '/tmp/roo-project', model: 'claude-3-5-sonnet' },
+  })
+  const h = await rooWith(home)
+  assert.equal(await h.detect(), true)
+
+  const [t] = await h.scanThreads()
+  assert.equal(t.id, `roo-code:${SESSION_ID}`)
+  assert.equal(t.title, 'Create landing page')
+  assert.equal(t.project, 'roo-project')
+  assert.equal(t.model, 'claude-3-5-sonnet')
+
+  delete process.env.BOT_CROSSING_ROO_CODE_DIR
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an absent Cline or Roo Code is not detected', async () => {
+  process.env.BOT_CROSSING_CLINE_DIR = '/tmp/nonexistent-cline-dir-xyz'
+  process.env.BOT_CROSSING_ROO_CODE_DIR = '/tmp/nonexistent-roo-dir-xyz'
+  const clineMod = await clineWith('/tmp/nonexistent-cline-dir-xyz')
+  const rooMod = await rooWith('/tmp/nonexistent-roo-dir-xyz')
+
+  assert.equal(await clineMod.detect(), false)
+  assert.equal(await rooMod.detect(), false)
+
+  delete process.env.BOT_CROSSING_CLINE_DIR
+  delete process.env.BOT_CROSSING_ROO_CODE_DIR
+})

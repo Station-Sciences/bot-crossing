@@ -12,6 +12,7 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { exists, findExecutable, jsonLines, listDirs, readHead, readTail } from '../lib/fsutil.mjs'
+import { getHeadBranch } from '../lib/github.mjs'
 
 const HOME = os.homedir()
 const brainDir = () =>
@@ -93,37 +94,72 @@ function resolveProject(filePathOrDir) {
 }
 
 function extractWorkspace(records) {
-  for (const r of records) {
-    if (typeof r.content === 'string') {
-      const activeDoc = /Active Document:\s*([^\s(\n]+)/.exec(r.content)
-      if (activeDoc) {
-        return resolveProject(path.dirname(activeDoc[1].trim()))
-      }
-      const inDir = /\(in\s+([^\s,)\n]+)/.exec(r.content)
-      if (inDir) {
-        return resolveProject(inDir[1].trim())
-      }
-      const uriMap = /\[URI\] -> \[CorpusName\]:\s*\n([^\s\n\->]+)/.exec(r.content)
-      if (uriMap) {
-        return resolveProject(uriMap[1].trim())
-      }
+  const scores = new Map()
+
+  const addVote = (rawPath, weight) => {
+    if (!rawPath || typeof rawPath !== 'string') return
+    const clean = rawPath.replace(/^"|"$/g, '').trim()
+    if (!clean.startsWith('/') && !clean.includes(':\\')) return
+    if (
+      clean.includes('/.gemini/antigravity-ide/brain') ||
+      clean.includes('/.antigravity/brain')
+    ) {
+      return
     }
+
+    const dir = clean.includes('.') ? path.dirname(clean) : clean
+    const { projectPath, project } = resolveProject(dir)
+    if (!projectPath || project === 'unknown') return
+    const cur = scores.get(projectPath) || { score: 0, project }
+    cur.score += weight
+    scores.set(projectPath, cur)
+  }
+
+  for (const r of records) {
+    // 1. Tool calls: direct actions in the file system are the highest-confidence indicator
     if (Array.isArray(r.tool_calls)) {
       for (const call of r.tool_calls) {
         const p =
-          call.args?.DirectoryPath ||
           call.args?.Cwd ||
-          call.args?.AbsolutePath ||
           call.args?.TargetFile ||
-          call.args?.SearchPath
-        if (typeof p === 'string' && (p.startsWith('/') || p.startsWith('"/'))) {
-          const cleanP = p.replace(/^"|"$/g, '').trim()
-          return resolveProject(cleanP.includes('.') ? path.dirname(cleanP) : cleanP)
-        }
+          call.args?.SearchPath ||
+          call.args?.DirectoryPath ||
+          call.args?.AbsolutePath
+        if (p) addVote(p, 5)
       }
     }
+
+    if (typeof r.content === 'string') {
+      // 2. Mentioned files in prompt metadata (@[item] is a [File]: /path)
+      const mentionRegex = /is a \[File\]:\s*\n([^\s\n]+)/g
+      let m
+      while ((m = mentionRegex.exec(r.content)) !== null) {
+        addVote(m[1].trim(), 4)
+      }
+
+      // 3. (in /path)
+      const inDir = /\(in\s+([^\s,)\n]+)/.exec(r.content)
+      if (inDir) addVote(inDir[1].trim(), 3)
+
+      // 4. URI workspace mapping: [URI] -> [CorpusName]: \n /path
+      const uriMap = /\[URI\] -> \[CorpusName\]:\s*\n([^\s\n\->]+)/.exec(r.content)
+      if (uriMap) addVote(uriMap[1].trim(), 2)
+
+      // 5. Active Document (lowest weight — often just an open tab unrelated to prompt)
+      const activeDoc = /Active Document:\s*([^\s(\n]+)/.exec(r.content)
+      if (activeDoc) addVote(activeDoc[1].trim(), 1)
+    }
   }
-  return { projectPath: '', project: 'unknown' }
+
+  if (!scores.size) return { projectPath: '', project: 'unknown' }
+
+  let best = { projectPath: '', project: 'unknown', score: -1 }
+  for (const [projectPath, entry] of scores.entries()) {
+    if (entry.score > best.score) {
+      best = { projectPath, project: entry.project, score: entry.score }
+    }
+  }
+  return { projectPath: best.projectPath, project: best.project }
 }
 
 function extractModel(headRecords) {
@@ -175,7 +211,8 @@ async function scanThread(dir) {
     }
   }
 
-  const { project, projectPath } = extractWorkspace(headRecords)
+  const allRecords = [...headRecords, ...tailRecords]
+  const { project, projectPath } = extractWorkspace(allRecords)
   const model = extractModel(headRecords)
 
   const lastRecord = tailRecords[tailRecords.length - 1] || headRecords[headRecords.length - 1]
@@ -302,6 +339,24 @@ async function scanThread(dir) {
     lastAction = 'Idle'
   }
 
+  let gitBranch = projectPath ? getHeadBranch(projectPath) : ''
+  for (let i = tailRecords.length - 1; i >= 0; i--) {
+    const r = tailRecords[i]
+    if (Array.isArray(r.tool_calls)) {
+      for (const c of r.tool_calls) {
+        const cmd = c?.args?.CommandLine
+        if (typeof cmd === 'string') {
+          const m = /git\s+(?:checkout\s+(?:-b\s+)?|switch\s+(?:-c\s+)?|push\s+[\w-]+\s+)([^\s;&|]+)/.exec(cmd)
+          if (m && m[1] && !m[1].startsWith('-')) {
+            gitBranch = m[1].trim()
+            break
+          }
+        }
+      }
+    }
+    if (gitBranch && gitBranch !== 'master' && gitBranch !== 'main') break
+  }
+
   return {
     id: ID(dirName),
     title,
@@ -310,7 +365,7 @@ async function scanThread(dir) {
     projectPath,
     worktree: '',
     cwd: projectPath,
-    gitBranch: '',
+    gitBranch,
     model,
     createdAt: startedAt || stat.birthtimeMs || stat.mtimeMs,
     lastActivityAt,

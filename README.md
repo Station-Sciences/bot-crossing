@@ -46,6 +46,8 @@ somebody writing that adapter.
 | [OpenCode](https://opencode.ai) | ⬜ Not yet |
 | **[Antigravity](https://antigravity.google)** (Google) | ✅ **Supported** — Antigravity IDE & CLI transcripts, with deep-link/folder opening and prompt preview |
 | **[Cursor](https://cursor.com)** (Anysphere) | ✅ **Supported** — agent transcripts; the composer/sidebar threads are not read yet |
+| **[Cline](https://github.com/cline/cline)** | ✅ **Supported** — VS Code tasks, unread approval detection (`?`), deep links to project |
+| **[Roo Code](https://github.com/RooVetGit/Roo-Cline)** | ✅ **Supported** — VS Code tasks, status detection, and workspace opening |
 | [Amp](https://ampcode.com) (Sourcegraph) | ⬜ Not yet |
 | [Aider](https://aider.chat) | ⬜ Not yet |
 | [Goose](https://block.github.io/goose/) (Block) | ⬜ Not yet |
