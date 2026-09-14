@@ -189,6 +189,22 @@ function launch(target) {
   child.unref()
 }
 
+async function launchTerminal(dir) {
+  if (process.platform === 'darwin') {
+    const child = spawn('open', ['-a', 'Terminal', dir], { stdio: 'ignore', detached: true })
+    child.on('error', () => {})
+    child.unref()
+    return { ok: true }
+  }
+  if (process.platform === 'win32') {
+    const child = spawn('cmd.exe', ['/c', 'start', 'cmd.exe'], { cwd: dir, stdio: 'ignore', detached: true })
+    child.on('error', () => {})
+    child.unref()
+    return { ok: true }
+  }
+  return openInTerminal([process.env.SHELL || '/bin/bash'], dir)
+}
+
 /**
  * A folder is openable only if it is still on this machine and still a directory. Paths
  * arrive from the page, which got them from a scan that may be minutes old — a repo that
@@ -481,9 +497,17 @@ export async function apiMiddleware(req, res, next) {
       })
     }
 
+    if (url.pathname === '/api/terminal' && req.method === 'POST') {
+      const { folder } = await readJsonBody(req)
+      const dir = await resolveFolder(folder)
+      if (!dir) return send(res, 400, { ok: false, error: 'That folder is not on this machine any more' })
+      const shown = await launchTerminal(dir)
+      return send(res, shown.ok ? 200 : 400, shown)
+    }
+
     if (url.pathname === '/api/open' && req.method === 'POST') {
-      const { harness, ref } = await readJsonBody(req)
-      const shown = await present(await harnessOpenThread(harness, ref))
+      const { harness, ref, prompt } = await readJsonBody(req)
+      const shown = await present(await harnessOpenThread(harness, ref, prompt))
       return send(res, shown.ok ? 200 : 400, shown)
     }
 

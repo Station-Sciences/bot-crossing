@@ -49,6 +49,8 @@ const ICON = {
   activity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>`,
   pip: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="12" y="11" width="8" height="7" rx="1"/><polygon points="12 11 16 11 16 15" fill="none"/></svg>`,
   monument: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 20 8.5 20 22 4 22 4 8.5 12 2"/><path d="M12 22V12"/><path d="M9 12h6"/></svg>`,
+  terminal: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+  send: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>`,
 }
 
 const STAT_DEFS = [
@@ -419,8 +421,33 @@ export class Hud {
     on('#btn-deselect', 'click', () => this.actions.select?.(null))
     on('#btn-new-session', 'click', () => this.actions.newConversation?.())
     on('#btn-reveal', 'click', () => this.actions.revealProject?.())
+    on('#btn-terminal', 'click', () => this.actions.openTerminal?.())
     on('#btn-copy-path', 'click', () => this.actions.copyProjectPath?.())
+    on('#btn-copy-cmd', 'click', () => this.actions.copyCliCommand?.())
     on('#btn-hide-project', 'click', () => this.actions.hideProject?.())
+
+    const submitPrompt = () => {
+      const input = this.$('.thread-prompt-input')
+      const text = input?.value?.trim()
+      if (text) {
+        this.actions.sendPrompt?.(text)
+        input.value = ''
+      }
+    }
+    on('#btn-send-prompt', 'click', submitPrompt)
+    this.$('.thread-prompt-input')?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault()
+        submitPrompt()
+      }
+    })
+    this.el.addEventListener('click', (e) => {
+      const chip = e.target.closest('.quick-chip')
+      if (chip && chip.dataset.reply) {
+        this.actions.sendPrompt?.(chip.dataset.reply)
+      }
+    })
+
     on('#btn-hidden-toggle', 'click', () => this.toggleHiddenList())
     on('#btn-locate', 'click', () => this.actions.focusProject?.(this.project?.name))
     on('#btn-close-project', 'click', () => this.actions.closeProject?.())
@@ -601,6 +628,7 @@ export class Hud {
     // Nothing to open a new thread in, and nothing to reveal, without a folder on disk.
     this.$('#btn-new-session').disabled = !project.path
     this.$('#btn-reveal').disabled = !project.path
+    this.$('#btn-terminal').disabled = !project.path
     this.$('#btn-copy-path').disabled = !project.path
 
     const n = project.threads.length
@@ -715,6 +743,18 @@ export class Hud {
     const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
     this.$('.thread-pop .progress > i').style.width = `${pct}%`
     this.$('.thread-pop .progress > i').style.background = hex(agent.trim.getHex())
+    const promptInput = this.$('.thread-prompt-input')
+    if (promptInput) {
+      promptInput.value = ''
+      promptInput.placeholder = thread.unread
+        ? 'Reply or choose quick action…'
+        : 'Instruct or resume agent…'
+    }
+    const chips = this.$('.quick-chips')
+    if (chips) {
+      chips.hidden = !thread.unread
+    }
+
     // Measured once per selection rather than per frame: placing the card beside its
     // astronaut needs its size sixty times a second, and asking the layout for it that
     // often is how a HUD starts costing frames.
@@ -1211,6 +1251,7 @@ const TEMPLATE = `
         <button class="btn primary" id="btn-new-session" title="Start a new thread in this folder (C)">${ICON.plus} New conversation</button>
         <div class="pair">
           <button class="btn" id="btn-reveal" title="Show this folder in ${FILE_MANAGER}">${ICON.folder} ${FILE_MANAGER}</button>
+          <button class="btn" id="btn-terminal" title="Open terminal in this repo">${ICON.terminal} Terminal</button>
           <button class="btn" id="btn-copy-path" title="Copy the folder path">${ICON.copy} Copy path</button>
         </div>
         <button class="btn" id="btn-hide-project" title="Hide this repo from the colony — does not archive its threads">${ICON.eyeOff} Hide from colony</button>
@@ -1266,8 +1307,22 @@ const TEMPLATE = `
     <span class="thought-text"></span>
   </div>
   <div class="progress"><i></i></div>
+
+  <div class="thread-command-box">
+    <div class="command-input-wrap">
+      <input type="text" class="thread-prompt-input" placeholder="Instruct or reply to agent…" />
+      <button class="btn primary btn-send-prompt" id="btn-send-prompt" title="Resume with instruction (Enter)">${ICON.send}</button>
+    </div>
+    <div class="quick-chips" hidden>
+      <button type="button" class="quick-chip" data-reply="Proceed">Proceed</button>
+      <button type="button" class="quick-chip" data-reply="LGTM, continue">LGTM</button>
+      <button type="button" class="quick-chip" data-reply="Explain status">Status</button>
+    </div>
+  </div>
+
   <div class="pair">
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
+    <button class="btn" id="btn-copy-cmd" title="Copy CLI resume command to clipboard">${ICON.copy} Copy CLI</button>
     <button class="btn" id="btn-activity" title="View activity logs">${ICON.activity} Logs</button>
     <button class="btn" id="btn-viewed" title="Stop this thread asking for you until it moves on again (V)">${ICON.eye} Viewed</button>
     <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>

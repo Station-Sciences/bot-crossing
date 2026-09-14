@@ -127,6 +127,6 @@ const dispatch = (harnessId) => {
 }
 
 /** Both may be async: an adapter that has to look for a CLI on disk cannot answer synchronously. */
-export const openThread = async (harnessId, ref) => dispatch(harnessId).openThread(ref)
+export const openThread = async (harnessId, ref, prompt) => dispatch(harnessId).openThread(ref, prompt)
 
 export const newSession = async (harnessId, dir) => dispatch(harnessId).newSession(dir)

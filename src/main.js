@@ -18,8 +18,10 @@ import {
   openThread,
   newSession,
   revealFolder,
+  openTerminal,
   subscribeEvents,
 } from './game/api.js'
+import { cliCommandFor } from './game/commands.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 
 /**
@@ -293,6 +295,48 @@ const actions = {
       // embedded preview, say. The old selection-based copy has no such gate.
       const copied = copyFallback(folder)
       hud.toast(copied ? 'Path copied' : 'Could not reach the clipboard', copied ? '' : 'err')
+    }
+  },
+
+  openTerminal: async () => {
+    const folder = selectedProject && pathForProject(selectedProject)
+    if (!folder) return
+    try {
+      await openTerminal(folder)
+      hud.toast(`Terminal opened in ${selectedProject}`)
+    } catch (err) {
+      hud.toast(err.message || 'Could not open terminal', 'err')
+    }
+  },
+
+  copyCliCommand: async () => {
+    const thread = threads.find((t) => t.id === selectedId)
+    if (!thread) return
+    const cmd = cliCommandFor(thread)
+    try {
+      await navigator.clipboard.writeText(cmd)
+      hud.toast('CLI command copied')
+    } catch {
+      const copied = copyFallback(cmd)
+      hud.toast(copied ? 'CLI command copied' : 'Could not reach the clipboard', copied ? '' : 'err')
+    }
+  },
+
+  sendPrompt: async (promptText) => {
+    const thread = threads.find((t) => t.id === selectedId)
+    if (!thread || !promptText) return
+    try {
+      await openThread(thread, promptText)
+      const cmd = cliCommandFor(thread, promptText)
+      navigator.clipboard?.writeText(cmd).catch(() => {})
+
+      actions.markViewed()
+      colony.astronauts.celebrate(thread.id)
+      const preview = promptText.length > 30 ? promptText.slice(0, 28) + '…' : promptText
+      hud.toast(`Resumed with: "${preview}"`)
+      setTimeout(poll, 1800)
+    } catch (err) {
+      hud.toast(err.message || 'Could not send prompt to thread', 'err')
     }
   },
 

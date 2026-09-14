@@ -559,16 +559,22 @@ const cliBinary = () => findExecutable('claude', CLI_DIRS)
  * untitled session and rewrites the .jsonl — so it is only ever the fallback for threads
  * the app has never seen. Ids are pattern-checked before they reach the opener.
  */
-async function openThread(ref) {
+async function openThread(ref, prompt) {
   const { desktopSessionId, cliSessionId, cwd } = ref || {}
   let url = ''
   if (isDesktopId(desktopSessionId)) url = `claude://claude.ai/epitaxy/${desktopSessionId}`
   else if (isCliId(cliSessionId)) url = `claude://resume?session=${cliSessionId}`
 
   let command
-  if (process.platform === 'linux' && isCliId(cliSessionId)) {
+  if (isCliId(cliSessionId)) {
     const bin = await cliBinary()
-    if (bin) command = { argv: [bin, '--resume', cliSessionId], cwd: typeof cwd === 'string' ? cwd : '' }
+    if (bin) {
+      const argv = [bin, '--resume', cliSessionId]
+      if (prompt && typeof prompt === 'string' && prompt.trim()) {
+        argv.push('-p', prompt.trim())
+      }
+      command = { argv, cwd: typeof cwd === 'string' ? cwd : '' }
+    }
   }
 
   if (!url && !command) return { ok: false, error: 'No openable session id on that thread' }

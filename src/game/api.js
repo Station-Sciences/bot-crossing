@@ -86,12 +86,15 @@ export async function saveState(state) {
  * thread again, and the browser only ever passes it straight back. Nothing in the UI knows
  * what a Claude Code session id, or a Codex rollout id, actually looks like.
  */
-export const openThread = (thread) => post('/api/open', { harness: thread.harness, ref: thread.ref })
+export const openThread = (thread, prompt) =>
+  post('/api/open', { harness: thread.harness, ref: thread.ref, prompt })
 
 /** A brand new thread in a repo, via that harness's own new-session deep link. */
 export const newSession = (folder, harness) => post('/api/new-session', { folder, harness })
 
 export const revealFolder = (folder) => post('/api/reveal', { folder })
+
+export const openTerminal = (folder) => post('/api/terminal', { folder })
 
 /**
  * Subscribe to server-sent events for real-time thread changes.

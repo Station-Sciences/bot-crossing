@@ -607,15 +607,103 @@ body {
   height: 14px;
 }
 
-.thread-pop .pair {
+.thread-command-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 2px;
+}
+
+.command-input-wrap {
   display: flex;
   gap: 6px;
+  align-items: center;
+}
+
+.thread-prompt-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text, #f0f0f5);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.thread-prompt-input:focus {
+  border-color: var(--teal, #5cdb95);
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.thread-prompt-input::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.btn-send-prompt {
+  flex: none;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+
+.btn-send-prompt svg {
+  width: 14px;
+  height: 14px;
+}
+
+.quick-chips {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.quick-chip {
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  font-weight: 500;
+  color: #8fb4ee;
+  background: rgba(143, 180, 238, 0.12);
+  border: 1px solid rgba(143, 180, 238, 0.25);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.quick-chip:hover {
+  background: rgba(143, 180, 238, 0.24);
+  border-color: rgba(143, 180, 238, 0.45);
+  color: #c0d8ff;
+  transform: translateY(-1px);
+}
+
+.quick-chip:active {
+  transform: translateY(0);
+}
+
+.thread-pop .pair {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
 }
 
 .thread-pop .pair .btn {
-  flex: 1;
+  flex: 1 1 calc(50% - 5px);
   min-width: 0;
-  height: 34px;
+  height: 32px;
+  font-size: 12px;
+  padding: 0 6px;
 }
 
 .progress {
