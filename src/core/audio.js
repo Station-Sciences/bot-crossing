@@ -271,7 +271,7 @@ export class SoundManager {
               osc2.stop()
               osc1.disconnect()
               osc2.disconnect()
-            } catch {}
+            } catch { }
           }, 1100)
         },
       }
@@ -320,62 +320,172 @@ export class SoundManager {
               lfo.stop()
               noise.disconnect()
               lfo.disconnect()
-            } catch {}
+            } catch { }
           }, 1100)
         },
       }
       return
     }
 
-    // Terra: gentle breezy atmosphere with warm tonal drone
-    if (planet === 'earth') {
+    // Terra: gentle nature breeze with foliage rustle, airy Aeolian whistle, and subtle wind chimes
+    if (planet === 'terra') {
+      let isStopped = false
+      let chimeTimer = null
+      const activeChimeNodes = new Set()
+
+      // 1. Desiran angin padang rumput & dedaunan (filtered pink noise dengan ayunan LFO alami)
+      const noiseBuffer = this._createNoiseBuffer(5)
+      const breeze = this.ctx.createBufferSource()
+      breeze.buffer = noiseBuffer
+      breeze.loop = true
+
+      const breezeFilter = this.ctx.createBiquadFilter()
+      breezeFilter.type = 'lowpass'
+      breezeFilter.frequency.setValueAtTime(240, now)
+
+      // LFO sangat lambat (0.07 Hz ~14 detik) untuk hembusan angin yang alami dan tidak monoton
+      const breezeLfo = this.ctx.createOscillator()
+      const breezeLfoGain = this.ctx.createGain()
+      breezeLfo.frequency.setValueAtTime(0.07, now)
+      breezeLfoGain.gain.setValueAtTime(110, now)
+      breezeLfo.connect(breezeLfoGain)
+      breezeLfoGain.connect(breezeFilter.frequency)
+
+      const breezeGain = this.ctx.createGain()
+      breezeGain.gain.setValueAtTime(0.001, now)
+      breezeGain.gain.linearRampToValueAtTime(0.045, now + 3)
+
+      breeze.connect(breezeFilter)
+      breezeFilter.connect(breezeGain)
+      breezeGain.connect(this.ambientGain)
+
+      // 2. Harmoni siulan angin di celah rumput/pepohonan (Aeolian nature harmonics - E4, G4, B4 pentatonik lembut)
       const osc1 = this.ctx.createOscillator()
       const osc2 = this.ctx.createOscillator()
-      const filter = this.ctx.createBiquadFilter()
-      const gain = this.ctx.createGain()
+      const osc3 = this.ctx.createOscillator()
+      const aeolianFilter = this.ctx.createBiquadFilter()
+      const aeolianGain = this.ctx.createGain()
 
-      osc1.type = 'triangle'
-      osc1.frequency.setValueAtTime(130.81, now) // C3
+      osc1.type = 'sine'
+      osc1.frequency.setValueAtTime(329.63, now) // E4 (nada udara sejuk)
       osc2.type = 'sine'
-      osc2.frequency.setValueAtTime(196.0, now) // G3
+      osc2.frequency.setValueAtTime(392.0, now)  // G4
+      osc3.type = 'sine'
+      osc3.frequency.setValueAtTime(493.88, now) // B4
 
-      filter.type = 'lowpass'
-      filter.frequency.setValueAtTime(280, now)
+      aeolianFilter.type = 'bandpass'
+      aeolianFilter.frequency.setValueAtTime(400, now)
+      aeolianFilter.Q.setValueAtTime(1.2, now)
 
-      gain.gain.setValueAtTime(0.001, now)
-      gain.gain.linearRampToValueAtTime(0.1, now + 2)
+      aeolianGain.gain.setValueAtTime(0.001, now)
+      aeolianGain.gain.linearRampToValueAtTime(0.018, now + 3) // Sangat lembut di latar belakang
 
-      osc1.connect(filter)
-      osc2.connect(filter)
-      filter.connect(gain)
-      gain.connect(this.ambientGain)
+      osc1.connect(aeolianFilter)
+      osc2.connect(aeolianFilter)
+      osc3.connect(aeolianFilter)
+      aeolianFilter.connect(aeolianGain)
+      aeolianGain.connect(this.ambientGain)
 
+      // 3. Tingkikan lonceng angin alam (gentle wind chime pings tertiup angin sesekali)
+      const chimeNotes = [587.33, 659.25, 783.99, 880.0, 987.77, 1174.66] // D5, E5, G5, A5, B5, D6
+      const triggerChime = () => {
+        if (isStopped || !this.ctx || this.ctx.state !== 'running') return
+        try {
+          const t = this.ctx.currentTime
+          const chimeOsc = this.ctx.createOscillator()
+          const chimeGain = this.ctx.createGain()
+          const chimeFilter = this.ctx.createBiquadFilter()
+
+          const note = chimeNotes[Math.floor(Math.random() * chimeNotes.length)]
+          chimeOsc.type = 'sine'
+          chimeOsc.frequency.setValueAtTime(note, t)
+
+          chimeFilter.type = 'lowpass'
+          chimeFilter.frequency.setValueAtTime(1600, t)
+
+          // Lonceng lembut dengan peluruhan eksponensial panjang
+          chimeGain.gain.setValueAtTime(0.0001, t)
+          chimeGain.gain.linearRampToValueAtTime(0.022, t + 0.04)
+          chimeGain.gain.exponentialRampToValueAtTime(0.0001, t + 2.8)
+
+          chimeOsc.connect(chimeFilter)
+          chimeFilter.connect(chimeGain)
+          chimeGain.connect(this.ambientGain)
+
+          activeChimeNodes.add(chimeOsc)
+          chimeOsc.start(t)
+          chimeOsc.stop(t + 2.9)
+
+          setTimeout(() => {
+            try {
+              activeChimeNodes.delete(chimeOsc)
+              chimeOsc.disconnect()
+              chimeFilter.disconnect()
+              chimeGain.disconnect()
+            } catch { }
+          }, 3000)
+        } catch { }
+
+        // Interval acak antara 4 hingga 8.5 detik
+        const nextDelay = 4000 + Math.random() * 4500
+        chimeTimer = setTimeout(triggerChime, nextDelay)
+      }
+
+      breeze.start(now)
+      breezeLfo.start(now)
       osc1.start(now)
       osc2.start(now)
+      osc3.start(now)
+
+      // Mulai jadwal lonceng angin pertama setelah 2 detik
+      chimeTimer = setTimeout(triggerChime, 2000)
 
       this.ambientNodes = {
         stop: () => {
+          isStopped = true
+          if (chimeTimer) clearTimeout(chimeTimer)
+          for (const node of activeChimeNodes) {
+            try {
+              node.stop()
+              node.disconnect()
+            } catch { }
+          }
+          activeChimeNodes.clear()
+
           const t = this.ctx.currentTime
-          gain.gain.linearRampToValueAtTime(0.001, t + 1)
+          breezeGain.gain.linearRampToValueAtTime(0.0001, t + 1)
+          aeolianGain.gain.linearRampToValueAtTime(0.0001, t + 1)
           setTimeout(() => {
             try {
+              breeze.stop()
+              breezeLfo.stop()
               osc1.stop()
               osc2.stop()
+              osc3.stop()
+              breeze.disconnect()
+              breezeLfo.disconnect()
+              breezeLfoGain.disconnect()
               osc1.disconnect()
               osc2.disconnect()
-            } catch {}
+              osc3.disconnect()
+              aeolianFilter.disconnect()
+              aeolianGain.disconnect()
+              breezeFilter.disconnect()
+              breezeGain.disconnect()
+            } catch { }
           }, 1100)
         },
       }
       return
     }
+
   }
 
   _stopAmbient() {
     if (this.ambientNodes) {
       try {
         this.ambientNodes.stop()
-      } catch {}
+      } catch { }
       this.ambientNodes = null
     }
   }
@@ -409,7 +519,7 @@ export class SoundManager {
   _canPlaySfx() {
     if (!this._initialized || !this.ctx) return false
     if (this.ctx.state === 'suspended') {
-      this.ctx.resume().catch(() => {})
+      this.ctx.resume().catch(() => { })
       return false
     }
     const soundEnabled = this.settings ? Boolean(this.settings.get('soundEnabled')) : true
