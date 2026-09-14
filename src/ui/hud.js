@@ -743,6 +743,10 @@ export class Hud {
     const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
     this.$('.thread-pop .progress > i').style.width = `${pct}%`
     this.$('.thread-pop .progress > i').style.background = hex(agent.trim.getHex())
+    const commandBox = this.$('.thread-command-box')
+    if (commandBox) {
+      commandBox.hidden = thread.canOpen === false
+    }
     const promptInput = this.$('.thread-prompt-input')
     if (promptInput) {
       promptInput.value = ''
