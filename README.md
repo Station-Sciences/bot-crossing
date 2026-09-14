@@ -7,7 +7,7 @@ a plot for their repo, and build something. When one needs you it stops and hold
 its head; click it and the thread opens back in whichever harness it came from.
 
 It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
-account, and the only thing it ever writes back is a single archive flag.
+account, and the only things it ever writes back are an archive flag and a thread's title.
 
 > **Status:** published as-is. I built this for myself and cannot promise to maintain it —
 > issues and PRs are welcome but may go unanswered, and forking is an entirely reasonable
@@ -192,6 +192,9 @@ It is moved with a transform rather than with `left`/`top`, the one geometric ch
 browser makes without touching layout, so following a walking astronaut costs nothing.
 
 - **Open** hands the thread back to Claude Code and the desktop app comes forward.
+- **Rename** swaps the card's title for a text field. The new name is written where Claude
+  Code itself keeps it — the `title` on the desktop app's session record, and the same
+  `custom-title` line `/rename` appends to the transcript — so it shows in Claude Code too.
 - **Archive** sets `isArchived` on Claude Code's own session record — the thread lands in
   Claude Code's Archived list, not just here — and the astronaut walks back up the ramp and
   boards the ship.
@@ -211,8 +214,12 @@ since that page loaded. Claude Code also rewrites its session records from memor
 stomp the flag, so the colony re-asserts it on every scan — an archive that gets stomped comes
 back within one poll.
 
-Nothing is ever written to your Claude Code data except that one `isArchived` field. The
-folder buttons only ever hand a path to `open`.
+Renaming follows the same shape: `/api/rename` remembers the name in `data/colony.json`
+and re-asserts it on every scan until Claude Code has picked it up, then lets go — so a
+rename made later inside Claude Code shows through rather than being overwritten.
+
+Nothing is ever written to your Claude Code data except that `isArchived` field and the
+title. The folder buttons only ever hand a path to `open`.
 
 The deep links above are the **Claude Code adapter's** business, not the colony's — another
 harness plugs its own in, and a harness with no deep link simply greys the button out. See
@@ -260,7 +267,7 @@ under **View → Return to isometric**.
 | `H` / `⌘\` | **Hide every panel.** The colony still reads: status lives above the astronauts' heads |
 | `S` | Settings |
 | `N` | Fly to the next astronaut waiting on you |
-| `Enter` / `A` | Open / archive the selected thread |
+| `Enter` / `R` / `A` | Open / rename / archive the selected thread |
 | `C` | New conversation in the open zone's folder |
 | `O` | Orbit mode |
 | `Tab` | Next planet |
@@ -596,7 +603,7 @@ What it touches on disk, in full:
 | | |
 | --- | --- |
 | Reads | Your harness's own session records and transcripts |
-| Writes | `data/colony.json`, and **one** `isArchived` field per archived thread |
+| Writes | `data/colony.json`, **one** `isArchived` field per archived thread, and the title of a thread you rename |
 | Sends | Nothing. No network calls, no telemetry, no account |
 
 `data/colony.json` holds the names and paths of the repos you work in, so it is gitignored —
@@ -612,7 +619,8 @@ server/
   lib/         filesystem helpers the adapters share
   scan.mjs     harness-agnostic: asks every detected harness, merges, sorts
   api.mjs      /api/threads, /api/harnesses, /api/state, /api/open, /api/archive,
-               /api/new-session, /api/reveal
+               /api/rename, /api/new-session, /api/reveal
+  test/        node --test, against real files in a throwaway home dir (npm test)
   serve.mjs    static server for the built app
 src/
   core/        settings, renderer + post chain, the Google Earth camera
@@ -628,9 +636,10 @@ Everything that knows what a *particular* harness's files look like lives in
 `server/harnesses/`. Everything else — the scanner, the API, the whole of `src/` — is written
 against the thread shape and never against a harness.
 
-Colony state lives in `data/colony.json` — where each zone sits and what you archived.
-Deleting it only loses the archive list and the map's arrangement; the threads themselves are
-untouched, and the colony lays itself out again from scratch.
+Colony state lives in `data/colony.json` — where each zone sits, what you archived, and any
+rename Claude Code has not yet picked up. Deleting it only loses the archive list and the
+map's arrangement; the threads themselves are untouched, and the colony lays itself out again
+from scratch.
 
 ## Building your own
 

@@ -12,6 +12,7 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
   setThreadArchived,
+  setThreadTitle,
 } from './scan.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -22,13 +23,16 @@ const STATE_VERSION = 1
 
 /**
  * Colony state is only ever the things the *game* invents — which plot a project got,
- * what a thread's building looks like, what you archived. The threads themselves stay
- * read-only: nothing here ever writes to a harness's data except the one archive flag.
+ * what a thread's building looks like, what you archived or renamed. The threads themselves
+ * stay read-only: nothing here ever writes to a harness's data except the archive flag and
+ * the title.
  */
 const emptyState = () => ({
   version: STATE_VERSION,
   archived: [],
   archivedAt: {},
+  titles: {},
+  renamedAt: {},
   opened: [],
   plots: {},
   seen: {},
@@ -46,6 +50,8 @@ async function readState() {
       version: STATE_VERSION,
       archived: asArray(raw.archived),
       archivedAt: asObject(raw.archivedAt),
+      titles: asObject(raw.titles),
+      renamedAt: asObject(raw.renamedAt),
       opened: asArray(raw.opened),
       plots: asObject(raw.plots),
       seen: asObject(raw.seen),
@@ -59,9 +65,10 @@ async function readState() {
 
 /**
  * Split ownership. The page PUTs layout/seen/opened/settings whole, but the archive list
- * belongs to the server: `/api/archive` writes it straight into this file, and a PUT keeps
- * whatever is on disk. Otherwise a page holding older state (or a second tab, or a script
- * hitting `/api/archive` directly) would silently drop every archive made since it loaded.
+ * and the renames belong to the server: `/api/archive` and `/api/rename` write them straight
+ * into this file, and a PUT keeps whatever is on disk. Otherwise a page holding older state
+ * (or a second tab, or a script hitting the endpoints directly) would silently drop every
+ * archive or rename made since it loaded.
  * Writes are chained so two requests never race on the temp file.
  */
 let stateWriteChain = Promise.resolve()
@@ -87,6 +94,8 @@ function writeState(next) {
       version: STATE_VERSION,
       archived: current.archived,
       archivedAt: current.archivedAt,
+      titles: current.titles,
+      renamedAt: current.renamedAt,
       opened: asArray(next.opened),
       plots: asObject(next.plots),
       seen: asObject(next.seen),
@@ -110,6 +119,23 @@ function setColonyArchived(id, archived) {
       delete archivedAt[id]
     }
     return persistState({ ...current, archived: list, archivedAt, updatedAt: Date.now() })
+  })
+}
+
+/** Remember a thread's new name, or forget it once the harness has taken it over. */
+function setColonyTitle(id, title) {
+  return withStateLock(async () => {
+    const current = await readState()
+    const titles = { ...current.titles }
+    const renamedAt = { ...current.renamedAt }
+    if (title) {
+      titles[id] = title
+      renamedAt[id] = Date.now()
+    } else {
+      delete titles[id]
+      delete renamedAt[id]
+    }
+    return persistState({ ...current, titles, renamedAt, updatedAt: Date.now() })
   })
 }
 
@@ -211,10 +237,11 @@ async function resolveFolder(folder) {
  * poll. `archivePending` is true while the flag is on disk but the running app has not read
  * it yet — that astronaut is walking to the ship but has not boarded.
  */
-async function reconcileArchived(threads) {
+async function reconcileWithHarness(threads) {
   const state = await readState()
-  if (!state.archived.length) return threads
   const wanted = new Set(state.archived)
+  const titled = Object.keys(state.titles)
+  if (!wanted.size && !titled.length) return threads
 
   // One `ps` sweep per harness rather than one per thread.
   const startedAt = new Map()
@@ -222,17 +249,37 @@ async function reconcileArchived(threads) {
     startedAt.set(id, await harnessAppStartedAt(id))
   }
 
-  return Promise.all(
+  const settled = []
+  const out = await Promise.all(
     threads.map(async (thread) => {
-      if (!wanted.has(thread.id)) return thread
-      if (!thread.archived && thread.canArchive) {
-        await setThreadArchived(thread.harness, thread.ref, true).catch(() => {})
-      }
-      const at = state.archivedAt[thread.id] ?? 0
+      let next = thread
       const appStart = startedAt.get(thread.harness) || 0
-      return { ...thread, archived: true, archivePending: !(appStart && appStart > at) }
+
+      if (wanted.has(thread.id)) {
+        if (!thread.archived && thread.canArchive) {
+          await setThreadArchived(thread.harness, thread.ref, true).catch(() => {})
+        }
+        const at = state.archivedAt[thread.id] ?? 0
+        next = { ...next, archived: true, archivePending: !(appStart && appStart > at) }
+      }
+
+      const title = state.titles[thread.id]
+      if (title) {
+        if (thread.title !== title && thread.canRename) {
+          await setThreadTitle(thread.harness, thread.ref, title).catch(() => {})
+        } else if (thread.title === title && (!thread.canArchive || (appStart && appStart > state.renamedAt[thread.id]))) {
+          // The harness agrees, and no running app is holding an older copy in memory
+          // (`canArchive` is the tell for an app-owned record). Let the harness be the
+          // source of truth again, so a rename made *there* is not hidden by this one.
+          settled.push(thread.id)
+        }
+        next = { ...next, title }
+      }
+      return next
     })
   )
+  for (const id of settled) await setColonyTitle(id, '')
+  return out
 }
 
 function send(res, status, body) {
@@ -328,7 +375,7 @@ export async function apiMiddleware(req, res, next) {
 
   try {
     if (url.pathname === '/api/threads' && req.method === 'GET') {
-      const threads = await reconcileArchived(await scanThreads())
+      const threads = await reconcileWithHarness(await scanThreads())
       return send(res, 200, { threads, scannedAt: Date.now() })
     }
 
@@ -395,6 +442,29 @@ export async function apiMiddleware(req, res, next) {
       }
       const result = await setThreadArchived(harness, ref, archived)
       return send(res, 200, { ...result, ok: true, archived: Boolean(archived), harnessRecord: result.ok })
+    }
+
+    if (url.pathname === '/api/rename' && req.method === 'POST') {
+      const body = await readJsonBody(req)
+      const { id, harness, ref } = body
+      const title = String(body.title ?? '').trim()
+      if (!id) return send(res, 400, { ok: false, error: 'Missing thread id' })
+      if (!title) return send(res, 400, { ok: false, error: 'A title cannot be empty' })
+
+      // The colony's own copy is written first, so a running app that stomps the record
+      // gets it re-asserted on the next scan — the same shape as archiving.
+      await setColonyTitle(id, title)
+
+      if (!ref || !harness) {
+        return send(res, 200, {
+          ok: true,
+          title,
+          harnessRecord: false,
+          note: 'Renamed in the colony. That harness has no session record for this thread.',
+        })
+      }
+      const result = await setThreadTitle(harness, ref, title)
+      return send(res, 200, { ...result, ok: true, title, harnessRecord: result.ok })
     }
 
     return send(res, 404, { error: 'Unknown endpoint' })

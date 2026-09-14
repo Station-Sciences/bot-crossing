@@ -15,7 +15,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { exists, jsonLines, listDirs, listFiles, num, readHead } from '../lib/fsutil.mjs'
+import { exists, jsonLines, listDirs, listFiles, num, readHead, readTail } from '../lib/fsutil.mjs'
 
 const execFileAsync = promisify(execFile)
 const HOME = os.homedir()
@@ -43,6 +43,8 @@ const CLI_PROJECTS = path.join(HOME, '.claude', 'projects')
 const CLI_LIVE = path.join(HOME, '.claude', 'sessions')
 
 const HEAD_BYTES = 192 * 1024
+/** A `/rename` lands at the *end* of the transcript, however long it already is. */
+const TAIL_BYTES = 64 * 1024
 
 /**
  * How recently a session must have done something to count as "active now".
@@ -76,12 +78,13 @@ function cleanPrompt(s) {
 
 /**
  * Pull whatever a transcript knows about itself: title, cwd, branch, start time.
- * Mirrors the CLI's own title precedence: custom > ai > summary > first prompt.
+ * Mirrors the CLI's own title precedence: custom > ai > summary > first prompt. Every
+ * `/rename` appends a fresh custom-title record, so the *last* one is the current name.
  */
-function readTranscriptMeta(records) {
+export function readTranscriptMeta(records) {
   const meta = { customTitle: '', aiTitle: '', summary: '', firstPrompt: '', cwd: '', gitBranch: '', startedAt: 0 }
   for (const r of records) {
-    if (!meta.customTitle && r.customTitle) meta.customTitle = r.customTitle
+    if (r.customTitle) meta.customTitle = r.customTitle
     if (!meta.aiTitle && r.aiTitle) meta.aiTitle = r.aiTitle
     if (!meta.summary && r.type === 'summary' && r.summary) meta.summary = r.summary
     if (!meta.cwd && r.cwd) meta.cwd = r.cwd
@@ -150,7 +153,12 @@ async function transcriptMeta(entry) {
   if (cached && cached.mtime === entry.mtime) return cached.meta
   let meta
   try {
-    meta = readTranscriptMeta(jsonLines(await readHead(entry.file, HEAD_BYTES)))
+    // Head for the prompt and cwd, tail for a rename made after the head was written.
+    const [head, tail] = await Promise.all([
+      readHead(entry.file, HEAD_BYTES),
+      readTail(entry.file, TAIL_BYTES, HEAD_BYTES),
+    ])
+    meta = readTranscriptMeta([...jsonLines(head), ...jsonLines(tail)])
   } catch {
     meta = readTranscriptMeta([])
   }
@@ -246,6 +254,7 @@ function toThread(t) {
     ...rest,
     canOpen: Boolean((desktopSessionId && DESKTOP_ID.test(desktopSessionId)) || (cliSessionId && UUID.test(cliSessionId))),
     canArchive: desktopSessionIds.length > 0,
+    canRename: desktopSessionIds.length > 0 || Boolean(cliSessionId && UUID.test(cliSessionId)),
     ref: { desktopSessionId, desktopSessionIds, cliSessionId },
   }
 }
@@ -364,11 +373,11 @@ async function findSessionFile(sessionId) {
 }
 
 /**
- * Flip `isArchived` on the desktop app's own session record — the same field its
- * Archived list reads. Only that one key is touched; everything else is written back
- * byte-for-byte from what was there, through a temp file so a crash can't truncate it.
+ * Rewrite one key of the desktop app's session record. Only that key is touched; everything
+ * else is written back byte-for-byte from what was there, through a temp file so a crash
+ * can't truncate it, after checking the record really is the session it claims to be.
  */
-async function setSessionArchived(sessionId, archived) {
+async function patchSessionRecord(sessionId, key, value) {
   const file = await findSessionFile(sessionId)
   if (!file) return { ok: false, error: 'No Claude Code session record for that thread' }
 
@@ -382,12 +391,18 @@ async function setSessionArchived(sessionId, archived) {
     return { ok: false, error: 'Session record did not look like the expected session' }
   }
 
-  record.isArchived = Boolean(archived)
+  record[key] = value
   const tmp = `${file}.botcrossing.tmp`
   await fsp.writeFile(tmp, JSON.stringify(record, null, 2))
   await fsp.rename(tmp, file)
   metaCache.delete(record.cliSessionId)
-  return { ok: true, file, archived: Boolean(archived) }
+  return { ok: true, file }
+}
+
+/** Flip `isArchived` — the same field the desktop app's own Archived list reads. */
+async function setSessionArchived(sessionId, archived) {
+  const result = await patchSessionRecord(sessionId, 'isArchived', Boolean(archived))
+  return result.ok ? { ...result, archived: Boolean(archived) } : result
 }
 
 /** Archive every record that maps to a thread — the real one and any import ghosts. */
@@ -400,6 +415,61 @@ async function setArchived(ref, archived) {
   return ok
     ? { ok, archived: Boolean(archived), records: results.filter((r) => r.ok).length }
     : results[0] || { ok: false, error: 'No session records for that thread' }
+}
+
+/** Locate the CLI's transcript for a session. Id is pattern-checked, never joined raw. */
+async function findTranscriptFile(sessionId) {
+  if (!UUID.test(sessionId)) return null
+  for (const projectDir of await listDirs(CLI_PROJECTS)) {
+    const file = path.join(projectDir, `${sessionId}.jsonl`)
+    if (await exists(file)) return file
+  }
+  return null
+}
+
+/**
+ * Append the one record `/rename` itself writes. The transcript is append-only for the CLI
+ * too, so nothing above the new line is ever rewritten; a missing trailing newline on the
+ * last record is repaired first so the two never share a line.
+ */
+async function appendCustomTitle(sessionId, title) {
+  const file = await findTranscriptFile(sessionId)
+  if (!file) return { ok: false, error: 'No Claude Code transcript for that thread' }
+
+  const fh = await fsp.open(file, 'r+')
+  try {
+    const { size } = await fh.stat()
+    let prefix = ''
+    if (size > 0) {
+      const last = Buffer.alloc(1)
+      await fh.read(last, 0, 1, size - 1)
+      if (last[0] !== 0x0a) prefix = '\n'
+    }
+    const record = JSON.stringify({ type: 'custom-title', customTitle: title, sessionId })
+    await fh.write(`${prefix}${record}\n`, size)
+  } finally {
+    await fh.close()
+  }
+  metaCache.delete(sessionId)
+  return { ok: true, file }
+}
+
+/**
+ * Give a thread a new name in Claude Code's own records: the desktop app's `title` on each
+ * record that maps to it, and a `custom-title` line on the transcript so the CLI's `--resume`
+ * and the desktop agree. Either store succeeding is a success.
+ */
+async function setTitle(ref, title) {
+  const name = String(title ?? '').trim()
+  if (!name) return { ok: false, error: 'A title cannot be empty' }
+
+  const results = []
+  for (const id of ref?.desktopSessionIds || []) results.push(await patchSessionRecord(id, 'title', name))
+  if (ref?.cliSessionId) results.push(await appendCustomTitle(ref.cliSessionId, name))
+
+  const ok = results.some((r) => r.ok)
+  if (ok) return { ok, title: name, records: results.filter((r) => r.ok).length }
+  return results[0] || { ok: false, error: 'No session records for that thread' }
 }
 
 /**
@@ -502,6 +572,7 @@ export default {
   openThread,
   newSession,
   setArchived,
+  setTitle,
   appStartedAt,
   paths: { DESKTOP_SESSIONS, CLI_PROJECTS, CLI_LIVE },
 }

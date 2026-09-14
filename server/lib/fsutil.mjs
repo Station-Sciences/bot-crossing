@@ -21,6 +21,27 @@ export async function readHead(file, bytes) {
   }
 }
 
+/**
+ * Read the last chunk of a file, for records that get appended long after the head was
+ * written — a rename, say. Returns '' when the head already covers the whole file, so the
+ * two reads never hand back the same bytes twice.
+ */
+export async function readTail(file, bytes, skipIfUnder = 0) {
+  const fh = await fsp.open(file, 'r')
+  try {
+    const { size } = await fh.stat()
+    if (size <= skipIfUnder) return ''
+    const start = Math.max(0, size - bytes)
+    const buf = Buffer.allocUnsafe(size - start)
+    const { bytesRead } = await fh.read(buf, 0, buf.length, start)
+    const text = buf.subarray(0, bytesRead).toString('utf8')
+    // Drop a leading partial line so JSON.parse never sees half a record.
+    return start > 0 ? text.slice(text.indexOf('\n') + 1) : text
+  } finally {
+    await fh.close()
+  }
+}
+
 /** Parse a JSONL blob, skipping the partial or malformed lines a live file always has. */
 export function jsonLines(text) {
   const out = []

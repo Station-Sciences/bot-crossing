@@ -35,6 +35,10 @@ export const openThread = (thread) =>
 export const archiveThread = (thread, archived) =>
   post('/api/archive', { id: thread.id, harness: thread.harness, ref: thread.ref, archived })
 
+/** Give a thread a new name — in the colony, and in the harness's own records where it can. */
+export const renameThread = (thread, title) =>
+  post('/api/rename', { id: thread.id, harness: thread.harness, ref: thread.ref, title })
+
 /** A brand new thread in a repo, via that harness's own new-session deep link. */
 export const newSession = (folder, harness) => post('/api/new-session', { folder, harness })
 

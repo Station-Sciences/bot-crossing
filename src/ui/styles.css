@@ -565,6 +565,39 @@ body {
   -webkit-box-orient: vertical;
 }
 
+/* Renaming swaps the title for a field in the same slot, so the card does not jump. */
+.thread-pop .rename {
+  display: none;
+  margin: 0;
+}
+
+.thread-pop.renaming .title {
+  display: none;
+}
+
+.thread-pop.renaming .rename {
+  display: block;
+}
+
+.thread-pop .rename input {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  outline: none;
+  pointer-events: auto;
+}
+
+.thread-pop .rename input:focus {
+  border-color: var(--accent);
+}
+
 .thread-pop .meta {
   display: flex;
   align-items: center;
@@ -616,6 +649,17 @@ body {
   flex: 1;
   min-width: 0;
   height: 34px;
+}
+
+.thread-pop .pair .btn.icon {
+  flex: none;
+  width: 34px;
+}
+
+.thread-pop .pair .btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
 }
 
 .progress {

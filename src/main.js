@@ -15,6 +15,7 @@ import {
   saveState,
   openThread,
   archiveThread,
+  renameThread,
   newSession,
   revealFolder,
 } from './game/api.js'
@@ -191,6 +192,27 @@ const actions = {
       setTimeout(poll, 1800)
     } catch (err) {
       hud.toast(err.message || 'Could not open that thread', 'err')
+    }
+  },
+
+  renameThread: async (title) => {
+    const thread = threads.find((t) => t.id === selectedId)
+    if (!thread) return
+    try {
+      const res = await renameThread(thread, title)
+      // Show the new name at once; the next scan confirms it from the harness's own files.
+      thread.title = res.title || title
+      const agent = colony.agentFor(thread.id)
+      if (agent && selectedId === thread.id) hud.setSelection(agent, thread)
+      syncProject() // the sidebar row carries the title too
+      hud.toast(
+        res.harnessRecord === false
+          ? `Renamed here (no ${thread.harnessName || 'harness'} record for it)`
+          : `Renamed in ${thread.harnessName || 'your harness'} too`
+      )
+      setTimeout(poll, 1800)
+    } catch (err) {
+      hud.toast(err.message || 'Could not rename that thread', 'err')
     }
   },
 
@@ -494,6 +516,14 @@ window.addEventListener('keydown', (e) => {
     case 'a':
     case 'A':
       if (selectedId) actions.archiveThread()
+      break
+    case 'r':
+    case 'R':
+      // Stop the keystroke landing in the field that is about to take focus.
+      if (selectedId) {
+        e.preventDefault()
+        hud.startRename()
+      }
       break
     case 'c':
     case 'C':

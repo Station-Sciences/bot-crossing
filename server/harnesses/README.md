@@ -21,6 +21,7 @@ export default {
   openThread,                    // (ref) => { ok, url } | { ok: false, error }
   newSession,                    // (dir) => { ok, url } | { ok: false, error }
   setArchived,                   // (ref, archived) => Promise<{ ok, error? }>
+  setTitle,                      // optional: (ref, title) => Promise<{ ok, error? }>
   appStartedAt,                  // optional: () => Promise<number>
 }
 ```
@@ -66,6 +67,17 @@ Be conservative about what you write. The Claude Code adapter touches exactly on
 through a temp file and renames over the original, and re-reads the record first to check it
 is the session it thinks it is. Someone's real work is in these files.
 
+### `setTitle(ref, title)` — optional
+
+Give the thread a new name in the harness's own records, so it reads the same there as here.
+The title arrives trimmed and non-empty. Omit the method, or return `{ ok: false, error }`,
+if your harness has no title of its own: the colony keeps the name on its side and shows it
+regardless.
+
+Write it the way the harness itself would. The Claude Code adapter sets `title` on the
+desktop app's record and appends the exact `custom-title` line the CLI's `/rename` appends —
+never rewriting a transcript, only adding one line to its end.
+
 ### `appStartedAt()` — optional
 
 Epoch milliseconds of when the harness's long-lived app last launched, or `0`.
@@ -102,27 +114,29 @@ what earns a repo its own zone, and `lastActivityAt` is what sorts the whole map
 | `archived` | boolean | Archived in the harness's own records |
 | `sizeBytes` | number | Transcript size. **This is how finished a building looks**, on a log scale |
 | `source` | string | Free-form, for your own bookkeeping (the Claude adapter uses `desktop` / `cli`) |
-| `canOpen` / `canArchive` | boolean | Whether this thread supports those actions. The UI greys the buttons out |
+| `canOpen` / `canArchive` / `canRename` | boolean | Whether this thread supports those actions. The UI greys the buttons out. `canArchive` also tells the colony the harness has an app-owned record it may rewrite from memory, which decides how long a rename is re-asserted |
 | `ref` | object | **Opaque.** Whatever *you* need to find this thread again |
 
 ### About `ref`
 
 `ref` is the whole reason the browser does not know what a session id looks like. Your adapter
-puts whatever it needs in there, the page hands it straight back on open and archive, and
-nothing between the two ever inspects it.
+puts whatever it needs in there, the page hands it straight back on open, rename and archive,
+and nothing between the two ever inspects it.
 
 Keep it small and keep it serialisable — it makes a round trip through JSON on every action.
 Do not put a file handle, a class instance, or a secret in it.
 
 ## Ground rules
 
-- **Read-only by default.** The one exception in the whole project is the archive flag. A
-  harness's transcripts are somebody's actual work; the colony is a viewer, not an editor.
+- **Read-only by default.** The only exceptions in the whole project are the archive flag
+  and the title. A harness's transcripts are somebody's actual work; the colony is a viewer,
+  not an editor.
 - **Never block the scan.** It runs on a poll. Cache anything expensive against file mtime —
   see `transcriptMeta` in `claude-code.mjs`, which is what keeps a 12MB transcript from being
   reparsed every few seconds.
-- **Read heads, not whole files.** `readHead` in `../lib/fsutil.mjs` pulls the first chunk and
-  drops a trailing partial line, so `JSON.parse` never sees half a record.
+- **Read heads and tails, not whole files.** `readHead` in `../lib/fsutil.mjs` pulls the first
+  chunk and drops a trailing partial line, so `JSON.parse` never sees half a record;
+  `readTail` does the same from the end, for records a harness appends late — a rename, say.
 - **Expect malformed data.** A session being written *right now* is a normal thing to trip
   over. Skip that record and move on; do not throw the pass away.
 - **Never widen `id` collisions.** The colony keys its archive list and saved layout on `id`.

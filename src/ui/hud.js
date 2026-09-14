@@ -36,6 +36,7 @@ const ICON = {
   help: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.4 2.3c-.7.3-1 .8-1 1.6v.4"/><path d="M12 17h.01"/></svg>`,
   open: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-8.5 8.5"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>`,
   archive: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18v3H3z"/><path d="M5 9v10h14V9"/><path d="M10 13h4"/></svg>`,
+  rename: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4l10.5-10.5a2 2 0 0 0 0-2.8l-1.2-1.2a2 2 0 0 0-2.8 0L4 16z"/><path d="M13.5 6.5l4 4"/></svg>`,
   close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
   back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>`,
   plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.7a8 8 0 0 1-8.5 8 9.3 9.3 0 0 1-2.7-.4L4.5 21l1.4-4.1a7.9 7.9 0 0 1-2.4-5.7A8 8 0 0 1 12 3.6a8 8 0 0 1 8.5 8.1z"/><path d="M12 8.6v5.4M9.3 11.3h5.4"/></svg>`,
@@ -336,7 +337,21 @@ export class Hud {
     on('#btn-planet', 'click', () => this.actions.cyclePlanet?.())
     on('#btn-time', 'click', () => this.actions.cycleTime?.())
     on('#btn-open', 'click', () => this.actions.openThread?.())
+    on('#btn-rename', 'click', () => this.startRename())
     on('#btn-archive', 'click', () => this.actions.archiveThread?.())
+    // The rename field lives inside the card: Enter saves, Escape or clicking away cancels.
+    on('.thread-pop .rename', 'submit', (e) => {
+      e.preventDefault()
+      this._finishRename(true)
+    })
+    on('.thread-pop .rename input', 'keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        this._finishRename(false)
+      }
+    })
+    on('.thread-pop .rename input', 'blur', () => this._finishRename(false))
     on('#btn-deselect', 'click', () => this.actions.select?.(null))
     on('#btn-new-session', 'click', () => this.actions.newConversation?.())
     on('#btn-reveal', 'click', () => this.actions.revealProject?.())
@@ -486,6 +501,9 @@ export class Hud {
    */
   setSelection(agent, thread) {
     const card = this.$('.thread-pop')
+    // A half-typed rename belongs to the thread that was selected, not the next one. The
+    // poll refreshes the card for the *same* thread every few seconds; that must not cancel.
+    if (this._renaming && this.selected?.thread?.id !== thread?.id) this._finishRename(false)
     // Only ever one accent button in the panel: whichever action is the immediate one.
     this.$('#btn-new-session').classList.toggle('primary', !agent || !thread)
     if (!agent || !thread) {
@@ -517,6 +535,36 @@ export class Hud {
     // often is how a HUD starts costing frames.
     this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
     this.$('#btn-open').disabled = thread.canOpen === false
+    this.$('#btn-rename').disabled = thread.canRename === false
+  }
+
+  /**
+   * Swap the card's title for a text field holding the current name. A browser `prompt()`
+   * would do the same job but freezes the whole page, and the colony keeps moving.
+   */
+  startRename() {
+    const thread = this.selected?.thread
+    if (!thread || thread.canRename === false || this._renaming) return
+    this._renaming = true
+    const card = this.$('.thread-pop')
+    const input = this.$('.thread-pop .rename input')
+    input.value = thread.title || ''
+    card.classList.add('renaming')
+    input.focus()
+    input.select()
+  }
+
+  _finishRename(save) {
+    if (!this._renaming) return
+    this._renaming = false
+    const card = this.$('.thread-pop')
+    const input = this.$('.thread-pop .rename input')
+    card.classList.remove('renaming')
+    const thread = this.selected?.thread
+    const title = input.value.trim()
+    input.blur()
+    if (!save || !thread || !title || title === thread.title) return
+    this.actions.renameThread?.(title)
   }
 
   /**
@@ -871,6 +919,7 @@ const TEMPLATE = `
     <div class="avatar"><canvas></canvas></div>
     <div class="info">
       <div class="title"></div>
+      <form class="rename" autocomplete="off"><input type="text" maxlength="200" spellcheck="false" placeholder="Thread name" aria-label="Thread name"></form>
       <div class="meta"></div>
     </div>
     <button class="btn icon ghost" id="btn-deselect" title="Deselect (Esc)">${ICON.close}</button>
@@ -878,6 +927,7 @@ const TEMPLATE = `
   <div class="progress"><i></i></div>
   <div class="pair">
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
+    <button class="btn icon" id="btn-rename" title="Rename — in the harness's own records too (R)">${ICON.rename}</button>
     <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>
   </div>
 </div>
@@ -905,6 +955,7 @@ const TEMPLATE = `
       <div>
         <div class="k"><span>Next needing you</span><kbd>N</kbd></div>
         <div class="k"><span>Open thread</span><kbd>Enter</kbd></div>
+        <div class="k"><span>Rename</span><kbd>R</kbd></div>
         <div class="k"><span>Archive</span><kbd>A</kbd></div>
         <div class="k"><span>New conversation</span><kbd>C</kbd></div>
         <div class="k"><span>Orbit mode</span><kbd>O</kbd></div>
