@@ -375,6 +375,7 @@ function toThread(t) {
   return {
     ...rest,
     canOpen: isDesktopId(desktopSessionId) || isCliId(cliSessionId),
+    canPrompt: Boolean(isCliId(cliSessionId)),
     // The cwd rides along because resuming from a terminal has to happen in the folder the
     // session ran in — the worktree, not the repo root.
     ref: { desktopSessionId, desktopSessionIds, cliSessionId, cwd: t.cwd || '' },

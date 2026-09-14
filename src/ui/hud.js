@@ -743,9 +743,10 @@ export class Hud {
     const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
     this.$('.thread-pop .progress > i').style.width = `${pct}%`
     this.$('.thread-pop .progress > i').style.background = hex(agent.trim.getHex())
+    const canPrompt = Boolean(thread.canPrompt)
     const commandBox = this.$('.thread-command-box')
     if (commandBox) {
-      commandBox.hidden = thread.canOpen === false
+      commandBox.hidden = !canPrompt
     }
     const promptInput = this.$('.thread-prompt-input')
     if (promptInput) {
@@ -756,7 +757,7 @@ export class Hud {
     }
     const chips = this.$('.quick-chips')
     if (chips) {
-      chips.hidden = !thread.unread
+      chips.hidden = !canPrompt || !thread.unread
     }
 
     // Measured once per selection rather than per frame: placing the card beside its

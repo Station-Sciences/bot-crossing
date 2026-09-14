@@ -78,3 +78,15 @@ test('/api/terminal route rejects missing or non-existent folders', async () => 
   assert.equal(statusCode, 400)
   assert.ok(JSON.parse(body).error.includes('not on this machine'))
 })
+
+test('only harnesses with remote CLI prompt injection support canPrompt', async () => {
+  const ag = (await import('../server/harnesses/antigravity.mjs')).default
+  const cursor = (await import('../server/harnesses/cursor.mjs')).default
+  const codex = (await import('../server/harnesses/codex.mjs')).default
+
+  // Antigravity, Cursor, Codex threads do not claim canPrompt
+  assert.equal((await ag.scanThreads()).every((t) => !t.canPrompt), true)
+  assert.equal((await cursor.scanThreads()).every((t) => !t.canPrompt), true)
+  assert.equal((await codex.scanThreads()).every((t) => !t.canPrompt), true)
+})
+

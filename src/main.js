@@ -325,12 +325,15 @@ const actions = {
   sendPrompt: async (promptText) => {
     const thread = threads.find((t) => t.id === selectedId)
     if (!thread || !promptText) return
+    if (!thread.canPrompt) {
+      hud.toast(`Cannot send prompt directly to ${thread.harnessName || 'this harness'}`, 'err')
+      return
+    }
     try {
       await openThread(thread, promptText)
       const cmd = cliCommandFor(thread, promptText)
       navigator.clipboard?.writeText(cmd).catch(() => {})
 
-      actions.markViewed()
       colony.astronauts.celebrate(thread.id)
       const preview = promptText.length > 30 ? promptText.slice(0, 28) + '…' : promptText
       hud.toast(`Resumed with: "${preview}"`)
