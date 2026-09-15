@@ -136,24 +136,40 @@ function trySpawn(cmd, args, cwd) {
  * Run `argv` in a new terminal window with `cwd` as its working directory.
  *
  * The caller has already resolved both: `argv[0]` is an absolute executable and `cwd` an
- * existing directory. Which terminal is up to the machine — `$TERMINAL` if set, then the
- * desktop's own, then whatever is installed, then Debian's `x-terminal-emulator` alternative.
- * That last is tried by name and given `-e`, the one form Debian policy guarantees, because on
- * Ubuntu it is a wrapper script that knows no other flags — pass it `--working-directory` and it
- * opens an empty window. Which is also why a real `gnome-terminal` is looked for first.
+ * existing directory. Which terminal is up to the machine — `BOT_CROSSING_TERMINAL` if set, then
+ * `$TERMINAL`, then the desktop's own, then whatever is installed, then Debian's
+ * `x-terminal-emulator` alternative. That last is tried by name and given `-e`, the one form
+ * Debian policy guarantees, because on Ubuntu it is a wrapper script that knows no other flags —
+ * pass it `--working-directory` and it opens an empty window. Which is also why a real
+ * `gnome-terminal` is looked for first. Both variables are read on every call, and either may be
+ * a name on PATH or an absolute path.
  *
- * A `$TERMINAL` the table does not know is skipped rather than guessed at: `-e` means "the rest
- * of the line" to xterm and "one string, which I will split" to tilix, and guessing wrong opens
- * a window on the wrong command — worse than moving on to a terminal we do know.
+ * A named terminal the table does not know is skipped rather than guessed at: `-e` means "the
+ * rest of the line" to xterm and "one string, which I will split" to tilix, and guessing wrong
+ * opens a window on the wrong command — worse than moving on to a terminal we do know.
+ *
+ * On macOS the desktop walk finds nothing, so only a named terminal works there — kitty,
+ * alacritty, ghostty and wezterm take the same flags on both. Terminal.app and iTerm are not
+ * driven: `open -a` cannot hand them an argv without a shell string in between.
  */
 export async function openInTerminal(argv, cwd) {
   const wellFormed = Array.isArray(argv) && argv.length > 0 && argv.every((a) => typeof a === 'string' && a)
   if (!wellFormed || !path.isAbsolute(argv[0]) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) {
     return { ok: false, error: 'Invalid launch command' }
   }
-  if (!(await hasDisplay())) return { ok: false, error: 'No graphical display to open a terminal on' }
+  // Only Linux can be headless in a way worth naming; a macOS session always has a window server,
+  // and a terminal that cannot open there says so through its exit code.
+  if (process.platform === 'linux' && !(await hasDisplay())) {
+    return { ok: false, error: 'No graphical display to open a terminal on' }
+  }
 
-  const preferred = [process.env.TERMINAL || '', ...desktopOrder(), ...GENERAL_ORDER, 'x-terminal-emulator']
+  const preferred = [
+    process.env.BOT_CROSSING_TERMINAL || '',
+    process.env.TERMINAL || '',
+    ...desktopOrder(),
+    ...GENERAL_ORDER,
+    'x-terminal-emulator',
+  ]
   const names = [...new Set(preferred.filter(Boolean))]
   const deadline = Date.now() + WALK_BUDGET_MS
   const tried = new Set()
@@ -187,6 +203,6 @@ export async function openInTerminal(argv, cwd) {
     ok: false,
     error: lastError
       ? `Could not open a terminal (${lastError})`
-      : 'No terminal emulator found — set $TERMINAL or install one (gnome-terminal, konsole, kitty, xterm)',
+      : 'No terminal emulator found — set BOT_CROSSING_TERMINAL or $TERMINAL, or install one (gnome-terminal, konsole, kitty, xterm)',
   }
 }

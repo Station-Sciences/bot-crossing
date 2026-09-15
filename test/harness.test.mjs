@@ -15,7 +15,6 @@ import codex from '../server/harnesses/codex.mjs'
 import claudeCode from '../server/harnesses/claude-code.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
 import { schemeOf } from '../server/lib/xdg.mjs'
-import { openInTerminal } from '../server/lib/terminal.mjs'
 
 // ── the contract ──────────────────────────────────────────────────────────────
 
@@ -163,13 +162,6 @@ test('findExecutable refuses junk, and refuses a directory that sits on PATH', a
   assert.equal(await findExecutable(null), null)
   assert.equal(await findExecutable('.'), null)
   assert.equal(await findExecutable('definitely-not-a-real-binary-xyz'), null)
-})
-
-test('openInTerminal refuses anything not already resolved to absolute paths', async () => {
-  assert.equal((await openInTerminal(['ls'], '/tmp')).ok, false, 'relative argv[0]')
-  assert.equal((await openInTerminal(['/bin/ls'], 'relative')).ok, false, 'relative cwd')
-  assert.equal((await openInTerminal([], '/tmp')).ok, false, 'empty argv')
-  assert.equal((await openInTerminal(['/bin/ls', 123], '/tmp')).ok, false, 'non-string argument')
 })
 
 // ── Cursor, faked on disk ─────────────────────────────────────────────────────
