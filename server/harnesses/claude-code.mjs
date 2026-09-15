@@ -194,7 +194,18 @@ async function scanTranscripts() {
 const TAIL_BYTES = 64 * 1024
 
 /**
- * Whether a transcript ends with the turn handed back to you.
+ * `mcp__<server>__<tool>` -> `<server>`, else `''`. The two literal underscores between the
+ * fixed `mcp` prefix and the tool name are the delimiter — `split('__')` still parses a server
+ * id that itself holds single underscores, e.g. `mcp__ccd_session__mark_chapter` -> `ccd_session`.
+ */
+function mcpServerOf(toolName) {
+  const parts = typeof toolName === 'string' ? toolName.split('__') : []
+  return parts.length >= 3 && parts[0] === 'mcp' ? parts[1] : ''
+}
+
+/**
+ * Whether a transcript ends with the turn handed back to you, and which MCP server (if any)
+ * the last tool call was reaching into.
  *
  * A live process is not the same thing as work in progress. The CLI holds its process open while
  * it sits at the prompt, so "the pid exists and the file moved recently" marks a thread that
@@ -204,28 +215,32 @@ const TAIL_BYTES = 64 * 1024
  * The transcript says which it is. A last assistant message that called a tool is mid-turn; one
  * that called nothing has handed the turn back and the reply is yours. `stop_reason` alone will
  * not do — it is `end_turn` on a main thread's last message and empty on some others — so what
- * the message *called* is the half worth testing.
+ * the message *called* is the half worth testing. The same tool_use entries name an MCP server
+ * whenever a name matches `mcp__<server>__<tool>`, which is all the colony's MCP pipes need.
  *
  * Only threads that could plausibly be running pay for this, so it costs one small read each.
  */
-async function awaitingReply(file) {
+async function inspectTail(file) {
   let records
   try {
     records = jsonLines(await readTail(file, TAIL_BYTES))
   } catch {
-    return false
+    return { waiting: false, mcpServer: '' }
   }
   for (let i = records.length - 1; i >= 0; i--) {
     const r = records[i]
     // A user turn, a tool result or an attachment all mean the model speaks next — whatever the
     // process is doing, it is not waiting on anyone.
-    if (r.type === 'user') return false
+    if (r.type === 'user') return { waiting: false, mcpServer: '' }
     if (r.type !== 'assistant') continue
     const content = r.message?.content
-    const calling = Array.isArray(content) && content.some((c) => c?.type === 'tool_use')
-    return !calling && r.message?.stop_reason !== 'tool_use'
+    const calls = Array.isArray(content) ? content.filter((c) => c?.type === 'tool_use') : []
+    const waiting = !calls.length && r.message?.stop_reason !== 'tool_use'
+    // Last call wins when a turn asked for several tools at once — it is the one still in flight.
+    const mcpServer = waiting ? '' : mcpServerOf(calls[calls.length - 1]?.name)
+    return { waiting, mcpServer }
   }
-  return false
+  return { waiting: false, mcpServer: '' }
 }
 
 /** Transcript metadata is expensive to parse, so keep it until the file changes. */
@@ -470,9 +485,14 @@ async function scanThreads() {
     const seenAt = thread.recordActivityAt ?? thread.lastActivityAt
     thread.unread = thread.desktopSessionIds.length > 0 && seenAt > thread.lastFocusedAt
     const fresh = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
-    const waiting =
-      thread.hasLiveProcess && fresh && thread.transcriptFile ? await awaitingReply(thread.transcriptFile) : false
+    const tail =
+      thread.hasLiveProcess && fresh && thread.transcriptFile ? await inspectTail(thread.transcriptFile) : null
+    const waiting = tail?.waiting ?? false
     thread.running = thread.hasLiveProcess && fresh && !waiting
+    // Only meaningful while the thread is actually running the call — a server name left over
+    // from the last thing it did, after it has handed the turn back, would light a pipe to
+    // nowhere.
+    thread.activeMcp = thread.running ? tail?.mcpServer || '' : ''
     // A thread that handed the turn back wants you, whether or not the desktop app has ever seen
     // it — the only way a terminal-only thread can ask for anything at all.
     if (waiting) thread.unread = true

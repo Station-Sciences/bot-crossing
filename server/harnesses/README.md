@@ -89,6 +89,7 @@ what earns a repo its own zone, and `lastActivityAt` is what sorts the whole map
 | `lastActivityAt` | number | Epoch ms. Sorts the colony and drives the "asleep for 3 days" behaviour |
 | `lastFocusedAt` | number | Epoch ms, `0` if unknowable |
 | `running` | boolean | Working **right now** — the astronaut hammers away |
+| `activeMcp` | string | Name of the MCP server this thread is calling a tool on right now, or `''`. Lights the pipe from its astronaut to the MCP factory. Optional — leave it `''` if your harness cannot see which tool is in flight |
 | `unread` | boolean | Moved on since you last looked — the astronaut stops and holds a `?` |
 | `hasError` | boolean | Errored — the astronaut slumps, red eyes |
 | `starred` / `routine` / `prState` | | Optional extras; `prState: 'merged'` triggers the confetti |

@@ -59,6 +59,8 @@ const SLOTS_PER_CELL = 7
 const MAX_CELLS = 9
 /** The lattice cell the ship owns. Nothing else may be placed there. */
 const SHIP_CELL = { q: -2, r: 1 }
+/** The lattice cell the MCP factory owns, on the ship's own side of the colony. */
+const MCP_CELL = { q: -2, r: -1 }
 
 const HEX_DIRS = [
   [1, 0],
@@ -170,15 +172,15 @@ function hexDistance(a, b) {
  * gone those cells are now islands floating in the sea. That is what folding away dormant repos
  * does the first time it runs.
  *
- * The ship's cell counts as walkable here even though nobody may claim it: a colony that
- * happens to wrap around the ship is not two colonies.
+ * The ship's cell — and the MCP factory's — count as walkable here even though nobody may
+ * claim them: a colony that happens to wrap around either is not two colonies.
  */
 function isConnected(out) {
   const cells = new Map()
   for (const [, list] of out) for (const c of list) cells.set(key(c.q, c.r), c)
   if (cells.size < 2) return true
-  const ship = key(SHIP_CELL.q, SHIP_CELL.r)
-  const passable = new Set([...cells.keys(), ship])
+  const stepStones = [key(SHIP_CELL.q, SHIP_CELL.r), key(MCP_CELL.q, MCP_CELL.r)]
+  const passable = new Set([...cells.keys(), ...stepStones])
   const [start] = cells.keys()
   const seen = new Set([start])
   const queue = [cells.get(start)]
@@ -192,9 +194,9 @@ function isConnected(out) {
       queue.push(n)
     }
   }
-  // The ship is a stepping stone, not a member: it does not have to be reached for the colony
-  // to be whole, and it does not count toward what has to be.
-  seen.delete(ship)
+  // Stepping stones, not members: neither has to be reached for the colony to be whole, and
+  // neither counts toward what has to be.
+  for (const s of stepStones) seen.delete(s)
   return seen.size === cells.size
 }
 
@@ -208,7 +210,7 @@ export function allocateCells(projects, previous = new Map()) {
 }
 
 function layOut(projects, previous) {
-  const reserved = key(SHIP_CELL.q, SHIP_CELL.r)
+  const reserved = new Set([key(SHIP_CELL.q, SHIP_CELL.r), key(MCP_CELL.q, MCP_CELL.r)])
   const wanted = projects.map((p) => ({ id: p.id, want: cellsNeeded(p.size) }))
   const total = wanted.reduce((n, w) => n + w.want, 0)
 
@@ -228,7 +230,7 @@ function layOut(projects, previous) {
   for (let ring = 0; (pool.length < total + 30 || ring <= farthest) && ring < 12; ring++) {
     for (const cell of hexRing(ring)) {
       const k = key(cell.q, cell.r)
-      if (k === reserved) continue
+      if (reserved.has(k)) continue
       pool.push(cell)
       free.add(k)
     }
@@ -305,6 +307,11 @@ function growBlob(cells, want, free) {
 
 export const shipPosition = () => {
   const { x, z } = hexToWorld(SHIP_CELL.q, SHIP_CELL.r)
+  return new THREE.Vector3(x, 0, z)
+}
+
+export const mcpFactoryPosition = () => {
+  const { x, z } = hexToWorld(MCP_CELL.q, MCP_CELL.r)
   return new THREE.Vector3(x, 0, z)
 }
 

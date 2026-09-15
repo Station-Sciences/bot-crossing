@@ -240,6 +240,11 @@ export class Hud {
         'Hide dormant repos',
         'hideDormant',
         'Takes a repo off the map when every thread in it has been quiet for three days. Its threads are untouched, and it comes back to the same ground the moment one wakes up.'
+      ),
+      this._toggle(
+        'MCP factory',
+        'mcpFactory',
+        'A building housing the MCP servers your agents call. A pipe glows from an astronaut to it while their thread is mid-call.'
       )
     )
     view.append(

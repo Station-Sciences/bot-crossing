@@ -5,6 +5,7 @@ import {
   Plot,
   allocateCells,
   shipPosition,
+  mcpFactoryPosition,
   createLabel,
   hashString,
   worldToHex,
@@ -14,6 +15,7 @@ import {
 } from '../world/plots.js'
 import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.js'
 import { Ship } from '../world/ship.js'
+import { MCPFactory, MCPPipeField } from '../world/mcpFactory.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
 import { MAX_AGENT_CAP } from '../core/settings.js'
@@ -137,6 +139,9 @@ export class Colony {
     scene.add(this.worldGroup)
 
     this.ship = new Ship(scene, shipPosition())
+    this.mcpFactory = new MCPFactory(scene, mcpFactoryPosition())
+    this.mcpFactory.group.visible = settings.get('mcpFactory')
+    this.mcpPipes = new MCPPipeField(scene, this.mcpFactory)
     this.astronauts = new Astronauts(scene, settings)
     this.astronauts.world = this._world()
     // Sized for the largest preset rather than the current one: unlike the astronaut meshes these
@@ -187,6 +192,8 @@ export class Colony {
     // at construction — a world with more relief would otherwise leave it hovering.
     const ship = shipPosition()
     this.ship.group.position.y = terrainHeight(ship.x, ship.z, this.planet)
+    const mcp = mcpFactoryPosition()
+    this.mcpFactory.group.position.y = terrainHeight(mcp.x, mcp.z, this.planet)
 
     this._dustTint.set(this.planet.ground.high)
   }
@@ -213,6 +220,8 @@ export class Colony {
     }
     const ship = shipPosition()
     clear.push({ x: ship.x, z: ship.z, r: 7.5 })
+    const mcp = mcpFactoryPosition()
+    clear.push({ x: mcp.x, z: mcp.z, r: this.mcpFactory.width * 0.6 + 2 })
     this.scatterGroup = createScatter(this.planet, this.settings.get('scatterDensity'), clear)
     this.worldGroup.add(this.scatterGroup)
     this._scatterFootprint = this._plotFootprint()
@@ -254,6 +263,7 @@ export class Colony {
     this.particles.onSettingsChanged(changed)
     if (changed.has('showLabels')) this._syncLabels()
     if (changed.has('timeOfDay')) this.sky.setTime(this.settings.get('timeOfDay'))
+    if (changed.has('mcpFactory')) this.mcpFactory.group.visible = this.settings.get('mcpFactory')
   }
 
   // ── roster ──────────────────────────────────────────────────────────────────────────
@@ -563,6 +573,8 @@ export class Colony {
 
     const ship = shipPosition()
     obstacles.push({ x: ship.x, z: ship.z, r: 3.4 + AGENT_RADIUS })
+    const mcp = mcpFactoryPosition()
+    obstacles.push({ x: mcp.x, z: mcp.z, r: this.mcpFactory.width * 0.55 + AGENT_RADIUS })
     this.nav.rebuild(obstacles)
   }
 
@@ -715,6 +727,15 @@ export class Colony {
     // One write turns every rotor in the colony.
     buildingUniforms.uTime.value = elapsed
     this.ship.update(dt, elapsed, night)
+    const mcpEnabled = this.settings.get('mcpFactory')
+    if (mcpEnabled) {
+      this.mcpPipes.update(dt, elapsed, this.astronauts.agents, true)
+      this.mcpFactory.update(dt, elapsed, night)
+    } else if (this.mcpPipes.connections.size) {
+      // The toggle just went off — let anything mid-fade finish rather than snapping to gone.
+      this.mcpPipes.update(dt, elapsed, this.astronauts.agents, false)
+      this.mcpFactory.update(dt, elapsed, night)
+    }
 
     this._growBuildings(dt)
     this.astronauts.update(dt, elapsed)
@@ -867,6 +888,8 @@ export class Colony {
   dispose() {
     this.sky.dispose()
     this.ship.dispose()
+    this.mcpPipes.dispose()
+    this.mcpFactory.dispose()
     this.astronauts.dispose()
     this.indicators.dispose()
     this.particles.dispose()
