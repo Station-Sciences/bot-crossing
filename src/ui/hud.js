@@ -23,7 +23,8 @@ import { PLOT_PALETTE, hashString } from '../world/plots.js'
  * here rather than asked for.
  */
 const IS_MAC = /Mac/.test(navigator.platform)
-const FILE_MANAGER = IS_MAC ? 'Finder' : /Win/.test(navigator.platform) ? 'Explorer' : 'Files'
+const IS_WIN = /Win/.test(navigator.platform)
+const FILE_MANAGER = IS_MAC ? 'Finder' : IS_WIN ? 'Explorer' : 'Files'
 
 const ICON = {
   settings: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
@@ -235,6 +236,21 @@ export class Hud {
 
     // View.
     const view = group('View')
+    // The server has no terminal table for Windows yet, so a choice there would only ever toast an
+    // error; better not to offer it.
+    if (!IS_WIN) {
+      view.append(
+        this._select(
+          'Open threads in',
+          'openIn',
+          [
+            ['app', 'Desktop app'],
+            ['terminal', 'Terminal'],
+          ],
+          'Terminal runs the harness’s own CLI in a new window, so the CLI has to be installed. BOT_CROSSING_TERMINAL or $TERMINAL picks the emulator.'
+        )
+      )
+    }
     view.append(
       this._toggle(
         'Hide dormant repos',

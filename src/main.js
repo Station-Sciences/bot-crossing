@@ -148,8 +148,9 @@ const actions = {
     }
     try {
       const harness = harnessForProject(name)
-      await newSession(folder, harness)
-      hud.toast(`New thread in ${name} — opening ${harnessLabel(harness)}`)
+      const shown = await newSession(folder, harness, settings.get('openIn'))
+      const where = shown.via === 'terminal' ? `${harnessLabel(harness)} in a terminal` : `opening ${harnessLabel(harness)}`
+      hud.toast(`New thread in ${name} — ${where}`)
       // It lands as an astronaut walking down the ramp, once it has a record to scan.
       setTimeout(poll, 6000)
     } catch (err) {
@@ -226,9 +227,10 @@ const actions = {
     const thread = threads.find((t) => t.id === selectedId)
     if (!thread) return
     try {
-      await openThread(thread)
+      const shown = await openThread(thread, settings.get('openIn'))
       colony.astronauts.celebrate(thread.id)
-      hud.toast(`Opened in ${thread.harnessName || 'your harness'}`)
+      const name = thread.harnessName || 'your harness'
+      hud.toast(shown.via === 'terminal' ? `Opened ${name} in a terminal` : `Opened in ${name}`)
       // Opening is the thing that makes a thread no longer unread, so refresh shortly after.
       setTimeout(poll, 1800)
     } catch (err) {
