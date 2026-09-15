@@ -313,6 +313,81 @@ export class Particles {
     }
   }
 
+  /**
+   * Sand kicked up by a fish nosing at the seabed — the reef's welding sparks. Heavy, so it
+   * hangs for a moment and settles back onto whatever it was lifted from.
+   */
+  sediment(x, y, z, tint, ground = 0) {
+    if (!this.enabled) return
+    const n = this.settings.get('particles') === 'full' ? 4 : 2
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2
+      const s = 0.25 + Math.random() * 0.45
+      this.dust.spawn(
+        x + (Math.random() - 0.5) * 0.2,
+        y + 0.05,
+        z + (Math.random() - 0.5) * 0.2,
+        Math.cos(a) * s,
+        0.35 + Math.random() * 0.4,
+        Math.sin(a) * s,
+        tint.r,
+        tint.g,
+        tint.b,
+        0.14 + Math.random() * 0.16,
+        1.2 + Math.random() * 1.0,
+        1.6,
+        0.06,
+        ground
+      )
+    }
+  }
+
+  /** A bubble. Rises, wobbles a little, and is gone before it reaches anything. */
+  bubble(x, y, z, size = 0.06) {
+    if (!this.enabled) return
+    this.glow.spawn(
+      x,
+      y,
+      z,
+      (Math.random() - 0.5) * 0.15,
+      0.5 + Math.random() * 0.4,
+      (Math.random() - 0.5) * 0.15,
+      0.7,
+      1.0,
+      1.3,
+      size + Math.random() * 0.03,
+      1.6 + Math.random() * 1.2,
+      0.2,
+      -0.12
+    )
+  }
+
+  /** A burst of glitter that drifts rather than falls — confetti, under water. */
+  sparkle(x, y, z, color) {
+    if (!this.enabled) return
+    const n = this.settings.get('particles') === 'full' ? 16 : 7
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2
+      const b = (Math.random() - 0.5) * Math.PI
+      const s = 0.8 + Math.random() * 1.4
+      this.glow.spawn(
+        x,
+        y,
+        z,
+        Math.cos(a) * Math.cos(b) * s,
+        Math.sin(b) * s + 0.4,
+        Math.sin(a) * Math.cos(b) * s,
+        color.r * (1.4 + Math.random()),
+        color.g * (1.4 + Math.random()),
+        color.b * (1.4 + Math.random()),
+        0.06 + Math.random() * 0.06,
+        1.2 + Math.random() * 0.9,
+        1.8,
+        -0.03
+      )
+    }
+  }
+
   /** Sleepy `z` bubbles. */
   snooze(x, y, z) {
     if (!this.enabled) return
@@ -334,6 +409,26 @@ export class Particles {
     const r = 12 + Math.random() * 34
     const x = camera.position.x + Math.cos(a) * r
     const z = camera.position.z + Math.sin(a) * r
+    if (planet.underwater) {
+      // Marine snow: pale specks that sink very slowly through the water column. It is the
+      // single cheapest cue that this is water and not fog.
+      this.dust.spawn(
+        x,
+        0.5 + Math.random() * 9,
+        z,
+        (Math.random() - 0.5) * 0.12,
+        -0.02 - Math.random() * 0.05,
+        (Math.random() - 0.5) * 0.12,
+        0.82,
+        0.92,
+        0.98,
+        0.05 + Math.random() * 0.04,
+        6 + Math.random() * 6,
+        0.3,
+        0
+      )
+      return
+    }
     const terra = planet.id === 'terra'
     this.dust.spawn(
       x,

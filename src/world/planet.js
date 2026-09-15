@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { atlasTexture, hasPart, part } from './kit.js'
+import { coralMaterial, decorateCaustics, reefKinds } from './reef.js'
 
 /**
  * The three worlds you can put the colony on, and the terrain generator that draws them.
@@ -65,6 +66,31 @@ export const PLANETS = {
     companion: { name: 'Moon', color: 0xdcd8cc, size: 3.2, glow: 0xfff6e0 },
     dust: 0.25,
   },
+  reef: {
+    id: 'reef',
+    name: 'Reef',
+    blurb: 'Shallow, sunlit, and everybody here is a fish.',
+    // Pale sand, mottled where seagrass has taken. `tint` is the warm dry-sand highlight.
+    ground: { low: 0x9c8f6a, high: 0xd9c8a0, tint: 0xf0e2bc },
+    rock: 0x5f6a66,
+    horizon: 0x0e4f66,
+    // From under the water the "sky" is the surface: bright and green-blue straight up,
+    // deepening to the same haze the fog uses at the edge of sight.
+    sky: { top: 0x8fe0ea, bottom: 0x0f5a72 },
+    fog: { color: 0x0f5a72, near: 22, far: 118 },
+    sun: { color: 0xcaf4f0, intensity: 2.1, night: 0.12 },
+    ambient: { sky: 0x4fb8d8, ground: 0x2f5a4a, intensity: 0.9 },
+    // Water scatters like a thick atmosphere would: soft shadows, no stars, a wide sun.
+    atmosphere: 1,
+    craters: 0,
+    roughness: 0.55,
+    scatter: 'coral',
+    companion: { name: 'Sun', color: 0xffffff, size: 0, glow: 0xffffff },
+    // Marine snow: the slow drift of particulate that is what makes water read as water.
+    dust: 0.7,
+    underwater: true,
+    ripples: 1,
+  },
 }
 
 const GROUND_SIZE = 340
@@ -104,6 +130,7 @@ export function createTerrain(planet, detail, seed = 1337) {
     const gentle = fbm(noise, x * 0.035, z * 0.035, 3) * 0.5
     const hills = fbm(noise, x * 0.012, z * 0.012, 4) * 9 + fbm(noise, x * 0.05, z * 0.05, 2) * 1.4
     let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
+    y += ripple(x, z, noise, planet.ripples)
 
     for (const crater of craters) {
       const d = Math.hypot(x - crater.x, z - crater.z)
@@ -140,6 +167,9 @@ export function createTerrain(planet, detail, seed = 1337) {
     // is what sells "dust" rather than "plastic".
     envMapIntensity: 0.3,
   })
+  // Under water the sand is where the light show lands: the caustic pattern is multiplied
+  // into the albedo, so it is lit and shadowed by the same sun as everything on it.
+  if (planet.underwater) decorateCaustics(mat, 1.0)
   const mesh = new THREE.Mesh(geo, mat)
   mesh.receiveShadow = true
   mesh.name = 'terrain'
@@ -149,12 +179,24 @@ export function createTerrain(planet, detail, seed = 1337) {
   return mesh
 }
 
+/**
+ * Sand ripples: the parallel ridges a current combs into a seabed. A single sine along one
+ * axis, bent by the low-frequency noise so the lines wander rather than ruling the ground,
+ * and small enough that fish never notice them — they only exist to catch the caustics.
+ */
+function ripple(x, z, noise, amount) {
+  if (!amount) return 0
+  const bend = fbm(noise, x * 0.05, z * 0.05, 2) * 2.2
+  return Math.sin(x * 1.35 + z * 0.4 + bend) * 0.045 * amount
+}
+
 function sampleHeight(x, z, noise, craters, planet) {
   const dist = Math.hypot(x, z)
   const outside = THREE.MathUtils.smoothstep(dist, COLONY_RADIUS - 6, COLONY_RADIUS + 40)
   const gentle = fbm(noise, x * 0.035, z * 0.035, 3) * 0.5
   const hills = fbm(noise, x * 0.012, z * 0.012, 4) * 9 + fbm(noise, x * 0.05, z * 0.05, 2) * 1.4
   let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
+  y += ripple(x, z, noise, planet.ripples)
   for (const crater of craters) {
     const d = Math.hypot(x - crater.x, z - crater.z)
     if (d > crater.r * 1.5) continue
@@ -243,24 +285,31 @@ export function createScatter(planet, density, keepClear = [], seed = 4242) {
 
   const rand = mulberry(seed)
   const isFlora = planet.scatter === 'flora'
+  const isReef = planet.scatter === 'coral'
   const recipe = SCATTER[planet.scatter] || SCATTER.rocks
-  const ready = recipe.every((r) => hasPart(r.part, 'forest'))
+  // The reef grows its own scatter — kelp, fans, sponges — from primitives, so it needs no
+  // kit and is never waiting on one.
+  const ready = isReef || recipe.every((r) => hasPart(r.part, 'forest'))
 
-  const kinds = ready
-    ? recipe.map((r) => ({ ...r, geo: part(r.part, 'forest'), weight: r.weight }))
-    : fallbackShapes(isFlora).map((r) => ({ ...r, weight: 1 }))
+  const kinds = isReef
+    ? Object.values(reefKinds()).map((k) => ({ ...k, tint: false }))
+    : ready
+      ? recipe.map((r) => ({ ...r, geo: part(r.part, 'forest'), weight: r.weight }))
+      : fallbackShapes(isFlora).map((r) => ({ ...r, weight: 1 }))
 
   // One material for the lot. The pack's atlas carries the greens and the greys, and the
   // per-instance colour is a *tint* on top of it — white for anything already the right
   // colour, the planet's own rock for a boulder that has to belong to this world.
-  const atlas = ready ? atlasTexture('forest') : null
-  const material = new THREE.MeshStandardMaterial({
-    map: atlas,
-    color: 0xffffff,
-    roughness: isFlora ? 0.82 : 0.95,
-    metalness: 0,
-    flatShading: !ready,
-  })
+  const atlas = ready && !isReef ? atlasTexture('forest') : null
+  const material = isReef
+    ? coralMaterial({ instanced: true })
+    : new THREE.MeshStandardMaterial({
+        map: atlas,
+        color: 0xffffff,
+        roughness: isFlora ? 0.82 : 0.95,
+        metalness: 0,
+        flatShading: !ready,
+      })
 
   const total = kinds.reduce((sum, k) => sum + k.weight, 0)
   const meshes = kinds.map((k) =>

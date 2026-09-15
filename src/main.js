@@ -705,7 +705,7 @@ async function boot() {
     hud.toast('Could not load the model assets — run `npm run assets`', 'err')
     console.error(kitError || crewError)
   }
-  colony.astronauts.setRig(crewRig())
+  colony.setRig(crewRig())
   if (!kitError) colony.onAssetsReady()
 
   await poll()

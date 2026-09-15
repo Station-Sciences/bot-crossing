@@ -491,7 +491,23 @@ const CLI_DIRS = [
   '/usr/local/bin',
   '/usr/bin',
 ]
-const cliBinary = () => findExecutable('claude', CLI_DIRS)
+/**
+ * findExecutable takes a literal name, and on Windows the CLI is `claude.exe` / `claude.cmd`.
+ * PATHEXT is consulted in its own order so the shim the user actually has wins.
+ */
+async function cliBinary() {
+  const exts = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
+    : ['']
+  for (const ext of exts) {
+    const bin = await findExecutable(`claude${ext.toLowerCase()}`, CLI_DIRS)
+    if (bin) return bin
+  }
+  return null
+}
+
+/** Platforms where a thread can be handed to a terminal instead of the desktop app. */
+const TERMINAL_PLATFORM = process.platform === 'linux' || process.platform === 'win32'
 
 /**
  * Hands the thread back to Claude Code. `epitaxy/<local_…>` *navigates* the desktop app
@@ -506,7 +522,7 @@ async function openThread(ref) {
   else if (isCliId(cliSessionId)) url = `claude://resume?session=${cliSessionId}`
 
   let command
-  if (process.platform === 'linux' && isCliId(cliSessionId)) {
+  if (TERMINAL_PLATFORM && isCliId(cliSessionId)) {
     const bin = await cliBinary()
     if (bin) command = { argv: [bin, '--resume', cliSessionId], cwd: typeof cwd === 'string' ? cwd : '' }
   }
@@ -523,7 +539,7 @@ async function openThread(ref) {
 async function newSession(dir) {
   const url = `claude://code/new?${new URLSearchParams({ folder: dir })}`
   let command
-  if (process.platform === 'linux') {
+  if (TERMINAL_PLATFORM) {
     const bin = await cliBinary()
     if (bin) command = { argv: [bin], cwd: dir }
   }

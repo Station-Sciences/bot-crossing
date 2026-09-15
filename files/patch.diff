@@ -1,0 +1,88 @@
+diff --git a/server/api.mjs b/server/api.mjs
+index f661314..41ead37 100644
+--- a/server/api.mjs
++++ b/server/api.mjs
+@@ -4,6 +4,7 @@ import path from 'node:path'
+ import { spawn } from 'node:child_process'
+ import { fileURLToPath } from 'node:url'
+ import { openInTerminal, schemeHasHandler, schemeOf } from './lib/xdg.mjs'
++import { openInTerminalWindows } from './lib/win-terminal.mjs'
+ import {
+   defaultHarness,
+   harnessStatus,
+@@ -190,14 +191,39 @@ async function resolveFolder(folder) {
+  * `claude --resume` looks a session up under the folder it ran in, and a terminal that opens on
+  * "No conversation found" and closes is worse than an error toast.
+  */
++/**
++ * The checks a command has to clear before any terminal sees it, on either platform.
++ *
++ * A folder that exists but cannot be entered fails inside every terminal alike, and the
++ * terminal gets the blame; say what is actually wrong instead.
++ */
++async function inTerminal(command) {
++  if (!command.cwd) return { error: 'That thread has no folder on record to resume in' }
++  const dir = await resolveFolder(command.cwd)
++  if (!dir) return { error: 'The folder that thread ran in is not on this machine any more' }
++  const enterable = await fsp.access(dir, fsp.constants.X_OK).then(() => true, () => false)
++  if (!enterable) return { error: 'The folder that thread ran in cannot be entered' }
++  return { dir }
++}
++
+ async function present(result) {
+   // Only the reason reaches the page: a failure may still carry the adapter's command.
+   if (!result || !result.ok) return { ok: false, error: result?.error || 'Nothing to open' }
+ 
+   if (process.platform !== 'linux') {
+-    if (!result.url) return { ok: false, error: 'That harness has no deep link to open on this platform' }
+-    launch(result.url)
+-    return { ok: true, url: result.url }
++    if (result.url) {
++      launch(result.url)
++      return { ok: true, url: result.url }
++    }
++    // No deep link. On Windows that is not the end of it: an adapter may have handed back a
++    // command instead, which is the only thing a resident astronaut ever has. The deep-link
++    // branch stays first so a harness that has one keeps opening in its own app.
++    if (process.platform === 'win32' && result.command) {
++      const cwd = await inTerminal(result.command)
++      if (cwd.error) return { ok: false, error: cwd.error }
++      return openInTerminalWindows(result.command.argv, cwd.dir)
++    }
++    return { ok: false, error: 'That harness has no deep link to open on this platform' }
+   }
+ 
+   if (result.url && (await schemeHasHandler(result.url))) {
+@@ -205,14 +231,9 @@ async function present(result) {
+     return { ok: true, url: result.url }
+   }
+   if (result.command) {
+-    if (!result.command.cwd) return { ok: false, error: 'That thread has no folder on record to resume in' }
+-    const cwd = await resolveFolder(result.command.cwd)
+-    if (!cwd) return { ok: false, error: 'The folder that thread ran in is not on this machine any more' }
+-    // A folder that exists but cannot be entered fails inside every terminal alike, and the
+-    // terminal gets the blame; say what is actually wrong instead.
+-    const enterable = await fsp.access(cwd, fsp.constants.X_OK).then(() => true, () => false)
+-    if (!enterable) return { ok: false, error: 'The folder that thread ran in cannot be entered' }
+-    return openInTerminal(result.command.argv, cwd)
++    const cwd = await inTerminal(result.command)
++    if (cwd.error) return { ok: false, error: cwd.error }
++    return openInTerminal(result.command.argv, cwd.dir)
+   }
+   const scheme = schemeOf(result.url)
+   return {
+diff --git a/server/harnesses/index.mjs b/server/harnesses/index.mjs
+index 044de5c..534d1e2 100644
+--- a/server/harnesses/index.mjs
++++ b/server/harnesses/index.mjs
+@@ -9,8 +9,9 @@
+ import claudeCode from './claude-code.mjs'
+ import codex from './codex.mjs'
+ import cursor from './cursor.mjs'
++import automations from './automations.mjs'
+ 
+-export const HARNESSES = [claudeCode, codex, cursor]
++export const HARNESSES = [claudeCode, codex, cursor, automations]
+ 
+ export const harnessById = (id) => HARNESSES.find((h) => h.id === id) || null
+ 

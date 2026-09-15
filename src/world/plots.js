@@ -3,6 +3,7 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { DECK_TEXTURE_SCALE, KERB_UV, deckSurface, kerbSurface } from './surfaces.js'
 import { atlasTexture, hasPart, part } from './kit.js'
 import { mulberry } from './planet.js'
+import { coralMaterial, decorateCaustics, reefKinds } from './reef.js'
 
 /**
  * Project plots — the fenced-off sections of the map, one per repo.
@@ -406,12 +407,19 @@ function hexPrism(radius, height) {
 // ── plot mesh ─────────────────────────────────────────────────────────────────────────
 
 export class Plot {
-  constructor({ id, name, index, cells, accent }) {
+  /**
+   * `style` is the one thing the metaphor gets to choose about a territory: `deck` is the
+   * colony's plated slab with kerbs and lamp posts, `reef` is a rock shelf with a glowing
+   * crust of coral round its edge and anemones for lamps. Same lattice, same slots, same
+   * height — only the dressing differs, so nothing that stands on a plot has to know.
+   */
+  constructor({ id, name, index, cells, accent, style = 'deck' }) {
     this.id = id
     this.name = name
     this.index = index
     this.cells = cells
     this.accent = accent
+    this.style = style
     this.cellKeys = new Set(cells.map((c) => key(c.q, c.r)))
 
     // The plot's origin is its **root** tile — the one it was seeded on and never gives up
@@ -483,10 +491,15 @@ export class Plot {
     // as in full sun the edge reads as one stop darker, and a backdrop that goes to nothing
     // at the plot boundary just looks like a hole.
     const color = new THREE.Color(this.accent).offsetHSL(0, -0.38, 0).multiplyScalar(0.9)
-    const plate = deckSurface()
-    this.deck = new THREE.Mesh(
-      geo,
-      new THREE.MeshStandardMaterial({
+    let material
+    if (this.style === 'reef') {
+      // A shelf of reef rock: grey stone with a wash of the repo's colour, no plating, and
+      // the same caustics as the sand so the shelf reads as part of the seabed.
+      const rock = new THREE.Color(0x6a6e66).lerp(new THREE.Color(this.accent), 0.42)
+      material = decorateCaustics(new THREE.MeshStandardMaterial({ color: rock, roughness: 0.95, metalness: 0 }), 0.8)
+    } else {
+      const plate = deckSurface()
+      material = new THREE.MeshStandardMaterial({
         color,
         map: plate.map,
         normalMap: plate.normalMap,
@@ -495,7 +508,8 @@ export class Plot {
         roughness: 0.82,
         metalness: 0.18,
       })
-    )
+    }
+    this.deck = new THREE.Mesh(geo, material)
     this.deck.receiveShadow = true
     this.group.add(this.deck)
   }
@@ -541,18 +555,30 @@ export class Plot {
     parts.forEach((g) => g.dispose())
     // Every bar is the same length, so a box's own 0..1 UVs put the same run of dashes on
     // each one without any reprojection.
-    const lit = kerbSurface()
-    this.borderMaterial = new THREE.MeshStandardMaterial({
-      color: this.accent,
-      map: lit.map,
-      emissive: this.accent,
-      emissiveMap: lit.emissiveMap,
-      emissiveIntensity: 0.5,
-      normalMap: lit.normalMap,
-      normalScale: new THREE.Vector2(0.5, 0.5),
-      roughness: 0.55,
-      metalness: 0.1,
-    })
+    if (this.style === 'reef') {
+      // The edge of a reef shelf is where the coral crust grows: a low ridge in the repo's
+      // colour, bioluminescent after dark, doing the kerb's job of outlining the zone.
+      this.borderMaterial = new THREE.MeshStandardMaterial({
+        color: this.accent,
+        emissive: this.accent,
+        emissiveIntensity: 0.3,
+        roughness: 0.85,
+        metalness: 0,
+      })
+    } else {
+      const lit = kerbSurface()
+      this.borderMaterial = new THREE.MeshStandardMaterial({
+        color: this.accent,
+        map: lit.map,
+        emissive: this.accent,
+        emissiveMap: lit.emissiveMap,
+        emissiveIntensity: 0.5,
+        normalMap: lit.normalMap,
+        normalScale: new THREE.Vector2(0.5, 0.5),
+        roughness: 0.55,
+        metalness: 0.1,
+      })
+    }
     this.border = new THREE.Mesh(geo, this.borderMaterial)
     this.border.receiveShadow = true
     this.group.add(this.border)
@@ -562,19 +588,25 @@ export class Plot {
   _buildPosts() {
     const posts = []
     const lamps = []
+    const reef = this.style === 'reef'
     this.localCenters.forEach(({ x, z }, i) => {
       const [px, pz] = corner(x, z, (i * 2) % 6, TILE * 0.72)
-      const pole = new THREE.CylinderGeometry(0.055, 0.085, 1.8, 6)
-      pole.translate(px, DECK_TOP + 0.9, pz)
+      // A lamp post on the colony; on the reef, a glowing anemone on a short stalk.
+      const pole = reef
+        ? new THREE.CylinderGeometry(0.2, 0.3, 0.5, 8)
+        : new THREE.CylinderGeometry(0.055, 0.085, 1.8, 6)
+      pole.translate(px, DECK_TOP + (reef ? 0.25 : 0.9), pz)
       posts.push(pole)
-      const head = new THREE.SphereGeometry(0.14, 8, 6)
-      head.translate(px, DECK_TOP + 1.84, pz)
+      const head = new THREE.SphereGeometry(reef ? 0.26 : 0.14, 8, 6)
+      head.translate(px, DECK_TOP + (reef ? 0.6 : 1.84), pz)
       lamps.push(head)
     })
 
     const poleMesh = new THREE.Mesh(
       BufferGeometryUtils.mergeGeometries(posts),
-      new THREE.MeshStandardMaterial({ color: 0x9a9aa2, roughness: 0.7, metalness: 0.3 })
+      reef
+        ? new THREE.MeshStandardMaterial({ color: new THREE.Color(this.accent).offsetHSL(0, -0.1, -0.15), roughness: 0.9 })
+        : new THREE.MeshStandardMaterial({ color: 0x9a9aa2, roughness: 0.7, metalness: 0.3 })
     )
     poleMesh.castShadow = true
     this.lampMaterial = new THREE.MeshBasicMaterial({ color: this.accent, toneMapped: true })
@@ -596,6 +628,7 @@ export class Plot {
    * Seeded off the plot's own name, so a repo's yard is laid out the same on every reload.
    */
   _buildClutter() {
+    if (this.style === 'reef') return this._buildReefClutter()
     const props = ['containers_A', 'containers_B', 'containers_C', 'containers_D', 'cargo_A', 'cargo_B', 'cargo_A_packed', 'cargo_B_packed', 'lights']
     if (!props.every((n) => hasPart(n))) return
 
@@ -643,6 +676,52 @@ export class Plot {
       geo,
       new THREE.MeshStandardMaterial({ map: atlasTexture(), roughness: 0.6, metalness: 0.05 })
     )
+    this.clutter.castShadow = true
+    this.clutter.receiveShadow = true
+    this.group.add(this.clutter)
+  }
+
+  /**
+   * The reef's version of the yard: sponges, small corals and the odd rock along the edge
+   * of each shelf, in the same two bands the crates use so nothing lands on a coral head.
+   * Grown rather than loaded, so it never waits on a kit.
+   */
+  _buildReefClutter() {
+    const kinds = reefKinds()
+    const names = ['sponge', 'anemone', 'rock', 'stag', 'table', 'fan']
+    const rand = mulberry(hashString(this.id) + 17)
+    const parts = []
+    this.clutterSpots = []
+
+    this.localCenters.forEach(({ x, z }) => {
+      const spots = []
+      for (let i = 0; i < 6; i++) {
+        if (rand() > 0.5) spots.push({ a: (Math.PI / 3) * i + Math.PI / 3, r: TILE * (0.52 + rand() * 0.1) })
+      }
+      for (let i = 0; i < 3; i++) {
+        if (rand() > 0.4) spots.push({ a: rand() * Math.PI * 2, r: TILE * (0.78 + rand() * 0.07) })
+      }
+      for (const { a, r } of spots) {
+        const kind = kinds[names[Math.floor(rand() * names.length)]]
+        const geo = kind.geo.clone()
+        const s = 0.7 + rand() * 0.4
+        geo.scale(s, s, s)
+        geo.rotateY(rand() * Math.PI * 2)
+        const px = x + Math.cos(a) * r
+        const pz = z + Math.sin(a) * r
+        geo.computeBoundingBox()
+        const box = geo.boundingBox
+        const spread = Math.max(box.max.x - box.min.x, box.max.z - box.min.z) * 0.5
+        geo.translate(px, DECK_TOP - s * kind.sink * 0.5, pz)
+        parts.push(geo)
+        this.clutterSpots.push({ x: px, z: pz, r: Math.max(0.4, spread * 0.8) })
+      }
+    })
+
+    if (!parts.length) return
+    const geo = BufferGeometryUtils.mergeGeometries(parts, false)
+    parts.forEach((g) => g.dispose())
+    this.clutter = new THREE.Mesh(geo, coralMaterial({ phase: hashString(this.id) % 50 }))
     this.clutter.castShadow = true
     this.clutter.receiveShadow = true
     this.group.add(this.clutter)

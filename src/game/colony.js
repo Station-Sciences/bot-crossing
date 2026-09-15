@@ -14,7 +14,9 @@ import {
 } from '../world/plots.js'
 import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.js'
 import { Ship } from '../world/ship.js'
+import { LightShafts, Wreck, createCoral, reefUniforms } from '../world/reef.js'
 import { Astronauts } from '../agents/astronauts.js'
+import { Fish } from '../agents/fish.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
 import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
@@ -136,9 +138,11 @@ export class Colony {
     this.worldGroup.name = 'world'
     scene.add(this.worldGroup)
 
-    this.ship = new Ship(scene, shipPosition())
-    this.astronauts = new Astronauts(scene, settings)
-    this.astronauts.world = this._world()
+    this.nav = new Navigation()
+    /** The crew rig, once boot has baked it. Kept so a later switch back to land can rebuild. */
+    this.crewRig = null
+    this.shafts = null
+    this._buildInhabitants()
     // Sized for the largest preset rather than the current one: unlike the astronaut meshes these
     // buffers are never rebuilt, so allocating against today's `maxAgents` means raising quality
     // later silently starves the badges — the one `?` that wants you being the thing that goes
@@ -146,8 +150,6 @@ export class Colony {
     this.indicators = new Indicators(scene, settings, MAX_AGENT_CAP)
     this.particles = new Particles(scene, settings)
     this.scaffolds = new Scaffolds(scene, 320)
-    this.nav = new Navigation()
-    this.astronauts.setNavigation(this.nav)
 
     this.plotGroup = new THREE.Group()
     this.labelGroup = new THREE.Group()
@@ -240,9 +242,70 @@ export class Colony {
   setPlanet(id) {
     const planet = PLANETS[id]
     if (!planet || planet === this.planet) return
+    const wasUnderwater = Boolean(this.planet.underwater)
     this.planet = planet
     this.sky.setPlanet(planet)
     this._buildTerrain()
+    if (Boolean(planet.underwater) !== wasUnderwater) this._switchBiome()
+  }
+
+  /**
+   * Who lives here, and where they arrive from. On land that is the crew and the lander; on
+   * the reef it is the fish and the wreck. Both pairs answer the same calls, so nothing else
+   * in the colony has to know which it got — `this.astronauts` keeps its name because the
+   * whole game reaches for it by that name.
+   */
+  _buildInhabitants() {
+    const underwater = Boolean(this.planet.underwater)
+    this.underwater = underwater
+    this.ship = underwater ? new Wreck(this.scene, shipPosition()) : new Ship(this.scene, shipPosition())
+    this.astronauts = underwater ? new Fish(this.scene, this.settings) : new Astronauts(this.scene, this.settings)
+    this.astronauts.camera = this.camera
+    this.astronauts.world = this._world()
+    this.astronauts.setNavigation(this.nav)
+    if (this.crewRig) this.astronauts.setRig(this.crewRig)
+    if (this.terrain) this.ship.group.position.y = terrainHeight(shipPosition().x, shipPosition().z, this.planet)
+    if (underwater) this.shafts = new LightShafts(this.scene)
+  }
+
+  /** Hand over the baked crew rig. Kept, so the crew can be rebuilt after a spell under water. */
+  setRig(rig) {
+    if (!rig) return
+    this.crewRig = rig
+    this.astronauts.setRig?.(rig)
+  }
+
+  /**
+   * Land to water or back: everybody leaves, every structure comes down, every zone is
+   * re-dressed, and the last roster is replayed into the new cast. Zones keep their cells —
+   * the layout memory is untouched — so the map is the same map in a different costume.
+   */
+  _switchBiome() {
+    this.astronauts.dispose()
+    this.ship.dispose()
+    this.shafts?.dispose()
+    this.shafts = null
+    for (const [, entry] of this.buildings) {
+      this.worldGroup.remove(entry.mesh)
+      entry.mesh.geometry.dispose()
+      entry.mesh.material.dispose()
+      entry.mesh.customDepthMaterial?.dispose()
+    }
+    this.buildings.clear()
+    for (const [, plot] of this.plots) {
+      this.plotGroup.remove(plot.group)
+      if (plot.label) {
+        this.labelGroup.remove(plot.label)
+        plot.label.userData.dispose?.()
+      }
+      plot.dispose()
+    }
+    this.plots.clear()
+    this.plotOrder = []
+    this.usedAccents.clear()
+    this.scaffolds.update([])
+    this._buildInhabitants()
+    if (this._lastRoster) this.setThreads(...this._lastRoster)
   }
 
   onSettingsChanged(changed, scope) {
@@ -264,6 +327,8 @@ export class Colony {
    * moves nothing on screen.
    */
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
+    // Everybody is "known" on a replay: a change of world is not a hundred new threads.
+    this._lastRoster = [threads, archivedIds, hiddenProjects, new Set(threads.map((t) => t.id))]
     const now = Date.now()
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
 
@@ -410,7 +475,7 @@ export class Colony {
       const cells = layout.get(name)
       if (!cells?.length) return
       const accent = this._pickAccent(name)
-      const plot = new Plot({ id: name, name, index, cells, accent })
+      const plot = new Plot({ id: name, name, index, cells, accent, style: this.underwater ? 'reef' : 'deck' })
       plot.signature = wanted.get(name)
       this.plots.set(name, plot)
       this.plotGroup.add(plot.group)
@@ -474,7 +539,8 @@ export class Colony {
     const target = 1
 
     if (!entry) {
-      const mesh = createBuilding({ seed: hashString(thread.id), accent: plot.accent })
+      const make = this.underwater ? createCoral : createBuilding
+      const mesh = make({ seed: hashString(thread.id), accent: plot.accent })
       const pos = plot.worldSlot(index)
       mesh.position.copy(pos)
       mesh.rotation.y = ((hashString(thread.id) >>> 8) % 360) * (Math.PI / 180)
@@ -714,6 +780,11 @@ export class Colony {
     buildingUniforms.uNight.value = night
     // One write turns every rotor in the colony.
     buildingUniforms.uTime.value = elapsed
+    // And one set moves every frond and every caustic on the reef.
+    reefUniforms.uReefTime.value = elapsed
+    reefUniforms.uReefNight.value = night
+    reefUniforms.uCaustic.value = this.sky.dayFactor ?? 1
+    this.shafts?.update(elapsed, this.camera, this.sky.sunDir, this.sky.dayFactor ?? 1)
     this.ship.update(dt, elapsed, night)
 
     this._growBuildings(dt)
@@ -724,7 +795,8 @@ export class Colony {
     this.particles.ambient(dt, this.camera, this.planet)
     this.particles.update(dt)
     this._updatePlots(night, elapsed)
-    this._updateScaffolds()
+    // Nobody scaffolds a coral.
+    if (!this.underwater) this._updateScaffolds()
     this._updateLabels(dt)
   }
 
@@ -764,6 +836,7 @@ export class Colony {
   /** Particle emission, driven by what each astronaut is doing. */
   _emit(dt, elapsed) {
     if (!this.particles.enabled) return
+    if (this.underwater) return this._emitReef(dt, elapsed)
     const full = this.settings.get('particles') === 'full'
 
     for (const agent of this.astronauts.agents) {
@@ -819,6 +892,53 @@ export class Colony {
     }
   }
 
+  /**
+   * The reef's particles, driven by what each fish is doing: sediment where one is nosing
+   * the sand, a rising string of bubbles from one that is waiting, a flash of glitter at
+   * the top of a celebratory loop, and the odd bubble from a sleeper.
+   */
+  _emitReef(dt, elapsed) {
+    const full = this.settings.get('particles') === 'full'
+    for (const agent of this.astronauts.agents) {
+      if (agent.scale < 0.5) continue
+      const ground = agent.groundY || 0
+      const nx = agent.pos.x + Math.sin(agent.yaw) * 0.5
+      const nz = agent.pos.z + Math.cos(agent.yaw) * 0.5
+
+      if (agent.digging) {
+        agent._dig = (agent._dig || 0) + dt
+        if (agent._dig > (full ? 0.18 : 0.32)) {
+          agent._dig = 0
+          this.particles.sediment(nx, ground + 0.05, nz, this._dustTint, ground)
+        }
+      }
+
+      if (agent.state === 'at-site' && agent.status === 'waiting' && Math.random() < dt * 1.6) {
+        this.particles.bubble(nx, agent.pos.y + 0.1, nz, 0.05)
+      }
+
+      if (agent.status === 'celebrating' && agent.flash > 0.9 && !agent._cheered) {
+        agent._cheered = true
+        this.particles.sparkle(agent.pos.x, agent.pos.y, agent.pos.z, this._c.set(0xffe08a))
+      } else if (agent.flash <= 0.1) {
+        agent._cheered = false
+      }
+
+      if (agent.state === 'at-site' && agent.status === 'sleeping' && Math.random() < dt * 0.25) {
+        this.particles.bubble(nx, agent.pos.y + 0.1, nz, 0.04)
+      }
+
+      // A fast swimmer leaves a thin trail of bubbles.
+      if (full && (agent.walkAmp || 0) > 0.6 && Math.random() < dt * 4) {
+        this.particles.bubble(agent.pos.x, agent.pos.y, agent.pos.z, 0.035)
+      }
+
+      if (agent.state === 'spawning' || (agent.state === 'leaving' && agent.scale < 0.6)) {
+        if (Math.random() < dt * 3) this.ship.ping()
+      }
+    }
+  }
+
   _updatePlots(night, elapsed) {
     const urgent = this.urgentPlots
     for (const plot of this.plotOrder) plot.setNight(night, urgent?.has(plot.id) ?? false, elapsed)
@@ -867,6 +987,7 @@ export class Colony {
   dispose() {
     this.sky.dispose()
     this.ship.dispose()
+    this.shafts?.dispose()
     this.astronauts.dispose()
     this.indicators.dispose()
     this.particles.dispose()

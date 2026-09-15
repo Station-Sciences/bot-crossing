@@ -4,6 +4,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { openInTerminal, schemeHasHandler, schemeOf } from './lib/xdg.mjs'
+import { openInTerminalWindows } from './lib/win-terminal.mjs'
 import {
   defaultHarness,
   harnessStatus,
@@ -190,14 +191,41 @@ async function resolveFolder(folder) {
  * `claude --resume` looks a session up under the folder it ran in, and a terminal that opens on
  * "No conversation found" and closes is worse than an error toast.
  */
+/**
+ * The checks a command has to clear before any terminal sees it, on either platform.
+ *
+ * A folder that exists but cannot be entered fails inside every terminal alike, and the
+ * terminal gets the blame; say what is actually wrong instead.
+ */
+async function inTerminal(command) {
+  if (!command.cwd) return { error: 'That thread has no folder on record to resume in' }
+  const dir = await resolveFolder(command.cwd)
+  if (!dir) return { error: 'The folder that thread ran in is not on this machine any more' }
+  const enterable = await fsp.access(dir, fsp.constants.X_OK).then(() => true, () => false)
+  if (!enterable) return { error: 'The folder that thread ran in cannot be entered' }
+  return { dir }
+}
+
 async function present(result) {
   // Only the reason reaches the page: a failure may still carry the adapter's command.
   if (!result || !result.ok) return { ok: false, error: result?.error || 'Nothing to open' }
 
   if (process.platform !== 'linux') {
-    if (!result.url) return { ok: false, error: 'That harness has no deep link to open on this platform' }
-    launch(result.url)
-    return { ok: true, url: result.url }
+    // On Windows a terminal is the preferred home: a command, when the adapter has one, goes
+    // there first, and the deep link (which opens the desktop app) is only the fallback.
+    if (process.platform === 'win32' && result.command) {
+      const cwd = await inTerminal(result.command)
+      if (!cwd.error) {
+        const opened = await openInTerminalWindows(result.command.argv, cwd.dir)
+        if (opened.ok) return opened
+      }
+      if (!result.url) return { ok: false, error: cwd.error || 'Could not open a terminal' }
+    }
+    if (result.url) {
+      launch(result.url)
+      return { ok: true, url: result.url }
+    }
+    return { ok: false, error: 'That harness has no deep link to open on this platform' }
   }
 
   if (result.url && (await schemeHasHandler(result.url))) {
@@ -205,14 +233,9 @@ async function present(result) {
     return { ok: true, url: result.url }
   }
   if (result.command) {
-    if (!result.command.cwd) return { ok: false, error: 'That thread has no folder on record to resume in' }
-    const cwd = await resolveFolder(result.command.cwd)
-    if (!cwd) return { ok: false, error: 'The folder that thread ran in is not on this machine any more' }
-    // A folder that exists but cannot be entered fails inside every terminal alike, and the
-    // terminal gets the blame; say what is actually wrong instead.
-    const enterable = await fsp.access(cwd, fsp.constants.X_OK).then(() => true, () => false)
-    if (!enterable) return { ok: false, error: 'The folder that thread ran in cannot be entered' }
-    return openInTerminal(result.command.argv, cwd)
+    const cwd = await inTerminal(result.command)
+    if (cwd.error) return { ok: false, error: cwd.error }
+    return openInTerminal(result.command.argv, cwd.dir)
   }
   const scheme = schemeOf(result.url)
   return {
