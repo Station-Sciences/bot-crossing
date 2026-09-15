@@ -204,5 +204,20 @@ export async function usageSnapshot() {
   }
 
   const remainingPct = budgetUsd > 0 ? Math.max(0, Math.min(1, 1 - usedUsd / budgetUsd)) : 1
-  return { usedUsd, budgetUsd, monthStart, monthEnd, remainingPct, scannedAt: Date.now() }
+
+  /**
+   * Burn rate against the calendar, not against the budget: spending half your budget on day 1
+   * is not "50% left", it is badly off pace, so the canister's colour is driven by this rather
+   * than by `remainingPct`. 1.0 is dead on pace (the share of the budget spent equals the share
+   * of the month elapsed); above 1 is spending faster than the month is passing.
+   *
+   * `pctElapsed` is floored rather than left to approach zero, so a burst of spend in the first
+   * few minutes of the month reads as "badly over pace" rather than as a division blowing up to
+   * a meaningless, off-the-chart number.
+   */
+  const pctUsed = budgetUsd > 0 ? usedUsd / budgetUsd : 0
+  const pctElapsed = Math.max(0.01, Math.min(1, (Date.now() - monthStart) / Math.max(1, monthEnd - monthStart)))
+  const pace = pctUsed / pctElapsed
+
+  return { usedUsd, budgetUsd, monthStart, monthEnd, remainingPct, pace, scannedAt: Date.now() }
 }

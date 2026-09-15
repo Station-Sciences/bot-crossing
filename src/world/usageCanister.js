@@ -3,9 +3,10 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
 /**
  * The usage canister: a fixed glass tube of glowing goo, off to one side of the ship, standing
- * in for however much of a monthly dollar budget is left. Full and green at the start of the
- * month, it sinks and reddens as spend climbs, and a beacon on its cap starts flashing once
- * there is almost nothing left.
+ * in for however much of a monthly dollar budget is left. The goo's *height* is the budget
+ * remaining; its *colour* is something else — burn rate against the calendar, red if spend is
+ * outrunning the days already gone, green if it is comfortably behind. A beacon on the cap
+ * starts flashing once the budget itself is nearly gone, regardless of pace.
  *
  * Built the same way as `MCPFactory`: a merged, vertex-coloured hull for the frame, separate
  * meshes only for the parts that actually change at runtime — here, the goo itself and the cap
@@ -87,10 +88,15 @@ export class UsageCanister {
     this.group.name = 'usage-canister'
     scene.add(this.group)
 
-    /** Smoothed 0..1 — what the shader actually draws. Chases `target` so a poll landing
+    /** Smoothed 0..1 fill — what the shader actually draws. Chases `target` so a poll landing
      *  mid-frame reads as the goo settling rather than jumping. */
     this.level = 1
     this.target = 1
+    /** Smoothed 0..1 *colour* score — 1 is comfortably under pace (green), 0 is badly over it
+     *  (red). Tracked separately from `level`: a nearly-empty budget you are still ahead of
+     *  schedule on should read amber or green, not red just because the tank is low. */
+    this.pace = 1
+    this.paceTarget = 1
     this.pulse = 0
     this._flash = 0
 
@@ -228,15 +234,22 @@ export class UsageCanister {
     this._signTexture.needsUpdate = true
   }
 
-  /** `remainingPct` is 0..1 — what's left of the monthly dollar budget so far this month. */
-  setLevel(remainingPct) {
-    this.target = THREE.MathUtils.clamp(remainingPct, 0, 1)
+  /** `info` is an `/api/usage` snapshot: `remainingPct` (0..1) sets the fill, `pace` (spend's
+   *  share of the budget divided by the month's share elapsed — 1.0 is dead on pace) sets the
+   *  colour. */
+  setLevel(info) {
+    this.target = THREE.MathUtils.clamp(info.remainingPct, 0, 1)
+    // 1.0 → green (comfortably under pace), 0.5 → yellow (right on pace), 0 → red (2x pace or
+    // worse). Linear rather than anything fancier: the whole point is reading "over or under"
+    // at a glance, not the exact multiple.
+    this.paceTarget = THREE.MathUtils.clamp(1 - info.pace / 2, 0, 1)
   }
 
   update(dt, elapsed, night) {
     this.level = THREE.MathUtils.damp(this.level, this.target, 1.4, dt)
+    this.pace = THREE.MathUtils.damp(this.pace, this.paceTarget, 1.4, dt)
 
-    const t = this.level
+    const t = this.pace
     const color = t > 0.5 ? COLOR_MID.clone().lerp(COLOR_HIGH, (t - 0.5) * 2) : COLOR_LOW.clone().lerp(COLOR_MID, t * 2)
 
     this.gooMaterial.uniforms.uTime.value = elapsed

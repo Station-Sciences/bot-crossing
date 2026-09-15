@@ -887,9 +887,9 @@ export class Colony {
     return this.astronauts.byId.get(id)
   }
 
-  /** `remainingPct` is 0..1 of the plan's token budget left since the last reset — see `/api/usage`. */
-  setUsage(remainingPct) {
-    this.usageCanister.setLevel(remainingPct)
+  /** `info` is an `/api/usage` snapshot — `remainingPct` sets the fill, `pace` sets the colour. */
+  setUsage(info) {
+    this.usageCanister.setLevel(info)
   }
 
   setUiVisible(visible) {

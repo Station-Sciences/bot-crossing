@@ -284,7 +284,7 @@ const actions = {
   setUsageBudget: async (budgetUsd) => {
     try {
       const usage = await setUsageBudget(budgetUsd)
-      colony.setUsage(usage.remainingPct)
+      colony.setUsage(usage)
       hud.setUsage(usage)
     } catch (err) {
       hud.toast(err.message || 'Could not set that budget', 'err')
@@ -699,7 +699,7 @@ async function poll() {
 async function pollUsage() {
   try {
     const usage = await fetchUsage()
-    colony.setUsage(usage.remainingPct)
+    colony.setUsage(usage)
     hud.setUsage(usage)
   } catch {
     /* no transcripts to read, or the endpoint failed — the canister just holds its last level */
