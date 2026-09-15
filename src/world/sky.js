@@ -30,10 +30,32 @@ const SKY_FRAG = /* glsl */ `
   uniform float uGlow;       // how much atmosphere there is to scatter light
   uniform float uDisc;       // sun disc brightness, faded out below the horizon
   uniform float uHaze;
+  uniform float uWater;      // 1 when the dome is a water column seen from below
+  uniform float uTime;
 
   void main() {
     vec3 d = normalize( vDir );
     float h = clamp( d.y * 0.5 + 0.5, 0.0, 1.0 );
+
+    if ( uWater > 0.5 ) {
+      // Under water the dome is the water itself. Straight up is the bright underside of
+      // the surface; toward the horizon everything runs into the same haze the fog uses,
+      // and below it there is only deeper water. The sun is a wide, wobbling glow rather
+      // than a disc — refraction through a moving surface never holds it still.
+      float up = clamp( d.y, 0.0, 1.0 );
+      vec3 col = mix( uHorizon, uTop, pow( up, 0.9 ) );
+      col = mix( col * 0.55, col, smoothstep( -0.5, 0.05, d.y ) );
+      float sun = max( dot( d, uSunDir ), 0.0 );
+      float wob = sin( d.x * 38.0 + uTime * 1.6 ) * sin( d.z * 33.0 - uTime * 1.2 ) * 0.012;
+      col += uSunColor * pow( sun, 4.0 ) * uGlow * 0.22;
+      col += uSunColor * smoothstep( 0.975 + wob, 0.998 + wob, sun ) * uDisc * 0.55;
+      // Snell's window: the bright cap overhead through which the sky is actually seen.
+      col += uTop * pow( up, 6.0 ) * 0.35 * uGlow;
+      gl_FragColor = vec4( col, 1.0 );
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+      return;
+    }
 
     // A hard-ish gradient near the horizon and a slow one overhead reads far more like sky
     // than a linear ramp does.
@@ -177,6 +199,8 @@ export class Sky {
       uGlow: { value: 1 },
       uDisc: { value: 1 },
       uHaze: { value: 0.3 },
+      uWater: { value: 0 },
+      uTime: { value: 0 },
     }
     const mat = new THREE.ShaderMaterial({
       uniforms: this.domeUniforms,
@@ -347,7 +371,12 @@ export class Sky {
     // world keeps its identity after dark instead of all three going the same black.
     this.nightTop = new THREE.Color(planet.sky.top).multiplyScalar(0.16).lerp(new THREE.Color(0x03040c), 0.7)
     this.nightBottom = new THREE.Color(planet.horizon).multiplyScalar(0.5)
-    this.duskColor = new THREE.Color(planet.atmosphere > 0.4 ? 0xd4692f : 0x4a3550)
+    // Sunset through water is not orange: the red end is gone within a few metres of the
+    // surface, so dusk on the reef goes to a deep teal rather than to fire.
+    this.duskColor = new THREE.Color(planet.underwater ? 0x1f6a7a : planet.atmosphere > 0.4 ? 0xd4692f : 0x4a3550)
+    this.domeUniforms.uWater.value = planet.underwater ? 1 : 0
+    // No stars and nothing hanging in the sky from the seabed — the surface is in the way.
+    this.companion.visible = !planet.underwater
 
     const comp = planet.companion
     this.companionBody.material.color.set(comp.color)
@@ -440,7 +469,8 @@ export class Sky {
 
     // Stars fade with the sky, and never appear at all on a thick-atmosphere daytime.
     this.stars.material.uniforms.uOpacity.value = Math.pow(1 - day, 1.6) * (1 - planet.atmosphere * 0.35)
-    this.stars.visible = this.settings.get('stars') && this.stars.material.uniforms.uOpacity.value > 0.01
+    this.stars.visible =
+      !planet.underwater && this.settings.get('stars') && this.stars.material.uniforms.uOpacity.value > 0.01
 
     this.companionHalo.material.uniforms.uStrength.value = 0.35 + (1 - day) * 0.65
     this.companionBody.material.emissiveIntensity = 0.25 + (1 - day) * 0.55
@@ -474,6 +504,9 @@ export class Sky {
     this.companion.position.copy(camera.position).add(this._companionOffset())
     this.companion.lookAt(camera.position)
     this.starUniforms.uTwinkle.value = elapsed
+    // The water surface never stops moving, so the dome is redrawn every frame anyway; the
+    // environment map only follows the sun, so a wobbling disc does not re-prefilter it.
+    this.domeUniforms.uTime.value = elapsed
     this._refreshEnvironment()
 
     // Following the clock beats cycling: both drive the same value, and a cycle running on
