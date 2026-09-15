@@ -149,8 +149,8 @@ const actions = {
     try {
       const harness = harnessForProject(name)
       const shown = await newSession(folder, harness, settings.get('openIn'))
-      const where = shown.via === 'terminal' ? `${harnessLabel(harness)} in a terminal` : `opening ${harnessLabel(harness)}`
-      hud.toast(`New thread in ${name} — ${where}`)
+      const label = harnessLabel(harness)
+      hud.toast(`New thread in ${name} — ${shown.via === 'terminal' ? `${label} in a terminal` : `opening ${label}`}`)
       // It lands as an astronaut walking down the ramp, once it has a record to scan.
       setTimeout(poll, 6000)
     } catch (err) {

@@ -1,7 +1,6 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
-/** Run `fn` with these environment variables set (`undefined` unsets one), then put them back. */
 export async function withEnv(overrides, fn) {
   const saved = {}
   for (const [key, value] of Object.entries(overrides)) {
@@ -19,7 +18,6 @@ export async function withEnv(overrides, fn) {
   }
 }
 
-/** Run `fn` with `process.platform` reporting `name`, then put the real one back. */
 export async function withPlatform(name, fn) {
   const original = Object.getOwnPropertyDescriptor(process, 'platform')
   Object.defineProperty(process, 'platform', { value: name, configurable: true })
@@ -30,10 +28,7 @@ export async function withPlatform(name, fn) {
   }
 }
 
-/**
- * An executable that records how it was called and exits 0 at once. The log path is baked into
- * the script so nothing depends on the environment reaching the child.
- */
+/** The log path is baked into the script so nothing depends on the environment reaching the child. */
 export async function fakeExecutable(dir, name) {
   const file = path.join(dir, name)
   const log = `${file}.argv`

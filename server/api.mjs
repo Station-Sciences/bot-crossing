@@ -176,14 +176,10 @@ async function resolveFolder(folder) {
 }
 
 /**
- * Run an adapter's `command` in a terminal, after checking the folder it names.
- *
  * `command.cwd` came from the page — inside `ref`, or as the folder itself — so it gets the same
  * check as any other folder the page names. There is no fallback directory on purpose:
  * `claude --resume` looks a session up under the folder it ran in, and a terminal that opens on
  * "No conversation found" and closes is worse than an error toast.
- *
- * The answer says a terminal is what opened, so the page can say so too.
  */
 async function runInTerminal(command) {
   if (!command.cwd) return { ok: false, error: 'That thread has no folder on record to resume in' }
@@ -201,19 +197,17 @@ async function runInTerminal(command) {
  * Show a harness's answer to "open this" — `{ ok, url, command }` — the way the page asked for
  * it, and say truthfully whether anything happened.
  *
- * `via` is the page's "Open threads in" setting. `'terminal'` means the URL is not consulted at
- * all: the adapter's `command` runs in a terminal, or the page is told the CLI is missing. It
- * never falls back to the desktop app — the person chose a terminal, and an app window appearing
- * instead reads as the setting being ignored. Windows is refused outright for now: there is no
- * terminal table for it yet.
+ * A page asking for a terminal never gets the desktop app instead, even when the CLI is missing:
+ * an app window appearing after choosing a terminal reads as the setting being ignored, where an
+ * error toast reads as something to fix. Windows is refused outright, since nothing here knows
+ * how to drive a terminal there yet.
  *
- * `'app'` is what happened before the setting existed. macOS and Windows hand the URL to the
- * opener: a scheme the harness's app registers is always answered there, so nothing is probed.
- * Linux is the platform where the URL may have nowhere to go — the desktop app is optional and
- * often absent, and `xdg-open` on a scheme nobody claims exits quietly, which used to reach the
- * page as "Opened". So there the scheme is checked first; failing that, the harness's own CLI
- * runs in a terminal, from the `command` the adapter offered alongside the URL; failing that,
- * the page is told so.
+ * Otherwise macOS and Windows hand the URL to the opener: a scheme the harness's app registers is
+ * always answered there, so nothing is probed. Linux is the platform where the URL may have
+ * nowhere to go — the desktop app is optional and often absent, and `xdg-open` on a scheme nobody
+ * claims exits quietly, which used to reach the page as "Opened". So there the scheme is checked
+ * first; failing that, the harness's own CLI runs in a terminal, from the `command` the adapter
+ * offered alongside the URL; failing that, the page is told so.
  */
 export async function present(result, via = 'app') {
   // Only the reason reaches the page: a failure may still carry the adapter's command.
@@ -226,7 +220,8 @@ export async function present(result, via = 'app') {
     if (!result.command) {
       return {
         ok: false,
-        error: 'That harness’s CLI was not found on this machine — install it, or set “Open threads in” back to the desktop app',
+        error:
+          'That harness’s CLI was not found on this machine — install it, or set “Open threads in” back to the desktop app',
       }
     }
     return runInTerminal(result.command)
@@ -252,7 +247,6 @@ export async function present(result, via = 'app') {
   }
 }
 
-/** Anything but an explicit ask for a terminal — an older page, junk — is the desktop app. */
 const viaOf = (body) => (body?.via === 'terminal' ? 'terminal' : 'app')
 
 /**

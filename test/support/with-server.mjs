@@ -3,10 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 
-/**
- * A real `apiMiddleware` on a random port, with its own colony file in a temp dir that is gone
- * again when `run` returns. `call` sets the `Origin` header the same-origin check expects.
- */
+/** `call` sets the `Origin` header the same-origin check expects, so a test never trips it by accident. */
 export async function withServer(run) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-test-'))
   process.env.BOT_CROSSING_DATA = dir

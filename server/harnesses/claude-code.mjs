@@ -483,8 +483,7 @@ async function scanThreads() {
 /**
  * Where the `claude` CLI is, for a machine that has it but no desktop app to answer the deep
  * link, or a page that would rather have a terminal. PATH first, then the places its installers
- * put it — never inside an application bundle. Every platform asks: the walk is a handful of
- * `access` calls and only happens on a click.
+ * put it — never inside an application bundle.
  */
 const CLI_DIRS = [
   path.join(HOME, '.local', 'bin'),

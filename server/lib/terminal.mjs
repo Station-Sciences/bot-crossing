@@ -141,8 +141,7 @@ function trySpawn(cmd, args, cwd) {
  * `x-terminal-emulator` alternative. That last is tried by name and given `-e`, the one form
  * Debian policy guarantees, because on Ubuntu it is a wrapper script that knows no other flags —
  * pass it `--working-directory` and it opens an empty window. Which is also why a real
- * `gnome-terminal` is looked for first. Both variables are read on every call, and either may be
- * a name on PATH or an absolute path.
+ * `gnome-terminal` is looked for first.
  *
  * A named terminal the table does not know is skipped rather than guessed at: `-e` means "the
  * rest of the line" to xterm and "one string, which I will split" to tilix, and guessing wrong
@@ -157,8 +156,7 @@ export async function openInTerminal(argv, cwd) {
   if (!wellFormed || !path.isAbsolute(argv[0]) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) {
     return { ok: false, error: 'Invalid launch command' }
   }
-  // Only Linux can be headless in a way worth naming; a macOS session always has a window server,
-  // and a terminal that cannot open there says so through its exit code.
+  // A macOS session always has a window server; only Linux can be headless in a way worth naming.
   if (process.platform === 'linux' && !(await hasDisplay())) {
     return { ok: false, error: 'No graphical display to open a terminal on' }
   }
@@ -203,6 +201,6 @@ export async function openInTerminal(argv, cwd) {
     ok: false,
     error: lastError
       ? `Could not open a terminal (${lastError})`
-      : 'No terminal emulator found — set BOT_CROSSING_TERMINAL or $TERMINAL, or install one (gnome-terminal, konsole, kitty, xterm)',
+      : 'No terminal emulator found — set BOT_CROSSING_TERMINAL or $TERMINAL, or install one (gnome-terminal, kitty, xterm)',
   }
 }

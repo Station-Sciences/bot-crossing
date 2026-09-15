@@ -86,13 +86,10 @@ export async function saveState(state) {
  * `ref` is opaque here on purpose: it is whatever that harness's adapter needs to find the
  * thread again, and the browser only ever passes it straight back. Nothing in the UI knows
  * what a Claude Code session id, or a Codex rollout id, actually looks like.
- *
- * `via` is the "Open threads in" setting — `'app'` or `'terminal'` — and the answer's `via`
- * says which one actually happened.
  */
 export const openThread = (thread, via) => post('/api/open', { harness: thread.harness, ref: thread.ref, via })
 
-/** A brand new thread in a repo, via that harness's own new-session deep link or its CLI. */
+/** A brand new thread in a repo, via that harness's own new-session deep link. */
 export const newSession = (folder, harness, via) => post('/api/new-session', { folder, harness, via })
 
 export const revealFolder = (folder) => post('/api/reveal', { folder })

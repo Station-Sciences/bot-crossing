@@ -4,7 +4,7 @@
  *
  * Fixture-driven. Nothing here reads a real harness, so it says the same thing on any machine.
  */
-import test, { describe, it } from 'node:test'
+import test from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -74,66 +74,39 @@ async function withFakeCli(name, fn) {
 }
 
 const CLI_UUID = '2df3987c-02d3-405e-b8f5-da30e3835213'
-const SKIP = { skip: process.platform === 'win32' }
+const posixOnly = { skip: process.platform === 'win32' }
 
-describe('claude-code', SKIP, () => {
-  describe('when the claude CLI is on PATH and the platform is darwin', () => {
-    it('should offer --resume alongside the URL', async () => {
-      const opened = await withFakeCli('claude', (bin) =>
-        withPlatform('darwin', async () => ({
-          bin,
-          result: await claudeCode.openThread({ cliSessionId: CLI_UUID, cwd: '/tmp/demo' }),
-        }))
-      )
-      assert.deepEqual(opened.result.command, { argv: [opened.bin, '--resume', CLI_UUID], cwd: '/tmp/demo' })
+test('claude-code offers its CLI command on every platform, not just Linux', posixOnly, async () => {
+  await withFakeCli('claude', (bin) =>
+    withPlatform('darwin', async () => {
+      const opened = await claudeCode.openThread({ cliSessionId: CLI_UUID, cwd: '/tmp/demo' })
+      assert.deepEqual(opened.command, { argv: [bin, '--resume', CLI_UUID], cwd: '/tmp/demo' })
+      const fresh = await claudeCode.newSession('/tmp/demo')
+      assert.deepEqual(fresh.command, { argv: [bin], cwd: '/tmp/demo' })
     })
+  )
+})
 
-    it('should offer the bare CLI for a new session', async () => {
-      const opened = await withFakeCli('claude', (bin) =>
-        withPlatform('darwin', async () => ({ bin, result: await claudeCode.newSession('/tmp/demo') }))
-      )
-      assert.deepEqual(opened.result.command, { argv: [opened.bin], cwd: '/tmp/demo' })
-    })
+test('codex offers `codex resume <id>` in the thread cwd alongside its deep link', posixOnly, async () => {
+  await withFakeCli('codex', async (bin) => {
+    const opened = await codex.openThread({ sessionId: SESSION_ID, cwd: '/tmp/demo' })
+    assert.equal(opened.url, `codex://threads/${SESSION_ID}`)
+    assert.deepEqual(opened.command, { argv: [bin, 'resume', SESSION_ID], cwd: '/tmp/demo' })
+    const noCwd = await codex.openThread({ sessionId: SESSION_ID })
+    assert.equal(noCwd.command.cwd, '', 'a missing cwd is left for the server to refuse')
+    const fresh = await codex.newSession('/tmp/demo')
+    assert.deepEqual(fresh.command, { argv: [bin], cwd: '/tmp/demo' })
   })
 })
 
-describe('codex', SKIP, () => {
-  describe('when the codex CLI is on PATH', () => {
-    it("should offer codex resume <id> in the thread's cwd", async () => {
-      const opened = await withFakeCli('codex', async (bin) => ({
-        bin,
-        result: await codex.openThread({ sessionId: SESSION_ID, cwd: '/tmp/demo' }),
-      }))
-      assert.deepEqual(opened.result.command, { argv: [opened.bin, 'resume', SESSION_ID], cwd: '/tmp/demo' })
-    })
-
-    it('should offer the bare CLI for a new session', async () => {
-      const opened = await withFakeCli('codex', async (bin) => ({ bin, result: await codex.newSession('/tmp/demo') }))
-      assert.deepEqual(opened.result.command, { argv: [opened.bin], cwd: '/tmp/demo' })
-    })
-
-    describe('and the ref has no cwd', () => {
-      it('should offer the command with an empty cwd', async () => {
-        const opened = await withFakeCli('codex', async (bin) => ({
-          bin,
-          result: await codex.openThread({ sessionId: SESSION_ID }),
-        }))
-        assert.deepEqual(opened.result.command, { argv: [opened.bin, 'resume', SESSION_ID], cwd: '' })
-      })
-    })
-  })
-
-  describe('when the codex CLI is not on PATH', () => {
-    it('should offer the URL alone', async () => {
-      const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
-      try {
-        const opened = await withEnv({ PATH: dir }, () => codex.openThread({ sessionId: SESSION_ID }))
-        assert.deepEqual(opened, { ok: true, url: `codex://threads/${SESSION_ID}`, command: undefined })
-      } finally {
-        await fsp.rm(dir, { recursive: true, force: true })
-      }
-    })
-  })
+test('codex with no CLI installed offers the deep link alone', posixOnly, async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
+  try {
+    const opened = await withEnv({ PATH: dir }, () => codex.openThread({ sessionId: SESSION_ID }))
+    assert.deepEqual(opened, { ok: true, url: `codex://threads/${SESSION_ID}`, command: undefined })
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
 })
 
 // ── a Codex install, faked on disk ────────────────────────────────────────────

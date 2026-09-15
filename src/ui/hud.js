@@ -236,8 +236,7 @@ export class Hud {
 
     // View.
     const view = group('View')
-    // The server has no terminal table for Windows yet, so a choice there would only ever toast an
-    // error; better not to offer it.
+    // The server refuses terminals on Windows, so a choice there would only ever toast an error.
     if (!IS_WIN) {
       view.append(
         this._select(
@@ -247,7 +246,8 @@ export class Hud {
             ['app', 'Desktop app'],
             ['terminal', 'Terminal'],
           ],
-          'Terminal runs the harness’s own CLI in a new window, so the CLI has to be installed. BOT_CROSSING_TERMINAL or $TERMINAL picks the emulator.'
+          'Terminal runs the harness’s own CLI in a new window, so the CLI has to be installed. ' +
+            'BOT_CROSSING_TERMINAL or $TERMINAL picks the emulator.'
         )
       )
     }

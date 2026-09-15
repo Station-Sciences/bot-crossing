@@ -157,12 +157,7 @@ const DEFAULTS = {
   reducedMotion: false,
 
   // Opening
-  /**
-   * Where Open hands a thread back to: the harness's desktop app, or its CLI in a terminal.
-   * `'app' | 'terminal'`. The server honours it per click, so an old colony file with no
-   * opinion simply opens the app.
-   */
-  openIn: 'app',
+  openIn: 'app', // 'app' | 'terminal' — the harness's desktop app, or its CLI in a new window
 }
 
 /** Keys whose change forces a full rebuild of the world (terrain, scatter, sky). */
