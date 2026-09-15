@@ -32,8 +32,27 @@ function desktopDataDir() {
     case 'linux':
       return path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'Claude')
     default:
-      return path.join(HOME, 'Library', 'Application Support', 'Claude')
+      return macDataDir()
   }
+}
+
+/**
+ * macOS has two answers as well, because the app ships under two Electron app names: the
+ * classic `Claude`, and `Claude-3p`, which is what a current install writes to. Both can be
+ * present at once — an older install leaves an empty `Claude` behind, and an empty directory
+ * is indistinguishable from the app never having been installed. Hard-coding `Claude` there
+ * means every desktop thread is missed, and the colony falls back to drawing the CLI
+ * transcript alone: no title, no model, and `Open` resorts to `claude://resume`, which
+ * imports rather than navigates.
+ *
+ * So pick whichever one actually holds session records, the same rule windowsDataDir uses
+ * below — and, like it, resolved once at import, so installing the app under the colony
+ * wants a restart to be noticed.
+ */
+function macDataDir() {
+  const support = path.join(HOME, 'Library', 'Application Support')
+  const candidates = [path.join(support, 'Claude-3p'), path.join(support, 'Claude')]
+  return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || candidates[1]
 }
 
 /**
