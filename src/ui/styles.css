@@ -353,10 +353,10 @@ body {
   outline: 2px solid var(--accent);
 }
 
-/* number input, e.g. the usage canister's token budget */
+/* number input, e.g. the usage canister's monthly budget */
 .number {
   height: 30px;
-  width: 108px;
+  width: 90px;
   padding: 0 10px;
   border-radius: 9px;
   border: 1px solid var(--line);
@@ -371,13 +371,6 @@ body {
 
 .number:focus-visible {
   outline: 2px solid var(--accent);
-}
-
-.usage-reset {
-  height: 30px;
-  padding: 0 12px;
-  font-size: 12px;
-  flex: none;
 }
 
 /* slider */

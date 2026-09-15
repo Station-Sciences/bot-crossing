@@ -1,11 +1,15 @@
 /**
- * Claude plan usage — how much of the token budget behind the goo canister has burned down.
+ * Claude spend — how much of a monthly dollar budget the goo canister has burned down.
  *
  * There is no API for "percent of your plan left"; the only local signal is the same one tools
  * like ccusage read: Claude Code's own transcripts at `~/.claude/projects/**​/*.jsonl`, where
  * every assistant turn logs the tokens it spent. This sums that across every project on the
- * machine — the plan is shared account-wide, not per repo — against a token budget and a reset
- * time you set yourself, since neither is ever actually visible.
+ * machine — the plan is shared account-wide, not per repo — and prices it the same way ccusage
+ * does: per-token-type, per model tier, converted to dollars against a budget you set yourself,
+ * since neither the real dollar figure nor the real limit is ever actually visible.
+ *
+ * The window is the calendar month, first day to last — no reset button needed, since a month
+ * boundary is a date rather than something to click.
  *
  * Read-only, the same as every harness adapter: nothing here writes to a transcript, only to
  * this feature's own small config file.
@@ -21,19 +25,8 @@ const CONFIG_FILE = path.join(DATA_DIR, 'usage.json')
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects')
 
-/**
- * Sized against a real Pro plan's weekly bucket rather than picked out of the air: on one
- * account, summing this same tally (input + output + cache-creation + cache-read tokens) since
- * the weekly window's own reset time landed at roughly 10% of what the account's usage panel
- * reported for that window — implying a limit somewhere around 1.8B by this accounting.
- *
- * That is an order-of-magnitude estimate, not a published number — cache-read tokens almost
- * certainly count for less toward the real limit than they do in this sum, which is also why a
- * *shorter* window (the 5-hour one) implied a limit that does not scale with this one the way
- * constant usage would predict. Good enough to make the canister mean something the moment you
- * turn it on; expect to nudge it once you've watched it drift against your own plan for a week.
- */
-const DEFAULT_MAX_TOKENS = 1_800_000_000
+/** A round number to open on — not a real plan figure, since Anthropic doesn't publish one. */
+const DEFAULT_BUDGET_USD = 2000
 
 let config = null
 
@@ -41,12 +34,9 @@ async function loadConfig() {
   if (config) return config
   try {
     const raw = JSON.parse(await fsp.readFile(CONFIG_FILE, 'utf8'))
-    config = {
-      maxTokens: Number(raw.maxTokens) > 0 ? Number(raw.maxTokens) : DEFAULT_MAX_TOKENS,
-      resetAt: Number(raw.resetAt) || Date.now(),
-    }
+    config = { budgetUsd: Number(raw.budgetUsd) > 0 ? Number(raw.budgetUsd) : DEFAULT_BUDGET_USD }
   } catch {
-    config = { maxTokens: DEFAULT_MAX_TOKENS, resetAt: Date.now() }
+    config = { budgetUsd: DEFAULT_BUDGET_USD }
     await persist()
   }
   return config
@@ -57,39 +47,72 @@ async function persist() {
   await fsp.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2))
 }
 
-export async function setMaxTokens(maxTokens) {
-  const n = Number(maxTokens)
-  if (!Number.isFinite(n) || n <= 0) throw new Error('maxTokens must be a positive number')
+export async function setBudget(budgetUsd) {
+  const n = Number(budgetUsd)
+  if (!Number.isFinite(n) || n <= 0) throw new Error('budgetUsd must be a positive number')
   await loadConfig()
-  config.maxTokens = Math.round(n)
+  config.budgetUsd = n
   await persist()
   return usageSnapshot()
 }
 
-export async function resetUsage() {
-  await loadConfig()
-  config.resetAt = Date.now()
-  await persist()
-  return usageSnapshot()
+/** The calendar month containing `at` (default: now), as `[start, end)` in epoch ms. */
+function monthBounds(at = Date.now()) {
+  const d = new Date(at)
+  const start = new Date(d.getFullYear(), d.getMonth(), 1).getTime()
+  const end = new Date(d.getFullYear(), d.getMonth() + 1, 1).getTime()
+  return { start, end }
+}
+
+/**
+ * Dollars per million tokens, by pricing tier. A model's rate has held steady across every
+ * Claude generation released so far, so this keys off the tier named in the model id rather
+ * than a table that needs a new row on every release. `ccusage` pulls the equivalent table
+ * fresh off the network, from LiteLLM's pricing data; this is a frozen copy of Anthropic's
+ * published rates at the time it was written, so the canister keeps working offline — and
+ * needs revisiting if a future tier's pricing actually moves.
+ */
+const PRICING = {
+  opus: { input: 15, output: 75, cacheWrite5m: 18.75, cacheWrite1h: 30, cacheRead: 1.5 },
+  sonnet: { input: 3, output: 15, cacheWrite5m: 3.75, cacheWrite1h: 6, cacheRead: 0.3 },
+  haiku: { input: 0.8, output: 4, cacheWrite5m: 1, cacheWrite1h: 1.6, cacheRead: 0.08 },
+}
+
+/** Sonnet is both the middle tier and the safest guess for a model id this table has never
+ *  seen — new model, same shape of pricing, far more often than it is an Opus-priced outlier. */
+function tierFor(model) {
+  const m = String(model || '').toLowerCase()
+  if (m.includes('opus')) return PRICING.opus
+  if (m.includes('haiku')) return PRICING.haiku
+  return PRICING.sonnet
+}
+
+/** `usage` is a transcript line's own `message.usage` block; `model` is that line's `message.model`. */
+function costFor(usage, model) {
+  if (!usage) return 0
+  const price = tierFor(model)
+  const perM = (n, rate) => (n / 1_000_000) * rate
+  // Newer transcripts split a cache write into its 5-minute and 1-hour TTLs, priced
+  // differently; older ones only ever wrote the short-lived kind, so that is the fallback.
+  const cache = usage.cache_creation
+  const write5m = cache ? cache.ephemeral_5m_input_tokens || 0 : usage.cache_creation_input_tokens || 0
+  const write1h = cache ? cache.ephemeral_1h_input_tokens || 0 : 0
+  return (
+    perM(usage.input_tokens || 0, price.input) +
+    perM(usage.output_tokens || 0, price.output) +
+    perM(write5m, price.cacheWrite5m) +
+    perM(write1h, price.cacheWrite1h) +
+    perM(usage.cache_read_input_tokens || 0, price.cacheRead)
+  )
 }
 
 /**
  * One entry per file: how much of it has been read (`readBytes`, always a whole number of
- * lines) and the `{ ts, tokens }` pairs found so far. Re-parsing every transcript on the
- * machine from byte zero every poll would mean a scan that gets slower forever, so a file only
- * ever has its *new* bytes read — the same trick `tail -f` uses.
+ * lines) and the `{ ts, usd }` pairs found so far. Re-parsing every transcript on the machine
+ * from byte zero every poll would mean a scan that gets slower forever, so a file only ever
+ * has its *new* bytes read — the same trick `tail -f` uses.
  */
 const fileCache = new Map()
-
-function tokensFor(usage) {
-  if (!usage) return 0
-  return (
-    (usage.input_tokens || 0) +
-    (usage.output_tokens || 0) +
-    (usage.cache_creation_input_tokens || 0) +
-    (usage.cache_read_input_tokens || 0)
-  )
-}
 
 async function* transcriptFiles() {
   let projectDirs
@@ -113,7 +136,7 @@ async function* transcriptFiles() {
   }
 }
 
-/** Read whatever of `filePath` hasn't been read yet, and fold any new usage into the cache. */
+/** Read whatever of `filePath` hasn't been read yet, and fold any new spend into the cache. */
 async function readNewEntries(filePath, cached) {
   const stat = await fsp.stat(filePath)
   if (cached && stat.size === cached.size) return cached
@@ -132,7 +155,7 @@ async function readNewEntries(filePath, cached) {
     await handle.read(buf, 0, length, startAt)
     const text = buf.toString('utf8')
     // The last line may be mid-write; leave it for the next scan rather than risk a partial
-    // JSON parse silently losing that entry's tokens forever.
+    // JSON parse silently losing that entry's spend forever.
     const lastBreak = text.lastIndexOf('\n')
     if (lastBreak < 0) return { size: stat.size, readBytes: startAt, entries }
     const complete = text.slice(0, lastBreak)
@@ -144,10 +167,10 @@ async function readNewEntries(filePath, cached) {
         const obj = JSON.parse(line)
         if (obj.type !== 'assistant' || !obj.message?.usage) continue
         const ts = Date.parse(obj.timestamp)
-        const tokens = tokensFor(obj.message.usage)
-        if (Number.isFinite(ts) && tokens > 0) entries.push({ ts, tokens })
+        const usd = costFor(obj.message.usage, obj.message.model)
+        if (Number.isFinite(ts) && usd > 0) entries.push({ ts, usd })
       } catch {
-        // A half-flushed or corrupt line. Skipping it costs one entry's tokens, which is
+        // A half-flushed or corrupt line. Skipping it costs one entry's spend, which is
         // nothing next to a scan that throws and takes the whole canister dark with it.
       }
     }
@@ -159,9 +182,10 @@ async function readNewEntries(filePath, cached) {
 
 /** Everything the goo canister needs to draw itself. */
 export async function usageSnapshot() {
-  const { maxTokens, resetAt } = await loadConfig()
+  const { budgetUsd } = await loadConfig()
+  const { start: monthStart, end: monthEnd } = monthBounds()
 
-  let usedTokens = 0
+  let usedUsd = 0
   for await (const file of transcriptFiles()) {
     let result
     try {
@@ -169,15 +193,16 @@ export async function usageSnapshot() {
     } catch {
       continue // the session that owned this file ended and cleaned up mid-scan — skip it
     }
-    // Entries from before the last reset are dead weight forever, not just this scan, so
-    // this is also where the cache is trimmed back down.
-    if (result.entries.length && result.entries[0].ts < resetAt) {
-      result.entries = result.entries.filter((e) => e.ts >= resetAt)
+    // Entries from before this month are dead weight forever, not just this scan, so this is
+    // also where the cache is trimmed back down — and, come the 1st, where last month's spend
+    // actually falls away, since nothing else ever prunes on a date rather than a byte offset.
+    if (result.entries.length && result.entries[0].ts < monthStart) {
+      result.entries = result.entries.filter((e) => e.ts >= monthStart)
     }
     fileCache.set(file, result)
-    for (const e of result.entries) usedTokens += e.tokens
+    for (const e of result.entries) usedUsd += e.usd
   }
 
-  const remainingPct = maxTokens > 0 ? Math.max(0, Math.min(1, 1 - usedTokens / maxTokens)) : 1
-  return { usedTokens, maxTokens, resetAt, remainingPct, scannedAt: Date.now() }
+  const remainingPct = budgetUsd > 0 ? Math.max(0, Math.min(1, 1 - usedUsd / budgetUsd)) : 1
+  return { usedUsd, budgetUsd, monthStart, monthEnd, remainingPct, scannedAt: Date.now() }
 }

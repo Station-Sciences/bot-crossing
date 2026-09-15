@@ -3,9 +3,9 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
 /**
  * The usage canister: a fixed glass tube of glowing goo, off to one side of the ship, standing
- * in for however much of the Claude plan is left. Full and green when the plan is fresh, it
- * sinks and reddens as tokens burn down, and a beacon on its cap starts flashing once there is
- * almost nothing left.
+ * in for however much of a monthly dollar budget is left. Full and green at the start of the
+ * month, it sinks and reddens as spend climbs, and a beacon on its cap starts flashing once
+ * there is almost nothing left.
  *
  * Built the same way as `MCPFactory`: a merged, vertex-coloured hull for the frame, separate
  * meshes only for the parts that actually change at runtime — here, the goo itself and the cap
@@ -228,7 +228,7 @@ export class UsageCanister {
     this._signTexture.needsUpdate = true
   }
 
-  /** `remainingPct` is 0..1 — what's left of the plan's token budget since the last reset. */
+  /** `remainingPct` is 0..1 — what's left of the monthly dollar budget so far this month. */
   setLevel(remainingPct) {
     this.target = THREE.MathUtils.clamp(remainingPct, 0, 1)
   }

@@ -249,7 +249,7 @@ export class Hud {
       this._toggle(
         'Usage goo canister',
         'usageCanister',
-        'A tank of glowing goo standing in for how much of your Claude plan is left, read from your own transcripts on this machine — there is no real number to read it against, so set the budget below.'
+        'A tank of glowing goo standing in for how much of a monthly dollar budget is left, priced from your own transcripts on this machine the way ccusage prices them — there is no real limit to read it against, so set the budget below.'
       ),
       this._usageBudgetRow()
     )
@@ -345,40 +345,38 @@ export class Hud {
   }
 
   /**
-   * The token budget the goo canister reads its level against, plus a way to zero the count.
-   * Not a `Settings` key — it lives on the server, shared with anything else that ever polls
-   * `/api/usage`, so a change here has to go through `actions` rather than `settings.set`.
+   * The monthly dollar budget the goo canister reads its level against. Not a `Settings` key —
+   * it lives on the server, shared with anything else that ever polls `/api/usage`, so a change
+   * here has to go through `actions` rather than `settings.set`. No reset button: the window is
+   * the calendar month, so it empties itself on the 1st rather than waiting for a click.
    */
   _usageBudgetRow() {
     const row = this._row(
-      'Plan token budget',
-      'What counts as “full”. The canister fills to this many tokens spent across every Claude Code session on this machine since the last reset.'
+      'Monthly budget',
+      'What counts as “full”. The canister fills to this many dollars of spend, priced the way ccusage prices it, across every Claude Code session on this machine since the 1st of the month.'
     )
     const wrap = document.createElement('div')
-    wrap.style.cssText = 'display:flex;align-items:center;gap:8px'
+    wrap.style.cssText = 'display:flex;align-items:center;gap:6px'
+
+    const prefix = document.createElement('span')
+    prefix.textContent = '$'
+    prefix.style.cssText = 'color:var(--muted);font-size:13px'
 
     const input = document.createElement('input')
     input.type = 'number'
     input.className = 'number'
     input.min = '1'
-    input.step = '100000'
+    input.step = '50'
     const commit = () => {
       const n = Number(input.value)
-      if (n > 0) this.actions.setUsageBudget?.(Math.round(n))
+      if (n > 0) this.actions.setUsageBudget?.(n)
     }
     input.addEventListener('change', commit)
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') input.blur()
     })
 
-    const reset = document.createElement('button')
-    reset.type = 'button'
-    reset.className = 'btn ghost usage-reset'
-    reset.textContent = 'Reset'
-    reset.title = 'Start the count over from zero, right now'
-    reset.addEventListener('click', () => this.actions.resetUsage?.())
-
-    wrap.append(input, reset)
+    wrap.append(prefix, input)
     row.appendChild(wrap)
     this._usageBudgetInput = input
     this._usageHint = row.querySelector('.hint')
@@ -389,10 +387,11 @@ export class Hud {
   setUsage(info) {
     if (!info) return
     if (this._usageBudgetInput && document.activeElement !== this._usageBudgetInput) {
-      this._usageBudgetInput.value = String(info.maxTokens)
+      this._usageBudgetInput.value = String(info.budgetUsd)
     }
     if (this._usageHint) {
-      this._usageHint.textContent = `${Math.round(info.usedTokens).toLocaleString()} tokens spent since ${ago(info.resetAt)}`
+      const resets = new Date(info.monthEnd).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      this._usageHint.textContent = `$${info.usedUsd.toFixed(2)} spent this month — resets ${resets}`
     }
   }
 

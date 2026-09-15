@@ -18,7 +18,6 @@ import {
   revealFolder,
   fetchUsage,
   setUsageBudget,
-  resetUsage,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 
@@ -282,24 +281,13 @@ const actions = {
     return thread ? transcriptProgress(thread) : 0
   },
 
-  setUsageBudget: async (maxTokens) => {
+  setUsageBudget: async (budgetUsd) => {
     try {
-      const usage = await setUsageBudget(maxTokens)
+      const usage = await setUsageBudget(budgetUsd)
       colony.setUsage(usage.remainingPct)
       hud.setUsage(usage)
     } catch (err) {
       hud.toast(err.message || 'Could not set that budget', 'err')
-    }
-  },
-
-  resetUsage: async () => {
-    try {
-      const usage = await resetUsage()
-      colony.setUsage(usage.remainingPct)
-      hud.setUsage(usage)
-      hud.toast('Usage reset — counting from zero again')
-    } catch (err) {
-      hud.toast(err.message || 'Could not reset usage', 'err')
     }
   },
 }
