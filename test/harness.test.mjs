@@ -14,7 +14,8 @@ import { HARNESSES } from '../server/harnesses/index.mjs'
 import codex from '../server/harnesses/codex.mjs'
 import claudeCode from '../server/harnesses/claude-code.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
-import { schemeOf, openInTerminal } from '../server/lib/xdg.mjs'
+import { schemeOf } from '../server/lib/xdg.mjs'
+import { openInTerminal } from '../server/lib/terminal.mjs'
 
 // ── the contract ──────────────────────────────────────────────────────────────
 

@@ -9,9 +9,8 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import http from 'node:http'
-
 import { mergeState } from '../src/game/merge-state.js'
+import { withServer } from './support/with-server.mjs'
 
 // ── the three-way merge ───────────────────────────────────────────────────────
 
@@ -52,27 +51,6 @@ test('settings are not merged field-wise — the last tab to touch a slider wins
 })
 
 // ── the API, against a real socket ────────────────────────────────────────────
-
-async function withServer(run) {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-test-'))
-  process.env.BOT_CROSSING_DATA = dir
-  // Imported per-server so DATA_DIR is read fresh; the query string defeats the module cache.
-  const { apiMiddleware } = await import(`../server/api.mjs?${dir}`)
-  const server = http.createServer((req, res) => apiMiddleware(req, res, null))
-  await new Promise((r) => server.listen(0, '127.0.0.1', r))
-  const port = server.address().port
-  const call = (p, opts) =>
-    fetch(`http://127.0.0.1:${port}${p}`, {
-      headers: { Origin: `http://localhost:${port}`, 'Content-Type': 'application/json' },
-      ...opts,
-    })
-  try {
-    await run({ call, dir, put: (b) => call('/api/state', { method: 'PUT', body: JSON.stringify(b) }) })
-  } finally {
-    server.close()
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
-}
 
 test('a v1 file has its bare ids prefixed on read, once', async () => {
   await withServer(async ({ call, dir }) => {

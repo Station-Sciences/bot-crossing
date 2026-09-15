@@ -3,7 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { openInTerminal, schemeHasHandler, schemeOf } from './lib/xdg.mjs'
+import { schemeHasHandler, schemeOf } from './lib/xdg.mjs'
+import { openInTerminal } from './lib/terminal.mjs'
 import {
   defaultHarness,
   harnessStatus,
