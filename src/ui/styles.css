@@ -353,6 +353,33 @@ body {
   outline: 2px solid var(--accent);
 }
 
+/* number input, e.g. the usage canister's token budget */
+.number {
+  height: 30px;
+  width: 108px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: right;
+  flex: none;
+  pointer-events: auto;
+}
+
+.number:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+.usage-reset {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  flex: none;
+}
+
 /* slider */
 .slider {
   -webkit-appearance: none;

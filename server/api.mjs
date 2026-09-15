@@ -11,6 +11,7 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
 } from './scan.mjs'
+import { resetUsage, setMaxTokens, usageSnapshot } from './usage.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
@@ -372,6 +373,19 @@ export async function apiMiddleware(req, res, next) {
 
     if (url.pathname === '/api/harnesses' && req.method === 'GET') {
       return send(res, 200, { harnesses: await harnessStatus() })
+    }
+
+    if (url.pathname === '/api/usage' && req.method === 'GET') {
+      return send(res, 200, await usageSnapshot())
+    }
+
+    if (url.pathname === '/api/usage' && req.method === 'PUT') {
+      const { maxTokens } = await readJsonBody(req)
+      return send(res, 200, await setMaxTokens(maxTokens))
+    }
+
+    if (url.pathname === '/api/usage/reset' && req.method === 'POST') {
+      return send(res, 200, await resetUsage())
     }
 
     if (url.pathname === '/api/state' && req.method === 'GET') {

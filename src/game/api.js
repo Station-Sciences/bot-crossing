@@ -14,7 +14,19 @@ const post = (url, payload) =>
     body: JSON.stringify(payload),
   })
 
+const put = (url, payload) =>
+  req(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
 export const fetchThreads = () => req('/api/threads')
+
+/** `{ usedTokens, maxTokens, resetAt, remainingPct, scannedAt }` — what the goo canister draws. */
+export const fetchUsage = () => req('/api/usage')
+export const setUsageBudget = (maxTokens) => put('/api/usage', { maxTokens })
+export const resetUsage = () => post('/api/usage/reset', {})
 
 /**
  * The colony file, and the base every later save is measured against.

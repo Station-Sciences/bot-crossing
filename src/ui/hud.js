@@ -245,7 +245,13 @@ export class Hud {
         'MCP factory',
         'mcpFactory',
         'A building housing the MCP servers your agents call. A pipe glows from an astronaut to it while their thread is mid-call.'
-      )
+      ),
+      this._toggle(
+        'Usage goo canister',
+        'usageCanister',
+        'A tank of glowing goo standing in for how much of your Claude plan is left, read from your own transcripts on this machine — there is no real number to read it against, so set the budget below.'
+      ),
+      this._usageBudgetRow()
     )
     view.append(
       this._toggle('Return to isometric', 'autoFrame', 'Eases the angle back when you stop dragging.'),
@@ -336,6 +342,58 @@ export class Hud {
       },
     })
     return row
+  }
+
+  /**
+   * The token budget the goo canister reads its level against, plus a way to zero the count.
+   * Not a `Settings` key — it lives on the server, shared with anything else that ever polls
+   * `/api/usage`, so a change here has to go through `actions` rather than `settings.set`.
+   */
+  _usageBudgetRow() {
+    const row = this._row(
+      'Plan token budget',
+      'What counts as “full”. The canister fills to this many tokens spent across every Claude Code session on this machine since the last reset.'
+    )
+    const wrap = document.createElement('div')
+    wrap.style.cssText = 'display:flex;align-items:center;gap:8px'
+
+    const input = document.createElement('input')
+    input.type = 'number'
+    input.className = 'number'
+    input.min = '1'
+    input.step = '100000'
+    const commit = () => {
+      const n = Number(input.value)
+      if (n > 0) this.actions.setUsageBudget?.(Math.round(n))
+    }
+    input.addEventListener('change', commit)
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') input.blur()
+    })
+
+    const reset = document.createElement('button')
+    reset.type = 'button'
+    reset.className = 'btn ghost usage-reset'
+    reset.textContent = 'Reset'
+    reset.title = 'Start the count over from zero, right now'
+    reset.addEventListener('click', () => this.actions.resetUsage?.())
+
+    wrap.append(input, reset)
+    row.appendChild(wrap)
+    this._usageBudgetInput = input
+    this._usageHint = row.querySelector('.hint')
+    return row
+  }
+
+  /** Called whenever a fresh `/api/usage` poll lands — see `setUsage` in `main.js`. */
+  setUsage(info) {
+    if (!info) return
+    if (this._usageBudgetInput && document.activeElement !== this._usageBudgetInput) {
+      this._usageBudgetInput.value = String(info.maxTokens)
+    }
+    if (this._usageHint) {
+      this._usageHint.textContent = `${Math.round(info.usedTokens).toLocaleString()} tokens spent since ${ago(info.resetAt)}`
+    }
   }
 
   /** The little face on the agent card, drawn from the same atlas the astronauts use. */
@@ -1009,6 +1067,7 @@ const TEMPLATE = `
       </div>
       <div>
         <div class="k"><span>Next needing you</span><kbd>N</kbd></div>
+        <div class="k"><span>Next agent</span><kbd>M</kbd></div>
         <div class="k"><span>Open thread</span><kbd>Enter</kbd></div>
         <div class="k"><span>Mark viewed</span><kbd>V</kbd></div>
         <div class="k"><span>Archive</span><kbd>A</kbd></div>

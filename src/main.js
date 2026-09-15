@@ -16,6 +16,9 @@ import {
   openThread,
   newSession,
   revealFolder,
+  fetchUsage,
+  setUsageBudget,
+  resetUsage,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 
@@ -268,6 +271,27 @@ const actions = {
   progressFor: (id) => {
     const thread = threads.find((t) => t.id === id)
     return thread ? transcriptProgress(thread) : 0
+  },
+
+  setUsageBudget: async (maxTokens) => {
+    try {
+      const usage = await setUsageBudget(maxTokens)
+      colony.setUsage(usage.remainingPct)
+      hud.setUsage(usage)
+    } catch (err) {
+      hud.toast(err.message || 'Could not set that budget', 'err')
+    }
+  },
+
+  resetUsage: async () => {
+    try {
+      const usage = await resetUsage()
+      colony.setUsage(usage.remainingPct)
+      hud.setUsage(usage)
+      hud.toast('Usage reset — counting from zero again')
+    } catch (err) {
+      hud.toast(err.message || 'Could not reset usage', 'err')
+    }
   },
 }
 
@@ -662,6 +686,22 @@ async function poll() {
     hud.removeBoot()
   } finally {
     polling = false
+  }
+  pollUsage()
+}
+
+/**
+ * A second poll, kept off the one above: `/api/usage` reads transcripts on disk rather than
+ * asking a harness, so it has its own, unrelated way to fail — a machine with no Claude Code
+ * transcripts at all is a normal, silent answer here, not an error toast.
+ */
+async function pollUsage() {
+  try {
+    const usage = await fetchUsage()
+    colony.setUsage(usage.remainingPct)
+    hud.setUsage(usage)
+  } catch {
+    /* no transcripts to read, or the endpoint failed — the canister just holds its last level */
   }
 }
 
