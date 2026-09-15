@@ -42,6 +42,9 @@ export const FACE_LOOPS = {
   celebrating: [FACE.cheer, FACE.happy, FACE.cheer, FACE.love],
   waiting: [FACE.wait, FACE.wait, FACE.alert, FACE.wait],
   broken: [FACE.error, FACE.error, FACE.sad, FACE.error],
+  // The status is called `blocked`; the loop was only ever filed under `broken`, so a
+  // blocked astronaut wore the idle face.
+  blocked: [FACE.error, FACE.error, FACE.sad, FACE.error],
   sleeping: [FACE.sleep],
 }
 
