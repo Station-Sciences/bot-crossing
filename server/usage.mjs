@@ -21,9 +21,19 @@ const CONFIG_FILE = path.join(DATA_DIR, 'usage.json')
 
 const PROJECTS_DIR = path.join(os.homedir(), '.claude', 'projects')
 
-/** A round, plausible-looking guess. Nobody's plan is actually this — the slider exists so the
- *  canister means something the moment you turn it on rather than only after you go tune it. */
-const DEFAULT_MAX_TOKENS = 20_000_000
+/**
+ * Sized against a real Pro plan's weekly bucket rather than picked out of the air: on one
+ * account, summing this same tally (input + output + cache-creation + cache-read tokens) since
+ * the weekly window's own reset time landed at roughly 10% of what the account's usage panel
+ * reported for that window — implying a limit somewhere around 1.8B by this accounting.
+ *
+ * That is an order-of-magnitude estimate, not a published number — cache-read tokens almost
+ * certainly count for less toward the real limit than they do in this sum, which is also why a
+ * *shorter* window (the 5-hour one) implied a limit that does not scale with this one the way
+ * constant usage would predict. Good enough to make the canister mean something the moment you
+ * turn it on; expect to nudge it once you've watched it drift against your own plan for a week.
+ */
+const DEFAULT_MAX_TOKENS = 1_800_000_000
 
 let config = null
 
