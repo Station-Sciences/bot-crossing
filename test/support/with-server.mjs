@@ -21,7 +21,7 @@ export async function withServer(run) {
       ...opts,
     })
   try {
-    await run({ call, dir, put: (b) => call('/api/state', { method: 'PUT', body: JSON.stringify(b) }) })
+    return await run({ call, dir, put: (b) => call('/api/state', { method: 'PUT', body: JSON.stringify(b) }) })
   } finally {
     server.close()
     await fsp.rm(dir, { recursive: true, force: true })
