@@ -48,7 +48,7 @@ server/
                        GP: present() no win32 prefere command->terminal, deep link é fallback
   serve.mjs            estático do dist
 src/
-  core/    settings.js (DEFAULTS.planet = 'reef'), engine, camera Google-Earth, tiltshift
+  core/    settings.js (DEFAULTS.planet = 'moon'), engine, camera Google-Earth, tiltshift
   world/   planet.js (presets moon/mars/terra/reef), sky.js, plots.js (style 'reef'), reef.js *,
            buildings.js, kit.js, ship.js, surfaces.js
   agents/  astronauts.js, crew.js (bake de animação), fish.js *, faces, indicators, particles
@@ -119,10 +119,10 @@ nova (pega os hexes livres mais internos). Opcional: `automation.json` para tít
 | Automação sumiu do mapa | 3 dias sem mtime → "dormant", dobrada; volta pela lista no rodapé do sidebar ou desligue "Hide dormant repos". |
 | curl POST recusado | server checa `Host` e `Origin`; passe `-H "Origin: http://localhost:5274"`. |
 
-## 4. Planeta "reef" (mundo padrão)
+## 4. Planeta "reef"
 
 Construído em 11/09/2026 com a skill `agent-session-world`. Conceito e mapeamento completo em
-`docs/reef-world.md`. É o **default** (`settings.js: planet: 'reef'`); `Tab` alterna planetas
+`docs/reef-world.md`. Padrão é `moon` (`settings.js`); escolha reef em Settings ou com `Tab`, que alterna planetas
 (moon/mars/terra/reef) ao vivo mantendo as zonas nos mesmos hexes.
 
 - Thread = peixe (espécie/cor hash do id). Zona = laje de rocha com crosta de coral na cor do repo.
