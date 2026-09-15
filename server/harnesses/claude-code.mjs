@@ -71,12 +71,24 @@ function windowsDataDir() {
   return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || roaming
 }
 
-/** Where the Claude desktop app keeps one JSON record per thread. */
-const DESKTOP_SESSIONS = path.join(desktopDataDir(), 'claude-code-sessions')
-/** Where the CLI keeps the raw transcript: ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl */
-const CLI_PROJECTS = path.join(HOME, '.claude', 'projects')
-/** One file per live CLI process: {pid, sessionId, cwd, ...}. Stale files outlive their pid. */
-const CLI_LIVE = path.join(HOME, '.claude', 'sessions')
+/**
+ * Where the Claude desktop app keeps one JSON record per thread. `BOT_CROSSING_CLAUDE_DESKTOP`
+ * exists so the tests can point this at a fixture; nothing else should set it.
+ */
+const DESKTOP_DATA = process.env.BOT_CROSSING_CLAUDE_DESKTOP || desktopDataDir()
+const DESKTOP_SESSIONS = path.join(DESKTOP_DATA, 'claude-code-sessions')
+/**
+ * `~/.claude`, unless the CLI has been told to keep its files elsewhere. `CLAUDE_CONFIG_DIR` is
+ * the CLI's own override, so honouring it reads from wherever the CLI is actually writing.
+ */
+const CLI_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude')
+/** Where the CLI keeps the raw transcript: <CLI_HOME>/projects/<encoded-cwd>/<sessionId>.jsonl */
+const CLI_PROJECTS = path.join(CLI_HOME, 'projects')
+/**
+ * One file per live CLI process: {pid, sessionId, cwd, status, ...}. Stale files outlive their
+ * pid. `status` is the process's own word on what it is doing — see `activity()`.
+ */
+const CLI_LIVE = path.join(CLI_HOME, 'sessions')
 
 const HEAD_BYTES = 192 * 1024
 
@@ -85,6 +97,10 @@ const HEAD_BYTES = 192 * 1024
  * A live process on its own is not enough: the desktop app pre-warms idle sessions, so
  * threads untouched for days still hold a CLI process. Measured against real data, the
  * warmed ones sat 16 hours to 3 days idle while genuinely active work was minutes old.
+ *
+ * It also bounds what a registry record is allowed to say. A process that dies without cleaning
+ * up leaves its record behind with `status` frozen at its last word, and a reused pid would
+ * otherwise keep that word alive indefinitely.
  */
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000
 
@@ -206,7 +222,8 @@ const TAIL_BYTES = 64 * 1024
  * not do — it is `end_turn` on a main thread's last message and empty on some others — so what
  * the message *called* is the half worth testing.
  *
- * Only threads that could plausibly be running pay for this, so it costs one small read each.
+ * Only a thread whose process is idle — or from a CLI too old to say — pays for this, one small
+ * read each. See `activity()` for what the process itself reports.
  */
 async function awaitingReply(file) {
   let records
@@ -228,6 +245,44 @@ async function awaitingReply(file) {
   return false
 }
 
+/**
+ * Whether a thread is working right now, and whether it is waiting on you.
+ *
+ * The process says so itself. A current CLI keeps `status` in its registry record — `busy` while
+ * a turn runs, `waiting` at a permission prompt or a question, `idle` at the prompt, `shell`
+ * while you are in a shell escape — and it is the same word the CLI's own session list reads, so
+ * the astronaut and the terminal agree. It has to come first, because the transcript cannot
+ * settle the question on its own: a turn parked on a background agent, or on a long tool call,
+ * leaves the same final assistant message at the tail as a turn that has ended, and reading the
+ * tail alone marks a thread hammering away on your behalf as waiting on you.
+ *
+ * `idle` still gets the tail read, since only the transcript knows whether the prompt is empty
+ * because nothing has been asked yet or because the answer is sitting there for you. A record
+ * from an older CLI carries no `status` at all, and falls back to the tail for both questions.
+ *
+ * Every answer is bounded by ACTIVE_WINDOW_MS, measured from the later of the thread's own
+ * activity and the last status change — see the note on that constant.
+ */
+async function activity(thread, now) {
+  const fresh = now - Math.max(thread.lastActivityAt || 0, thread.liveStatusAt || 0) < ACTIVE_WINDOW_MS
+  if (!thread.hasLiveProcess || !fresh) return { running: false, waiting: false }
+  const tail = async () => (thread.transcriptFile ? awaitingReply(thread.transcriptFile) : false)
+  switch (thread.liveStatus) {
+    case 'busy':
+      return { running: true, waiting: false }
+    case 'waiting':
+      return { running: false, waiting: true }
+    case 'shell':
+      return { running: false, waiting: false }
+    case 'idle':
+      return { running: false, waiting: await tail() }
+    default: {
+      const waiting = await tail()
+      return { running: !waiting, waiting }
+    }
+  }
+}
+
 /** Transcript metadata is expensive to parse, so keep it until the file changes. */
 const metaCache = new Map()
 async function transcriptMeta(entry) {
@@ -244,11 +299,16 @@ async function transcriptMeta(entry) {
 }
 
 /**
- * Sessions with a CLI process actually alive right now. The registry keeps files for
- * processes that have exited, so every pid is probed before it counts.
+ * Sessions with a CLI process actually alive right now, keyed by session id, with what each
+ * process last said it was doing. The registry keeps files for processes that have exited, so
+ * every pid is probed before it counts.
+ *
+ * `status` is one of `busy`, `waiting`, `idle`, `shell` on a current CLI and absent on an older
+ * one; `statusUpdatedAt` is when it last changed. Both ride along untouched — `activity()` is
+ * where they come to mean something.
  */
 async function scanLiveSessions() {
-  const live = new Set()
+  const live = new Map()
   for (const file of await listFiles(CLI_LIVE, (n) => n.endsWith('.json'))) {
     let record
     try {
@@ -259,10 +319,13 @@ async function scanLiveSessions() {
     if (!record.sessionId || !record.pid) continue
     try {
       process.kill(record.pid, 0) // signal 0 only tests for existence
-      live.add(record.sessionId)
     } catch {
-      /* process is gone */
+      continue // process is gone
     }
+    live.set(record.sessionId, {
+      status: typeof record.status === 'string' ? record.status : '',
+      statusAt: num(record.statusUpdatedAt),
+    })
   }
   return live
 }
@@ -311,6 +374,8 @@ function mergeThread(existing, next) {
     lastFocusedAt: Math.max(existing.lastFocusedAt || 0, next.lastFocusedAt || 0),
     hasError: existing.hasError || next.hasError,
     hasLiveProcess: existing.hasLiveProcess || next.hasLiveProcess,
+    liveStatus: existing.liveStatus || next.liveStatus,
+    liveStatusAt: Math.max(existing.liveStatusAt || 0, next.liveStatusAt || 0),
     starred: existing.starred || next.starred,
     routine: existing.routine || next.routine,
     prState: existing.prState || next.prState,
@@ -328,7 +393,7 @@ function mergeThread(existing, next) {
 function toThread(t) {
   const {
     desktopSessionId, desktopSessionIds, cliSessionId, bridgeSessionId,
-    titled, hasLiveProcess, transcriptFile, recordActivityAt, ...rest
+    titled, hasLiveProcess, liveStatus, liveStatusAt, transcriptFile, recordActivityAt, ...rest
   } = t
   return {
     ...rest,
@@ -391,6 +456,8 @@ async function scanThreads() {
       recordActivityAt: num(s.lastActivityAt) || num(s.lastFocusedAt) || num(s.createdAt) || 0,
       lastFocusedAt: num(s.lastFocusedAt),
       hasLiveProcess: live.has(cliSessionId),
+      liveStatus: live.get(cliSessionId)?.status || '',
+      liveStatusAt: live.get(cliSessionId)?.statusAt || 0,
       hasError: Boolean(s.error),
       starred: s.isStarred === true,
       routine: s.scheduledTaskId || '',
@@ -429,6 +496,8 @@ async function scanThreads() {
       lastActivityAt: entry.mtime,
       lastFocusedAt: 0,
       hasLiveProcess: live.has(id),
+      liveStatus: live.get(id)?.status || '',
+      liveStatusAt: live.get(id)?.statusAt || 0,
       hasError: false,
       starred: false,
       routine: '',
@@ -469,12 +538,10 @@ async function scanThreads() {
   for (const thread of threads) {
     const seenAt = thread.recordActivityAt ?? thread.lastActivityAt
     thread.unread = thread.desktopSessionIds.length > 0 && seenAt > thread.lastFocusedAt
-    const fresh = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
-    const waiting =
-      thread.hasLiveProcess && fresh && thread.transcriptFile ? await awaitingReply(thread.transcriptFile) : false
-    thread.running = thread.hasLiveProcess && fresh && !waiting
-    // A thread that handed the turn back wants you, whether or not the desktop app has ever seen
-    // it — the only way a terminal-only thread can ask for anything at all.
+    const { running, waiting } = await activity(thread, now)
+    thread.running = running
+    // A thread that wants a reply, a permission or an answer wants you, whether or not the
+    // desktop app has ever seen it — the only way a terminal-only thread can ask for anything.
     if (waiting) thread.unread = true
   }
   return threads.map(toThread)

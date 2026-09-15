@@ -241,3 +241,122 @@ test('Cursor offers a folder link but never a per-thread one it cannot honour', 
   assert.equal(h.newSession('relative/path').ok, false)
   await fsp.rm(home, { recursive: true, force: true })
 })
+
+// ── Claude Code, faked on disk ────────────────────────────────────────────────
+
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
+
+const CLAUDE_SESSION = '7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f'
+
+const record = (type, content, message = {}) =>
+  JSON.stringify({
+    type,
+    timestamp: '2026-09-15T20:00:00.000Z',
+    cwd: '/tmp/demo',
+    sessionId: CLAUDE_SESSION,
+    message: { role: type, content, ...message },
+  })
+const asked = record('user', 'fix the thing')
+const answered = record('assistant', [{ type: 'text', text: 'Done.' }], { stop_reason: 'end_turn' })
+const calling = record('assistant', [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }], {
+  stop_reason: 'tool_use',
+})
+
+/**
+ * A `~/.claude` with one transcript and one registry record. `status` undefined writes a record
+ * the way a CLI from before the field did; `pid` defaults to this very process, which is as
+ * alive as a pid gets.
+ */
+async function fakeClaude({ tail, status, statusUpdatedAt, pid = process.pid, transcriptAgeMs = 0 }) {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-fixture-'))
+  const project = path.join(home, 'projects', '-tmp-demo')
+  await fsp.mkdir(project, { recursive: true })
+  const transcript = path.join(project, `${CLAUDE_SESSION}.jsonl`)
+  await fsp.writeFile(transcript, [asked, ...tail].join('\n') + '\n')
+  if (transcriptAgeMs) {
+    const then = new Date(Date.now() - transcriptAgeMs)
+    await fsp.utimes(transcript, then, then)
+  }
+  await fsp.mkdir(path.join(home, 'sessions'), { recursive: true })
+  const live = { pid, sessionId: CLAUDE_SESSION, cwd: '/tmp/demo', kind: 'interactive', entrypoint: 'cli' }
+  if (status !== undefined) Object.assign(live, { status, statusUpdatedAt: statusUpdatedAt ?? Date.now() })
+  await fsp.writeFile(path.join(home, 'sessions', `${pid}.json`), JSON.stringify(live))
+  return home
+}
+
+async function claudeWith(home) {
+  process.env.CLAUDE_CONFIG_DIR = home
+  // An empty desktop store, so nothing on the machine running the tests leaks into the fixture.
+  process.env.BOT_CROSSING_CLAUDE_DESKTOP = path.join(home, 'desktop')
+  const mod = await import(`../server/harnesses/claude-code.mjs?${home}`)
+  return mod.default
+}
+
+async function scanClaude(fixture) {
+  const home = await fakeClaude(fixture)
+  try {
+    const threads = await (await claudeWith(home)).scanThreads()
+    assert.equal(threads.length, 1, 'the fixture is the only thread')
+    return threads[0]
+  } finally {
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+}
+
+test('a busy process is running even when its transcript looks finished', async () => {
+  // A turn parked on a background agent or a long tool call leaves a final assistant message at
+  // the tail, exactly like a turn that has ended. The process knows the difference.
+  const t = await scanClaude({ tail: [answered], status: 'busy' })
+  assert.equal(t.id, `claude-code:${CLAUDE_SESSION}`)
+  assert.equal(t.project, 'demo')
+  assert.equal(t.running, true)
+})
+
+test('a permission prompt is waiting on you, not hammering away', async () => {
+  // The tail says a tool was called, which the transcript alone reads as mid-turn.
+  const t = await scanClaude({ tail: [calling], status: 'waiting' })
+  assert.equal(t.running, false)
+  assert.equal(t.unread, true)
+})
+
+test('idle at the prompt with an answer on the table is waiting on you', async () => {
+  const t = await scanClaude({ tail: [answered], status: 'idle' })
+  assert.equal(t.running, false)
+  assert.equal(t.unread, true)
+})
+
+test('a shell escape is neither working nor waiting', async () => {
+  const t = await scanClaude({ tail: [answered], status: 'shell' })
+  assert.equal(t.running, false)
+  assert.equal(t.unread, false)
+})
+
+test('a record from before `status` existed falls back to reading the transcript', async () => {
+  const working = await scanClaude({ tail: [calling] })
+  assert.equal(working.running, true)
+  const done = await scanClaude({ tail: [answered] })
+  assert.equal(done.running, false)
+  assert.equal(done.unread, true, 'the turn was handed back')
+})
+
+test('a record whose process has exited counts for nothing', async () => {
+  const child = spawn(process.execPath, ['-e', '0'], { stdio: 'ignore' })
+  await once(child, 'exit')
+  const t = await scanClaude({ tail: [calling], status: 'busy', pid: child.pid })
+  assert.equal(t.running, false)
+  assert.equal(t.unread, false)
+})
+
+test('a busy word that has gone stale is bounded by the activity window', async () => {
+  // Nothing has touched the transcript or the status for hours: whatever the record says, the
+  // process behind it is not doing anything anyone can see.
+  const stale = 3 * 60 * 60 * 1000
+  const t = await scanClaude({
+    tail: [calling],
+    status: 'busy',
+    statusUpdatedAt: Date.now() - stale,
+    transcriptAgeMs: stale,
+  })
+  assert.equal(t.running, false)
+})

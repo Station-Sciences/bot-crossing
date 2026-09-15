@@ -80,6 +80,14 @@ process liveness alone will report threads untouched for days as busy. Require r
 too. Probe every recorded pid before believing it — registries keep files for processes that
 exited.
 
+**Let the process speak before you guess from the transcript.** Where a harness records what each
+live process is doing — Claude Code's registry carries a `status` of `busy`, `waiting`, `idle` or
+`shell` — read that first. The transcript alone cannot tell a turn that ended from one parked on
+a background agent or a long tool call: both leave a final assistant message at the tail, and
+reading the tail alone marks a working thread as waiting on you. Keep the transcript read for
+records that predate the field, and for `idle`, where only the transcript knows whether an answer
+is sitting there for you.
+
 **Merge duplicates.** Resuming a thread often writes a second record pointing at the same
 transcript. Merge them, keep the richer one as canonical, and retain both ids so an archive
 covers the ghost as well.
@@ -104,7 +112,8 @@ method that holds up: find the directory, read one file, let the shape tell you 
 
 - **Claude Code** — GUI session records under the app's application-support directory, one JSON
   per thread; CLI transcripts as JSONL under a per-project directory in `~/.claude/projects`;
-  a live-process registry in `~/.claude/sessions`. Threads may exist in either store or both.
+  a live-process registry in `~/.claude/sessions`, one record per process with its `status`.
+  Threads may exist in either store or both.
 - **Codex CLI** — rollout files under `~/.codex/sessions`.
 - **OpenCode** — session storage under the platform data directory for `opencode`.
 - **Others** — Antigravity CLI, Amp, Aider, Goose, Cursor CLI, Qwen Code all keep local state;

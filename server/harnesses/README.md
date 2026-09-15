@@ -133,7 +133,10 @@ Verified on a real machine:
   `~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_*.json`
   (`%APPDATA%\Claude\claude-code-sessions\…` on Windows); CLI transcripts in
   `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`; live processes in
-  `~/.claude/sessions/*.json`. Implemented in `claude-code.mjs`.
+  `~/.claude/sessions/*.json`, each carrying the process's own `status` — `busy`, `waiting`,
+  `idle` or `shell` — which is where `running` comes from before any transcript is read.
+  `~/.claude` moves with `CLAUDE_CONFIG_DIR`, as it does for the CLI. Implemented in
+  `claude-code.mjs`.
 - **Codex CLI** — transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-<iso>-<uuid>.jsonl`,
   with records shaped `{ timestamp, type, payload }`, and what looks like an index at
   `~/.codex/session_index.jsonl`. Not implemented yet.
