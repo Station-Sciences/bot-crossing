@@ -241,3 +241,95 @@ test('Cursor offers a folder link but never a per-thread one it cannot honour', 
   assert.equal(h.newSession('relative/path').ok, false)
   await fsp.rm(home, { recursive: true, force: true })
 })
+
+// ── Claude Code, faked on disk ────────────────────────────────────────────────
+
+/**
+ * Both stores under one temp root: the CLI's home (`CLAUDE_CONFIG_DIR`, so `projects/` and
+ * `sessions/` sit inside it) and the desktop app's session store (`BOT_CROSSING_CLAUDE_DESKTOP`),
+ * with one transcript for SESSION_ID and whatever records and deletion markers a test asks for.
+ */
+async function fakeClaude({ transcript, records = [], deleted = [] }) {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-fixture-'))
+  const configDir = path.join(root, 'claude')
+  const desktop = path.join(root, 'claude-code-sessions')
+  const project = path.join(configDir, 'projects', '-tmp-demo')
+  const org = path.join(desktop, 'account', 'org')
+  await fsp.mkdir(project, { recursive: true })
+  await fsp.mkdir(org, { recursive: true })
+  await fsp.writeFile(path.join(project, `${SESSION_ID}.jsonl`), transcript.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  for (const r of records) await fsp.writeFile(path.join(org, `${r.sessionId}.json`), JSON.stringify(r))
+  // What the app leaves behind when a thread is deleted: the time, under the CLI session's id.
+  for (const id of deleted) await fsp.writeFile(path.join(org, `deleted_${id}`), String(Date.now()))
+  return { root, configDir, desktop, org }
+}
+
+async function claudeWith({ configDir, desktop }) {
+  process.env.CLAUDE_CONFIG_DIR = configDir
+  process.env.BOT_CROSSING_CLAUDE_DESKTOP = desktop
+  const mod = await import(`../server/harnesses/claude-code.mjs?${configDir}`)
+  return mod.default
+}
+
+const typed = (text) => ({
+  type: 'user',
+  cwd: '/tmp/demo',
+  timestamp: '2026-09-07T12:00:00.000Z',
+  message: { role: 'user', content: text },
+})
+
+/** Every file under a fixture, with size and mtime — what a read-only scan has to leave alone. */
+async function listing(dir) {
+  const out = []
+  for (const e of await fsp.readdir(dir, { withFileTypes: true, recursive: true })) {
+    if (!e.isFile()) continue
+    const file = path.join(e.parentPath, e.name)
+    const st = await fsp.stat(file)
+    out.push([path.relative(dir, file), st.size, st.mtimeMs])
+  }
+  return out.sort()
+}
+
+test('a thread deleted in the desktop app is reported archived, not dropped', async () => {
+  const fx = await fakeClaude({ transcript: [typed('tidy the ledger')] })
+  const h = await claudeWith(fx)
+  assert.equal(await h.detect(), true)
+  const [before] = await h.scanThreads()
+  assert.equal(before.id, `claude-code:${SESSION_ID}`)
+  assert.equal(before.source, 'cli', 'with no record, the transcript reads as terminal-started')
+  assert.equal(before.archived, false)
+
+  // Deleting in the app removes the record and leaves `deleted_<cliSessionId>`; the transcript stays.
+  await fsp.writeFile(path.join(fx.org, `deleted_${SESSION_ID}`), String(Date.now()))
+  const files = await listing(fx.root)
+  const [after] = await h.scanThreads()
+  assert.equal(after.archived, true, 'noticed on the next poll, no restart')
+  assert.equal(after.title, 'tidy the ledger', 'still a thread, so the colony sends it home rather than losing it')
+  assert.deepEqual(await listing(fx.root), files, 'the marker is read and never tidied — the adapter does not write')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test('a record the app still holds outranks a leftover deletion marker', async () => {
+  // Resuming a deleted transcript makes the app write a fresh record; the marker stays behind.
+  const fx = await fakeClaude({
+    transcript: [typed('bring it back')],
+    records: [
+      {
+        sessionId: 'local_2df3987c-02d3-405e-b8f5-da30e3835213',
+        cliSessionId: SESSION_ID,
+        cwd: '/tmp/demo',
+        title: 'Back again',
+        createdAt: 1,
+        lastActivityAt: 2,
+        lastFocusedAt: 3,
+      },
+    ],
+    deleted: [SESSION_ID],
+  })
+  const h = await claudeWith(fx)
+  const [t] = await h.scanThreads()
+  assert.equal(t.source, 'desktop')
+  assert.equal(t.title, 'Back again')
+  assert.equal(t.archived, false, 'a record that exists is the newer truth')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
