@@ -114,6 +114,15 @@ const actions = {
       return
     }
     pool.sort((a, b) => a.id.localeCompare(b.id))
+    // Nothing selected yet: skip the cycle and go straight to whoever's been busiest most
+    // recently, rather than the arbitrary first id in sorted order.
+    if (!selectedId) {
+      const agent = pool.reduce((most, a) =>
+        (a.thread?.lastActivityAt || 0) > (most.thread?.lastActivityAt || 0) ? a : most
+      )
+      select(agent.id, { fly: true })
+      return
+    }
     const agent = pool[statusCursor++ % pool.length]
     select(agent.id, { fly: true })
   },
@@ -541,6 +550,10 @@ window.addEventListener('keydown', (e) => {
     case 'n':
     case 'N':
       actions.focusStatus('waiting')
+      break
+    case 'm':
+    case 'M':
+      actions.focusStatus('agents')
       break
     case 'p':
     case 'P':
