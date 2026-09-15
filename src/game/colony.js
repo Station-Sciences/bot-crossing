@@ -18,6 +18,7 @@ import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.
 import { Ship } from '../world/ship.js'
 import { MCPFactory, MCPPipeField } from '../world/mcpFactory.js'
 import { UsageCanister } from '../world/usageCanister.js'
+import { UsageBurstField } from '../world/usageBursts.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
 import { MAX_AGENT_CAP } from '../core/settings.js'
@@ -146,6 +147,7 @@ export class Colony {
     this.mcpPipes = new MCPPipeField(scene, this.mcpFactory)
     this.usageCanister = new UsageCanister(scene, usageCanisterPosition())
     this.usageCanister.group.visible = settings.get('usageCanister')
+    this.usageBursts = new UsageBurstField(scene, this.usageCanister)
     this.astronauts = new Astronauts(scene, settings)
     this.astronauts.world = this._world()
     // Sized for the largest preset rather than the current one: unlike the astronaut meshes these
@@ -747,7 +749,10 @@ export class Colony {
       this.mcpPipes.update(dt, elapsed, this.astronauts.agents, false)
       this.mcpFactory.update(dt, elapsed, night)
     }
-    if (this.settings.get('usageCanister')) this.usageCanister.update(dt, elapsed, night)
+    const usageEnabled = this.settings.get('usageCanister')
+    if (usageEnabled) this.usageCanister.update(dt, elapsed, night)
+    // Let any orbs already in flight finish their run even if the toggle just went off.
+    if (usageEnabled || this.usageBursts.orbs.length) this.usageBursts.update(dt)
 
     this._growBuildings(dt)
     this.astronauts.update(dt, elapsed)
@@ -892,6 +897,19 @@ export class Colony {
     this.usageCanister.setLevel(info)
   }
 
+  /**
+   * A burst of new spend just landed on `threadId`'s own transcript — send it a few orbs from
+   * the tank, if it is standing anywhere on the map right now and the canister is even on.
+   * Silent misses (an archived thread, the canister toggled off) are the normal case, not
+   * something worth a warning: usage keeps accruing on threads nobody is looking at.
+   */
+  burstUsage(threadId, count) {
+    if (!this.settings.get('usageCanister')) return
+    const agent = this.astronauts.byId.get(threadId)
+    if (!agent) return
+    this.usageBursts.spawn(agent.pos, count)
+  }
+
   setUiVisible(visible) {
     this.uiVisible = visible
     this._syncLabels()
@@ -908,6 +926,7 @@ export class Colony {
     this.mcpPipes.dispose()
     this.mcpFactory.dispose()
     this.usageCanister.dispose()
+    this.usageBursts.dispose()
     this.astronauts.dispose()
     this.indicators.dispose()
     this.particles.dispose()

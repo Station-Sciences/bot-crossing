@@ -99,6 +99,9 @@ export class UsageCanister {
     this.paceTarget = 1
     this.pulse = 0
     this._flash = 0
+    /** This frame's pace colour, read by `UsageBurstField` so a flight of orbs tints the same
+     *  as whatever the tank itself is showing right now. */
+    this.currentColor = COLOR_HIGH.clone()
 
     this._buildHull()
     this._buildGoo()
@@ -251,6 +254,7 @@ export class UsageCanister {
 
     const t = this.pace
     const color = t > 0.5 ? COLOR_MID.clone().lerp(COLOR_HIGH, (t - 0.5) * 2) : COLOR_LOW.clone().lerp(COLOR_MID, t * 2)
+    this.currentColor.copy(color)
 
     this.gooMaterial.uniforms.uTime.value = elapsed
     this.gooMaterial.uniforms.uLevel.value = Math.max(0.02, this.level)

@@ -701,6 +701,7 @@ async function pollUsage() {
     const usage = await fetchUsage()
     colony.setUsage(usage)
     hud.setUsage(usage)
+    for (const b of usage.bursts || []) colony.burstUsage(b.threadId, b.count)
   } catch {
     /* no transcripts to read, or the endpoint failed — the canister just holds its last level */
   }

@@ -136,17 +136,20 @@ async function* transcriptFiles() {
   }
 }
 
-/** Read whatever of `filePath` hasn't been read yet, and fold any new spend into the cache. */
+/** Read whatever of `filePath` hasn't been read yet, and fold any new spend into the cache.
+ *  `added` is just the entries found *this call* — nobody but the burst-detection in
+ *  `usageSnapshot` cares about that slice, everyone else wants the full `entries`. */
 async function readNewEntries(filePath, cached) {
   const stat = await fsp.stat(filePath)
-  if (cached && stat.size === cached.size) return cached
+  if (cached && stat.size === cached.size) return { ...cached, added: [] }
 
   // A file that shrank is not one this cache's byte offset still means anything against — a
   // rotated or truncated transcript, in practice never a session Claude Code is still writing.
   const startAt = cached && cached.readBytes <= stat.size ? cached.readBytes : 0
   const entries = startAt > 0 ? cached.entries : []
+  const added = []
   const length = stat.size - startAt
-  if (length <= 0) return { size: stat.size, readBytes: startAt, entries }
+  if (length <= 0) return { size: stat.size, readBytes: startAt, entries, added }
 
   const handle = await fsp.open(filePath, 'r')
   let consumed = 0
@@ -157,7 +160,7 @@ async function readNewEntries(filePath, cached) {
     // The last line may be mid-write; leave it for the next scan rather than risk a partial
     // JSON parse silently losing that entry's spend forever.
     const lastBreak = text.lastIndexOf('\n')
-    if (lastBreak < 0) return { size: stat.size, readBytes: startAt, entries }
+    if (lastBreak < 0) return { size: stat.size, readBytes: startAt, entries, added }
     const complete = text.slice(0, lastBreak)
     consumed = Buffer.byteLength(complete, 'utf8') + 1
 
@@ -168,7 +171,11 @@ async function readNewEntries(filePath, cached) {
         if (obj.type !== 'assistant' || !obj.message?.usage) continue
         const ts = Date.parse(obj.timestamp)
         const usd = costFor(obj.message.usage, obj.message.model)
-        if (Number.isFinite(ts) && usd > 0) entries.push({ ts, usd })
+        if (Number.isFinite(ts) && usd > 0) {
+          const entry = { ts, usd }
+          entries.push(entry)
+          added.push(entry)
+        }
       } catch {
         // A half-flushed or corrupt line. Skipping it costs one entry's spend, which is
         // nothing next to a scan that throws and takes the whole canister dark with it.
@@ -177,8 +184,24 @@ async function readNewEntries(filePath, cached) {
   } finally {
     await handle.close()
   }
-  return { size: stat.size, readBytes: startAt + consumed, entries }
+  return { size: stat.size, readBytes: startAt + consumed, entries, added }
 }
+
+/** `<sessionId>.jsonl` is the whole filename Claude Code writes; that id is also, prefixed,
+ *  the astronaut's own thread id — see `ID` in `harnesses/claude-code.mjs`. */
+function threadIdFor(filePath) {
+  return `claude-code:${path.basename(filePath, '.jsonl')}`
+}
+
+/**
+ * Whether `fileCache` has ever been populated. The very first scan reads each transcript's
+ * whole month of history in one gulp, which would otherwise look exactly like a burst of new
+ * spend on every session at once — so nothing is reported as "new" until the second scan.
+ */
+let warmedUp = false
+
+/** Below this, a "new" charge is float noise from a cache read, not something worth a burst. */
+const MIN_BURST_USD = 0.001
 
 /** Everything the goo canister needs to draw itself. */
 export async function usageSnapshot() {
@@ -186,6 +209,7 @@ export async function usageSnapshot() {
   const { start: monthStart, end: monthEnd } = monthBounds()
 
   let usedUsd = 0
+  const bursts = []
   for await (const file of transcriptFiles()) {
     let result
     try {
@@ -201,7 +225,13 @@ export async function usageSnapshot() {
     }
     fileCache.set(file, result)
     for (const e of result.entries) usedUsd += e.usd
+
+    if (warmedUp && result.added.length) {
+      const usd = result.added.reduce((sum, e) => sum + e.usd, 0)
+      if (usd >= MIN_BURST_USD) bursts.push({ threadId: threadIdFor(file), usd, count: result.added.length })
+    }
   }
+  warmedUp = true
 
   const remainingPct = budgetUsd > 0 ? Math.max(0, Math.min(1, 1 - usedUsd / budgetUsd)) : 1
 
@@ -219,5 +249,5 @@ export async function usageSnapshot() {
   const pctElapsed = Math.max(0.01, Math.min(1, (Date.now() - monthStart) / Math.max(1, monthEnd - monthStart)))
   const pace = pctUsed / pctElapsed
 
-  return { usedUsd, budgetUsd, monthStart, monthEnd, remainingPct, pace, scannedAt: Date.now() }
+  return { usedUsd, budgetUsd, monthStart, monthEnd, remainingPct, pace, bursts, scannedAt: Date.now() }
 }
