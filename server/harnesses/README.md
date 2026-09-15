@@ -18,8 +18,8 @@ export default {
   name: 'My Harness',            // what a human sees in the UI
   detect,                        // () => Promise<boolean>
   scanThreads,                   // () => Promise<Thread[]>
-  openThread,                    // (ref) => { ok, url } | { ok: false, error }
-  newSession,                    // (dir) => { ok, url } | { ok: false, error }
+  openThread,                    // (ref) => { ok, url, command? } | { ok: false, error }
+  newSession,                    // (dir) => { ok, url, command? } | { ok: false, error }
 }
 ```
 
@@ -49,6 +49,10 @@ broken adapter costs you its own threads and nothing else. Prefer that over retu
 Return `{ ok: true, url }` and the server hands that URL to the OS opener. `openThread` gets
 the `ref` from the thread it belongs to; `newSession` gets an absolute directory that the
 server has already checked still exists.
+
+Add `command: { argv, cwd }` — the harness's own CLI resuming the same thread, with an absolute `argv[0]` —
+when the CLI is installed, and the server runs it in a terminal for a machine with no desktop app or a person who asked for one.
+Never spawn it yourself.
 
 If your harness has no deep link, return `{ ok: false, error: '…' }` and say why — the UI
 shows the message rather than pretending the click worked.
