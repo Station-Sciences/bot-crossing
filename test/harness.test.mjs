@@ -4,7 +4,7 @@
  *
  * Fixture-driven. Nothing here reads a real harness, so it says the same thing on any machine.
  */
-import test from 'node:test'
+import test, { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
@@ -15,6 +15,7 @@ import codex from '../server/harnesses/codex.mjs'
 import claudeCode from '../server/harnesses/claude-code.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
 import { schemeOf } from '../server/lib/xdg.mjs'
+import { withEnv, withPlatform, fakeExecutable } from './support/env.mjs'
 
 // ── the contract ──────────────────────────────────────────────────────────────
 
@@ -43,17 +44,96 @@ test('a session id that merely stringifies to a UUID is refused', async () => {
   const uuid = '2df3987c-02d3-405e-b8f5-da30e3835213'
   assert.equal((await claudeCode.openThread({ cliSessionId: [uuid] })).ok, false)
   assert.equal((await claudeCode.openThread({ desktopSessionId: { toString: () => `local_${uuid}` } })).ok, false)
-  assert.equal(codex.openThread({ sessionId: [uuid] }).ok, false)
-  assert.equal(codex.openThread({}).ok, false)
-  assert.equal(codex.openThread(null).ok, false)
+  assert.equal((await codex.openThread({ sessionId: [uuid] })).ok, false)
+  assert.equal((await codex.openThread({})).ok, false)
+  assert.equal((await codex.openThread(null)).ok, false)
 })
 
-test('codex opens through the registered scheme and prefixes its ids', () => {
+test('codex opens through the registered scheme and prefixes its ids', async () => {
   const id = '019cc762-45a2-7112-89cd-cd345c17e834'
-  const opened = codex.openThread({ sessionId: id })
+  const opened = await codex.openThread({ sessionId: id })
   assert.equal(opened.ok, true)
   assert.equal(schemeOf(opened.url), 'codex')
   assert.equal(opened.url, `codex://threads/${id}`)
+})
+
+// ── the CLI alongside the deep link ───────────────────────────────────────────
+
+/**
+ * A fake `claude` or `codex` at the front of PATH, which `findExecutable` walks before the
+ * install dirs — so it wins even on a machine that has the real one in `/usr/bin`.
+ */
+async function withFakeCli(name, fn) {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-cli-'))
+  try {
+    const cli = await fakeExecutable(dir, name)
+    return await withEnv({ PATH: dir }, () => fn(cli.file))
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+}
+
+const CLI_UUID = '2df3987c-02d3-405e-b8f5-da30e3835213'
+const SKIP = { skip: process.platform === 'win32' }
+
+describe('claude-code', SKIP, () => {
+  describe('when the claude CLI is on PATH and the platform is darwin', () => {
+    it('should offer --resume alongside the URL', async () => {
+      const opened = await withFakeCli('claude', (bin) =>
+        withPlatform('darwin', async () => ({
+          bin,
+          result: await claudeCode.openThread({ cliSessionId: CLI_UUID, cwd: '/tmp/demo' }),
+        }))
+      )
+      assert.deepEqual(opened.result.command, { argv: [opened.bin, '--resume', CLI_UUID], cwd: '/tmp/demo' })
+    })
+
+    it('should offer the bare CLI for a new session', async () => {
+      const opened = await withFakeCli('claude', (bin) =>
+        withPlatform('darwin', async () => ({ bin, result: await claudeCode.newSession('/tmp/demo') }))
+      )
+      assert.deepEqual(opened.result.command, { argv: [opened.bin], cwd: '/tmp/demo' })
+    })
+  })
+})
+
+describe('codex', SKIP, () => {
+  describe('when the codex CLI is on PATH', () => {
+    it("should offer codex resume <id> in the thread's cwd", async () => {
+      const opened = await withFakeCli('codex', async (bin) => ({
+        bin,
+        result: await codex.openThread({ sessionId: SESSION_ID, cwd: '/tmp/demo' }),
+      }))
+      assert.deepEqual(opened.result.command, { argv: [opened.bin, 'resume', SESSION_ID], cwd: '/tmp/demo' })
+    })
+
+    it('should offer the bare CLI for a new session', async () => {
+      const opened = await withFakeCli('codex', async (bin) => ({ bin, result: await codex.newSession('/tmp/demo') }))
+      assert.deepEqual(opened.result.command, { argv: [opened.bin], cwd: '/tmp/demo' })
+    })
+
+    describe('and the ref has no cwd', () => {
+      it('should offer the command with an empty cwd', async () => {
+        const opened = await withFakeCli('codex', async (bin) => ({
+          bin,
+          result: await codex.openThread({ sessionId: SESSION_ID }),
+        }))
+        assert.deepEqual(opened.result.command, { argv: [opened.bin, 'resume', SESSION_ID], cwd: '' })
+      })
+    })
+  })
+
+  describe('when the codex CLI is not on PATH', () => {
+    it('should offer the URL alone', async () => {
+      const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
+      try {
+        const opened = await withEnv({ PATH: dir }, () => codex.openThread({ sessionId: SESSION_ID }))
+        assert.deepEqual(opened, { ok: true, url: `codex://threads/${SESSION_ID}`, command: undefined })
+      } finally {
+        await fsp.rm(dir, { recursive: true, force: true })
+      }
+    })
+  })
 })
 
 // ── a Codex install, faked on disk ────────────────────────────────────────────
@@ -95,6 +175,7 @@ test('a CLI-only Codex session is found with no database at all', async () => {
   assert.equal(t.preview, 'ship the thing')
   assert.ok(t.sizeBytes > 0, 'sizeBytes is transcript bytes, not a token count')
   assert.equal(t.running, false)
+  assert.deepEqual(t.ref, { sessionId: SESSION_ID, cwd: '/tmp/demo' }, 'ref carries the cwd the CLI resumes in')
   await fsp.rm(home, { recursive: true, force: true })
 })
 

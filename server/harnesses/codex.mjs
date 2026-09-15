@@ -15,14 +15,16 @@
  * has not indexed; reading only the transcripts means reconstructing metadata the database
  * already has correct.
  *
- * Read-only, without exception, and no subprocess anywhere. Codex has an archive of its own that
- * only its CLI can set, so archiving here is recorded in the colony alone — see the note on
- * archiving in `server/harnesses/README.md`.
+ * Read-only, without exception, and the scan starts no subprocess. The only executable this
+ * module ever names is the `codex` binary on the user's own PATH, handed to the server as an argv
+ * for a terminal — nothing here runs anything. Codex has an archive of its own that only its CLI
+ * can set, so archiving here is recorded in the colony alone — see the note on archiving in
+ * `server/harnesses/README.md`.
  */
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
-import { exists, jsonLines, listDirs, listFiles, num, readHead, readTail } from '../lib/fsutil.mjs'
+import { exists, findExecutable, jsonLines, listDirs, listFiles, num, readHead, readTail } from '../lib/fsutil.mjs'
 
 const HOME = os.homedir()
 const CODEX_HOME = process.env.CODEX_HOME || path.join(HOME, '.codex')
@@ -299,23 +301,48 @@ async function scanThreads() {
       sizeBytes: entry?.size || 0,
       source: row?.source === 'vscode' ? 'vscode' : 'cli',
       canOpen: true,
-      ref: { sessionId: id },
+      ref: { sessionId: id, cwd },
     })
   }
   return out
 }
 
-/** `codex://` is registered by the Codex desktop app; the OS opener does the rest. */
-function openThread(ref) {
-  const id = ref?.sessionId
+/**
+ * Where the `codex` CLI is, for a page that would rather have a terminal than the app. PATH
+ * first, then the places `npm i -g` and Homebrew put a binary that a server started from a
+ * launcher would not see — never inside an application bundle.
+ */
+const CLI_DIRS = [
+  path.join(HOME, '.local', 'bin'),
+  path.join(HOME, '.npm-global', 'bin'),
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/usr/bin',
+]
+const cliBinary = () => findExecutable('codex', CLI_DIRS)
+
+/**
+ * `codex://threads/<id>` is registered by the Codex desktop app; the OS opener does the rest.
+ * `codex resume <id>` is the CLI's own way back into the same session, offered alongside for a
+ * page that prefers a terminal. Nothing is run here — the server decides whether it is.
+ */
+async function openThread(ref) {
+  const { sessionId: id, cwd } = ref || {}
   if (typeof id !== 'string' || !UUID.test(id)) {
     return { ok: false, error: 'No openable Codex session id on that thread' }
   }
-  return { ok: true, url: `codex://threads/${id}` }
+  const bin = await cliBinary()
+  const command = bin ? { argv: [bin, 'resume', id], cwd: typeof cwd === 'string' ? cwd : '' } : undefined
+  return { ok: true, url: `codex://threads/${id}`, command }
 }
 
-function newSession(dir) {
-  return { ok: true, url: `codex://threads/new?${new URLSearchParams({ path: dir })}` }
+async function newSession(dir) {
+  const bin = await cliBinary()
+  return {
+    ok: true,
+    url: `codex://threads/new?${new URLSearchParams({ path: dir })}`,
+    command: bin ? { argv: [bin], cwd: dir } : undefined,
+  }
 }
 
 /** Claim the machine if either store is there — a CLI-only install has no database. */
