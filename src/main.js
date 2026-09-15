@@ -12,7 +12,10 @@ import { TIMES } from './world/sky.js'
 import {
   fetchThreads,
   fetchState,
+  fetchTranscript,
+  fetchActivity,
   saveState,
+  searchThreads,
   openThread,
   newSession,
   revealFolder,
@@ -49,6 +52,8 @@ const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer
 
 let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
 let threads = []
+/** Active timeline filter. null = show everything (live view). */
+let timeFilter = null // { from: epochMs, to: epochMs }
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
 /** The zone layout as last written to the colony file, so an unchanged map is not re-saved. */
@@ -105,7 +110,18 @@ const actions = {
   /** Fly to the next astronaut in a given state, cycling through them on repeat presses. */
   focusStatus: (status) => {
     const key = status === 'agents' ? null : status
-    const pool = colony.astronauts.agents.filter((a) => (key ? a.status === key : true))
+    let pool
+    if (key && colony.statusAgents?.has(key)) {
+      // The ids the stat bar's own count was computed from, on the same pass that counted
+      // them — so the click always finds the crew the number described, even in the window
+      // between a poll landing and the astronauts' own `status` fields catching up. Without
+      // this, a count computed one poll ago could send the click at a roster that has since
+      // gone idle, and the button would answer "nobody" while the bar still said otherwise.
+      const ids = new Set(colony.statusAgents.get(key))
+      pool = colony.astronauts.agents.filter((a) => ids.has(a.id))
+    } else {
+      pool = colony.astronauts.agents.filter((a) => (key ? a.status === key : true))
+    }
     if (!pool.length) {
       hud.hint(key ? `Nobody is ${(STATUS_LABEL[key] || key).toLowerCase()} right now` : 'No crew on the surface')
       return
@@ -226,7 +242,11 @@ const actions = {
     const thread = threads.find((t) => t.id === selectedId)
     if (!thread) return
     try {
-      await openThread(thread)
+      const result = await openThread(thread)
+      // A headless server cannot open http links itself — it hands them back here, and this
+      // page is what can. Custom schemes are left alone: the server has already launched
+      // the app that answers them, and opening one twice would.
+      if (result && result.url && /^https?:/i.test(result.url)) window.open(result.url, '_blank')
       colony.astronauts.celebrate(thread.id)
       hud.toast(`Opened in ${thread.harnessName || 'your harness'}`)
       // Opening is the thing that makes a thread no longer unread, so refresh shortly after.
@@ -268,6 +288,71 @@ const actions = {
   progressFor: (id) => {
     const thread = threads.find((t) => t.id === id)
     return thread ? transcriptProgress(thread) : 0
+  },
+
+  /** The conversation for the chat panel — failures become "no messages", never an error card. */
+  loadTranscript: async (thread) => {
+    try {
+      return await fetchTranscript(thread)
+    } catch {
+      return { ok: false, messages: [] }
+    }
+  },
+
+  /** Session search: debounced by the HUD, answered from the server's last scan. */
+  search: async (query) => {
+    if (!query || query.length < 2) return []
+    try {
+      const result = await searchThreads(query)
+      return result.results || []
+    } catch {
+      return []
+    }
+  },
+
+  /** Activity buckets for the timeline panel — a failure renders as empty, not an error. */
+  loadActivity: async (from, to) => {
+    try {
+      return await fetchActivity(from, to)
+    } catch {
+      return null
+    }
+  },
+
+  /**
+   * The timeline's time machine. When set, the colony only shows sessions that were
+   * active during the window — everything else folds away until the filter is cleared.
+   * `null` is the live view, where a session that starts a second from now walks down
+   * the ramp on the next poll, which a filter over all time never would.
+   */
+  setTimeFilter: (from, to) => {
+    if (from && to) {
+      timeFilter = {
+        from: from.getTime ? from.getTime() : from,
+        to: to.getTime ? to.getTime() : to,
+      }
+    } else {
+      timeFilter = null
+    }
+    applyThreads(threads)
+  },
+
+  /** A search result picked: close the panel and fly to that astronaut. */
+  selectSearchResult: (result) => {
+    hud.toggleSearch(false)
+    const threadId = result?.id
+    const agent = colony.agentFor(threadId)
+    if (!agent) {
+      // Archived, hidden or folded away — the session is in the harness but not on the
+      // map, and flying nowhere would read as the click having done nothing at all.
+      hud.hint(
+        result?.archived
+          ? 'That session is archived — it stays in your harness'
+          : 'That session is not on the map right now'
+      )
+      return
+    }
+    select(threadId, { fly: true })
   },
 }
 
@@ -549,6 +634,16 @@ window.addEventListener('keydown', (e) => {
     case 'V':
       if (selectedId) actions.markViewed()
       break
+    case 'f':
+    case 'F':
+    case '/':
+      e.preventDefault()
+      hud.toggleSearch()
+      break
+    case 't':
+    case 'T':
+      hud.toggleTimeline()
+      break
     case 'c':
     case 'C':
       if (selectedProject) actions.newConversation()
@@ -584,6 +679,8 @@ window.addEventListener('keydown', (e) => {
     // One step at a time, outward: the thread, then the zone it belongs to.
     case 'Escape':
       if (document.querySelector('.help.open')) hud.toggleHelp(false)
+      else if (!document.querySelector('.timeline-panel.closed')) hud.toggleTimeline(false)
+      else if (!document.querySelector('.search-panel.closed')) hud.toggleSearch(false)
       else if (selectedId) select(null, {})
       else if (selectedProject) actions.closeProject()
       break
@@ -601,6 +698,32 @@ function applyThreads(list) {
     return at && t.lastActivityAt <= at ? { ...t, unread: false } : t
   })
   list = threads
+
+  // Auto-archive: sessions dormant past the chosen line leave the map on their own —
+  // same list, same walk to the ship, exactly as if archived by hand. Capped per poll so
+  // turning the setting on with a hundred stale checkouts retires them in visible
+  // batches rather than emptying the colony in one click. Threads already archived are
+  // skipped by id, so this never re-archives anything.
+  if (settings.get('autoArchive')) {
+    const days = Number(settings.get('autoArchiveDays')) || 30
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
+    const already = new Set(state.archived)
+    const batch = []
+    for (const t of list) {
+      if (batch.length >= 50) break
+      if (t.archived || already.has(t.id)) continue
+      if (statusFor(t) !== 'sleeping' || (t.lastActivityAt ?? 0) >= cutoff) continue
+      batch.push(t.id)
+    }
+    if (batch.length) {
+      const at = Date.now()
+      state.archived = [...already, ...batch]
+      state.archivedAt = { ...state.archivedAt, ...Object.fromEntries(batch.map((id) => [id, at])) }
+      queueSave()
+      hud.toast(`Auto-archived ${batch.length} dormant session${batch.length === 1 ? '' : 's'}`)
+    }
+  }
+
   const archivedSet = new Set(state.archived)
   const hiddenSet = new Set(state.hiddenProjects || [])
 
@@ -617,16 +740,37 @@ function applyThreads(list) {
   }
   if (firstSeen) queueSave()
 
-  const stats = colony.setThreads(list, archivedSet, hiddenSet, known)
+  // Apply the timeline filter — when one is set, only sessions active during the window
+  // are shown. A session is "in range" if it was alive at any point in the window: its
+  // last activity falls inside it, it was created inside it, or it spans the whole thing.
+  // Everything else leaves the map — buildings down, astronauts home, zones folded away —
+  // and comes back the moment the filter is cleared.
+  let filtered = list
+  if (timeFilter) {
+    filtered = list.filter((t) => {
+      const created = t.createdAt || 0
+      const active = t.lastActivityAt || created
+      return active >= timeFilter.from && created <= timeFilter.to
+    })
+  }
+
+  const stats = colony.setThreads(filtered, archivedSet, hiddenSet, known)
   hud.setStats(stats)
 
   legendProjects = colony.plotOrder
-    .map((plot) => ({
-      name: plot.name,
-      accent: plot.accent,
-      count: list.filter((t) => !t.archived && !archivedSet.has(t.id) && t.project === plot.name).length,
-      urgent: colony.urgentPlots?.has(plot.id) ?? false,
-    }))
+    .map((plot) => {
+      const model = colony.modelInfo?.get(plot.name)
+      return {
+        name: plot.name,
+        accent: plot.accent,
+        count: filtered.filter((t) => !t.archived && !archivedSet.has(t.id) && t.project === plot.name).length,
+        urgent: colony.urgentPlots?.has(plot.id) ?? false,
+        // The zone's dominant model, for the model heatmap — colour and the model id itself,
+        // which the HUD turns into the label it shows.
+        modelColor: model?.color ?? null,
+        model: model?.model || '',
+      }
+    })
     .sort((a, b) => b.count - a.count)
 
   // Keep the card honest if the thread it is showing changed underneath it.
@@ -739,6 +883,12 @@ settings.onChange((changed, scope) => {
   // rebuilt from the list rather than merely re-rendered.
   if (changed.has('hideDormant')) applyThreads(threads)
   if (changed.has('maxAgents')) applyThreads(threads)
+  // So does the model heatmap: the legend re-renders from the same list, and a poll-sized
+  // wait before the swatches change would read as the toggle not working.
+  if (changed.has('modelHeatmap')) applyThreads(threads)
+  // So does turning auto-archive on or moving its line: the first poll-sized wait before
+  // anything happens would read as the toggle not working.
+  if (changed.has('autoArchive') || changed.has('autoArchiveDays')) applyThreads(threads)
 })
 
 // ── frame ─────────────────────────────────────────────────────────────────────────────

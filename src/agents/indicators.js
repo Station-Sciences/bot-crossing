@@ -3,6 +3,7 @@ import {
   mdiHelpCircle,
   mdiAlert,
   mdiHammer,
+  mdiThoughtBubble,
   mdiCheckBold,
   mdiPause,
   mdiSleep,
@@ -20,7 +21,7 @@ import {
  * when you have pulled the camera right out.
  */
 
-const COLS = 4
+const COLS = 5
 const ROWS = 2
 
 /** Where the badge's bottom edge sits: a shade above the crown of the helmet. */
@@ -31,11 +32,12 @@ export const BADGE = {
   waiting: 0, // waiting on you — the one that matters most
   blocked: 1, // errored
   working: 2,
-  done: 3,
-  paused: 4,
-  sleeping: 5,
-  spawning: 6,
-  leaving: 7,
+  thinking: 3, // the model is processing — distinct from the hammering of `working`
+  done: 4,
+  paused: 5,
+  sleeping: 6,
+  spawning: 7,
+  leaving: 8,
 }
 
 /** Badge tint. Pushed past 1.0 so the bloom pass gives them a soft halo. */
@@ -43,11 +45,12 @@ const BADGE_COLOR = {
   0: [0.42, 1.35, 2.9],
   1: [2.9, 0.6, 0.5],
   2: [0.4, 1.9, 0.95],
-  3: [1.5, 2.4, 0.8],
-  4: [2.5, 1.9, 0.65],
-  5: [0.9, 1.0, 1.7],
-  6: [2.4, 1.4, 0.75],
-  7: [1.2, 1.3, 1.35],
+  3: [1.0, 0.75, 1.6], // soft purple, past 1.0 in blue
+  4: [1.5, 2.4, 0.8],
+  5: [2.5, 1.9, 0.65],
+  6: [0.9, 1.0, 1.7],
+  7: [2.4, 1.4, 0.75],
+  8: [1.2, 1.3, 1.35],
 }
 
 /**
@@ -59,6 +62,7 @@ const FADE_BY_BADGE = {
   [BADGE.blocked]: 0,
   [BADGE.done]: 0.15,
   [BADGE.working]: 0.4,
+  [BADGE.thinking]: 0.4, // live, but not asking for anything — same presence as `working`
   [BADGE.spawning]: 0.5,
   [BADGE.leaving]: 0.5,
   [BADGE.paused]: 0.6,
@@ -256,7 +260,17 @@ export class Indicators {
  * — the glyph has to carry as a silhouette. Material's set is drawn filled to begin with,
  * one closed path per icon, so there is nothing to stroke and nothing to parse.
  */
-const ICON_PATHS = [mdiHelpCircle, mdiAlert, mdiHammer, mdiCheckBold, mdiPause, mdiSleep, mdiCreation, mdiLogout]
+const ICON_PATHS = [
+  mdiHelpCircle,
+  mdiAlert,
+  mdiHammer,
+  mdiThoughtBubble,
+  mdiCheckBold,
+  mdiPause,
+  mdiSleep,
+  mdiCreation,
+  mdiLogout,
+]
 
 /**
  * The badge atlas. Red channel = the glyph, green channel = the plate's alpha — packing two
@@ -275,7 +289,7 @@ const ICON_PATHS = [mdiHelpCircle, mdiAlert, mdiHammer, mdiCheckBold, mdiPause, 
  * headroom for a larger display. The old 128 gave it three pixels per texel, which is why the
  * corners came out stepped. The cells are square because the quad is: laying 4x2 cells on a
  * square canvas spent twice as many texels down as across, and only across was ever the limit.
- * 2048x1024 RGBA is 8 MB, which is the entire cost — the mip chain that distance reads from is
+ * 2560x1024 RGBA is 10 MB, which is the entire cost — the mip chain that distance reads from is
  * unchanged, and the shadow's blur is set by a bias on the sampled level, so it stays put too.
  */
 function buildBadgeAtlas(cellSize = 512) {
@@ -365,10 +379,10 @@ function platePath(ctx) {
 }
 
 /**
- * The eight symbols, in atlas order: waiting, blocked, working, done, paused, sleeping,
- * spawning, leaving.
+ * The nine symbols, in atlas order: waiting, blocked, working, thinking, done, paused,
+ * sleeping, spawning, leaving.
  *
- * Material Design Icons, imported as path data rather than drawn here. Eight symbols that have
+ * Material Design Icons, imported as path data rather than drawn here. Nine symbols that have
  * to look like one family is a type problem — one weight, one optical size, one set of
  * terminals — and a set somebody has already balanced beats one assembled a curve at a time.
  */

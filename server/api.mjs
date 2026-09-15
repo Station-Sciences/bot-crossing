@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { openInTerminal, schemeHasHandler, schemeOf } from './lib/xdg.mjs'
 import {
   defaultHarness,
+  getTranscript as harnessGetTranscript,
   harnessStatus,
   newSession as harnessNewSession,
   openThread as harnessOpenThread,
@@ -200,6 +201,14 @@ async function present(result) {
     return { ok: true, url: result.url }
   }
 
+  // http/https URLs are always openable client-side — the page asking is the one thing on
+  // this machine that can follow them — so hand the URL back without launching anything
+  // here. A headless Linux box has no xdg-open and no display, and `schemeHasHandler`
+  // rightly says no; this is what makes "Open" work on one anyway.
+  const scheme = schemeOf(result.url)
+  if (scheme === 'http' || scheme === 'https') {
+    return { ok: true, url: result.url }
+  }
   if (result.url && (await schemeHasHandler(result.url))) {
     launch(result.url)
     return { ok: true, url: result.url }
@@ -214,7 +223,6 @@ async function present(result) {
     if (!enterable) return { ok: false, error: 'The folder that thread ran in cannot be entered' }
     return openInTerminal(result.command.argv, cwd)
   }
-  const scheme = schemeOf(result.url)
   return {
     ok: false,
     error: scheme
@@ -281,6 +289,28 @@ function send(res, status, body) {
 }
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
+
+/**
+ * The last scan, kept warm between polls.
+ *
+ * `/api/threads` is asked on a poll, where scanning from scratch is the point. But anything
+ * that answers a keystroke — the search box — wants the list *now*, and a full disk scan
+ * per query would make filtering feel like the colony is thinking. The cache is short
+ * enough that a poll never sees a stale list (the page asks every 15s, this expires in 10),
+ * and an empty result is never cached: a scan that found nothing is far more likely to be
+ * a harness mid-restart than a machine with no threads on it.
+ */
+const THREAD_CACHE_MS = 10_000
+let threadCache = { at: 0, threads: [] }
+
+async function currentThreads() {
+  if (threadCache.threads.length && Date.now() - threadCache.at < THREAD_CACHE_MS) {
+    return threadCache.threads
+  }
+  const threads = await reconcileArchived(await scanThreads())
+  threadCache = { at: Date.now(), threads }
+  return threads
+}
 
 // The machine's own LAN addresses count as local too, so the colony can be
 // served to the home network with BOT_CROSSING_HOST set. Harmless when bound
@@ -363,11 +393,66 @@ export async function apiMiddleware(req, res, next) {
 
   try {
     if (url.pathname === '/api/threads' && req.method === 'GET') {
-      const threads = await reconcileArchived(await scanThreads())
+      const threads = await currentThreads()
       // A harness that is present but cannot read its own store says so here, rather than
       // appearing healthy in the list while quietly contributing nothing.
       const warnings = (await harnessStatus()).filter((h) => h.detected && h.error).map((h) => h.error)
       return send(res, 200, { threads, scannedAt: Date.now(), warnings })
+    }
+
+    /**
+     * Sessions by substring, over the same reconciled list `/api/threads` serves — so what
+     * the search finds is exactly what is on the map (plus the archived, which carry their
+     * flag and are harmless to offer: the page says where they went instead of flying).
+     * Titles and previews only; two characters minimum, twenty results maximum, case-blind.
+     */
+    if (url.pathname === '/api/search' && req.method === 'GET') {
+      const q = String(url.searchParams.get('q') || '').trim().toLowerCase()
+      if (q.length < 2) return send(res, 200, { results: [] })
+      const threads = await currentThreads()
+      const results = []
+      for (const t of threads) {
+        const title = String(t.title || '').toLowerCase()
+        const preview = String(t.preview || '').toLowerCase()
+        if (!title.includes(q) && !preview.includes(q)) continue
+        results.push({
+          id: t.id,
+          title: t.title || 'Untitled session',
+          project: t.project || '',
+          model: t.model || '',
+          lastActivityAt: t.lastActivityAt || 0,
+          archived: Boolean(t.archived),
+        })
+        if (results.length >= 20) break
+      }
+      return send(res, 200, { results })
+    }
+
+    /**
+     * Session activity over time, for the timeline panel: every thread's last move
+     * dropped into the hour it happened in, within the window asked for. Hourly buckets
+     * keyed `YYYY-MM-DD-HH`, in this machine's own timezone — the page only ever runs on
+     * the machine the server is on, so the two never disagree about when "today" starts.
+     * The thread list is the same reconciled one the map is drawn from, so the heatmap and
+     * the colony always describe the same sessions.
+     */
+    if (url.pathname === '/api/activity' && req.method === 'GET') {
+      const askedFrom = Date.parse(url.searchParams.get('from') || '')
+      const askedTo = Date.parse(url.searchParams.get('to') || '')
+      const fromMs = Number.isFinite(askedFrom) ? askedFrom : Date.now() - 30 * 86400000
+      const toMs = Number.isFinite(askedTo) ? askedTo : Date.now()
+      const threads = await currentThreads()
+      const buckets = {}
+      for (const t of threads) {
+        const ts = t.lastActivityAt || t.createdAt
+        if (!ts || ts < fromMs || ts > toMs) continue
+        const d = new Date(ts)
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+          d.getDate()
+        ).padStart(2, '0')}-${String(d.getHours()).padStart(2, '0')}`
+        buckets[key] = (buckets[key] || 0) + 1
+      }
+      return send(res, 200, { buckets, from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() })
     }
 
     if (url.pathname === '/api/harnesses' && req.method === 'GET') {
@@ -409,6 +494,21 @@ export async function apiMiddleware(req, res, next) {
       const { harness, ref } = await readJsonBody(req)
       const shown = await present(await harnessOpenThread(harness, ref))
       return send(res, shown.ok ? 200 : 400, shown)
+    }
+
+    /**
+     * The conversation behind a thread, read back by whichever harness owns it.
+     *
+     * The `ref` arrives straight from the page, exactly as `/api/open` receives it, and is
+     * just as opaque here: the adapter is the one that pattern-checks it before anything on
+     * disk is touched. A harness with no transcript to read — or one that is not installed —
+     * answers `{ ok: false }`, which the card shows as its empty state rather than an error,
+     * because a thread you cannot read here is still a thread you can open.
+     */
+    if (url.pathname === '/api/transcript' && req.method === 'POST') {
+      const { harness, ref } = await readJsonBody(req)
+      const result = await harnessGetTranscript(harness, ref)
+      return send(res, result.ok ? 200 : 400, result)
     }
 
     if ((url.pathname === '/api/new-session' || url.pathname === '/api/reveal') && req.method === 'POST') {

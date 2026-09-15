@@ -31,6 +31,7 @@ const SUIT_TONES = [0xf3f1ec, 0xe8e4dc, 0xf7f4ee, 0xdfe4e8, 0xf1e9df]
 /** Trim + eye colour per behaviour. Eyes are pushed past 1.0 so the bloom pass catches them. */
 const AGENT_LOOK = {
   working: { trim: 0x4f9a63, eye: [0.35, 2.5, 1.15] },
+  thinking: { trim: 0x9070c8, eye: [1.8, 1.0, 3.0] },
   waiting: { trim: 0x4f7ec9, eye: [0.45, 1.5, 3.0] },
   blocked: { trim: 0xc94f4f, eye: [3.0, 0.5, 0.45] },
   celebrating: { trim: 0xc9a24f, eye: [2.9, 2.1, 0.6] },
@@ -1095,6 +1096,12 @@ export class Astronauts {
       switch (agent.status) {
         case 'working':
           key = 'work'
+          break
+        // Standing and looking around rather than hammering: the model is processing, not
+        // building. `idleAlt` is the author's other idle loop, so a thinking astronaut is
+        // visibly *not* at work even before the purple trim and the bubbles land.
+        case 'thinking':
+          key = 'idleAlt'
           break
         case 'waiting':
           key = 'wave'

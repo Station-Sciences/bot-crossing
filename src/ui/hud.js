@@ -44,10 +44,13 @@ const ICON = {
   copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>`,
   locate: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.6"/><path d="M12 1.8v2.6M12 19.6v2.6M1.8 12h2.6M19.6 12h2.6"/></svg>`,
   orbit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><ellipse cx="12" cy="12" rx="10.2" ry="4.6" transform="rotate(-24 12 12)"/><circle cx="21" cy="8.2" r="1.5" fill="currentColor" stroke="none"/></svg>`,
+  search: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>`,
+  calendar: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3.5V6M16 3.5V6"/></svg>`,
 }
 
 const STAT_DEFS = [
   { key: 'working', label: 'building', cls: 'working' },
+  { key: 'thinking', label: 'thinking', cls: 'thinking' },
   { key: 'waiting', label: 'need you', cls: 'waiting' },
   { key: 'blocked', label: 'blocked', cls: 'blocked' },
   { key: 'celebrating', label: 'shipped', cls: 'done' },
@@ -240,12 +243,18 @@ export class Hud {
         'Hide dormant repos',
         'hideDormant',
         'Takes a repo off the map when every thread in it has been quiet for three days. Its threads are untouched, and it comes back to the same ground the moment one wakes up.'
-      )
+      ),
+      this._buildAutoArchive()
     )
     view.append(
       this._toggle('Return to isometric', 'autoFrame', 'Eases the angle back when you stop dragging.'),
       this._slider('Field of view', 'fov', 20, 60, 1, (v) => `${v}°`),
       this._toggle('Project labels', 'showLabels'),
+      this._toggle(
+        'Color zones by model',
+        'modelHeatmap',
+        'Adds a swatch for each repo\u2019s dominant model beside its name, with a legend under the repo list.'
+      ),
       this._toggle('Reduced motion', 'reducedMotion', 'Calms the bobbing and the camera easing.'),
       this._toggle('Show FPS', 'showFps')
     )
@@ -260,6 +269,50 @@ export class Hud {
     l.innerHTML = `<span>${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}`
     row.appendChild(l)
     return row
+  }
+
+  /**
+   * Auto-archive: a toggle plus its “after how many days” detail row, shown only while the
+   * toggle is on. The number is clamped to the input's own bounds before it is saved, so a
+   * hand-typed 5 or 9999 lands on the nearest real setting rather than on nonsense.
+   */
+  _buildAutoArchive() {
+    const wrap = document.createElement('div')
+    wrap.append(
+      this._toggle(
+        'Auto-archive dormant sessions',
+        'autoArchive',
+        'Sessions that have been quiet for the chosen number of days are archived for you — they leave the map and head home, exactly as if you archived them by hand.'
+      )
+    )
+
+    const detail = document.createElement('div')
+    detail.className = 'setting-detail'
+    const label = document.createElement('label')
+    label.textContent = 'After '
+    const input = document.createElement('input')
+    input.type = 'number'
+    input.min = '7'
+    input.max = '365'
+    input.step = '1'
+    label.appendChild(input)
+    label.appendChild(document.createTextNode(' days dormant'))
+    detail.appendChild(label)
+    wrap.appendChild(detail)
+
+    input.addEventListener('change', () => {
+      const n = Math.max(7, Math.min(365, Math.round(Number(input.value)) || 30))
+      if (Number(input.value) !== n) input.value = String(n)
+      this.settings.set('autoArchiveDays', n)
+    })
+    this.controls.push({
+      el: detail,
+      sync: () => {
+        detail.hidden = !this.settings.get('autoArchive')
+        if (document.activeElement !== input) input.value = String(this.settings.get('autoArchiveDays') ?? 30)
+      },
+    })
+    return wrap
   }
 
   _toggle(label, key, hint) {
@@ -351,6 +404,10 @@ export class Hud {
 
     on('#btn-settings', 'click', () => this.toggleSettings())
     on('#btn-close-settings', 'click', () => this.toggleSettings(false))
+    on('#btn-search', 'click', () => this.toggleSearch())
+    on('#btn-close-search', 'click', () => this.toggleSearch(false))
+    on('#btn-timeline', 'click', () => this.toggleTimeline())
+    on('#btn-close-timeline', 'click', () => this.toggleTimeline(false))
     on('#btn-hide', 'click', () => this.toggleUi())
     on('#btn-help', 'click', () => this.toggleHelp())
     on('#btn-shot', 'click', () => this.actions.screenshot?.())
@@ -368,6 +425,7 @@ export class Hud {
     on('#btn-copy-path', 'click', () => this.actions.copyProjectPath?.())
     on('#btn-hide-project', 'click', () => this.actions.hideProject?.())
     on('#btn-hidden-toggle', 'click', () => this.toggleHiddenList())
+    on('#btn-clear-filter', 'click', () => this._clearTimeFilter())
     on('#btn-locate', 'click', () => this.actions.focusProject?.(this.project?.name))
     on('#btn-close-project', 'click', () => this.actions.closeProject?.())
     on('.help', 'click', (e) => {
@@ -377,6 +435,342 @@ export class Hud {
     on('#btn-help-close', 'click', () => this.toggleHelp(false))
 
     this.settings.onChange(() => this.syncSettings())
+
+    this._wireSearch()
+    this._wireTimeline()
+  }
+
+  // ── session search ─────────────────────────────────────────────────────────────────
+
+  /**
+   * The search box: debounced queries against the server's last scan, results rendered as
+   * a scrollable list. The query never runs for fewer than two characters, and a reply that
+   * arrives after the input has moved on is dropped — a slower early query overwriting a
+   * newer one's results is the kind of thing that reads as the search being broken.
+   */
+  _wireSearch() {
+    const input = this.$('#search-input')
+    const resultsEl = this.$('.search-results')
+    let timer = 0
+
+    input.addEventListener('input', () => {
+      clearTimeout(timer)
+      const q = input.value.trim()
+      if (!q) {
+        resultsEl.innerHTML = ''
+        return
+      }
+      timer = setTimeout(async () => {
+        const results = (await this.actions.search?.(q)) || []
+        if (input.value.trim() !== q) return
+        this._renderSearchResults(results, q)
+      }, 300)
+    })
+
+    input.addEventListener('keydown', (e) => {
+      // The page's own Escape handler steps aside for anything typed into (the guard on
+      // HTMLInputElement in main.js), so the field closes itself — and stops the event so
+      // the same press cannot also deselect an astronaut behind the panel.
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        this.toggleSearch(false)
+      }
+      // Enter takes the first result, the way every search box behaves.
+      if (e.key === 'Enter') {
+        const first = resultsEl.querySelector('.result')
+        if (first) first.click()
+      }
+    })
+  }
+
+  /** Results as a scrollable list — title, project, model, and how long since it moved. */
+  _renderSearchResults(results, q) {
+    const resultsEl = this.$('.search-results')
+    resultsEl.innerHTML = ''
+    if (!results.length) {
+      const empty = document.createElement('div')
+      empty.className = 'search-empty'
+      empty.textContent = `No sessions match “${q}”`
+      resultsEl.appendChild(empty)
+      return
+    }
+    for (const r of results) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'result'
+      const meta = [r.project, r.model ? shortModel(r.model) : '', ago(r.lastActivityAt)]
+        .filter(Boolean)
+        .map((s) => escapeHtml(s))
+        .join(' · ')
+      b.innerHTML =
+        `<div class="result-title">${escapeHtml(r.title || 'Untitled session')}</div>` +
+        `<div class="result-meta">${meta}</div>`
+      b.addEventListener('click', () => this.actions.selectSearchResult?.(r))
+      resultsEl.appendChild(b)
+    }
+  }
+
+  toggleSearch(force) {
+    const panel = this.$('.search-panel')
+    const open = force ?? panel.classList.contains('closed')
+    panel.classList.toggle('closed', !open)
+    this.$('#btn-search').setAttribute('aria-pressed', String(open))
+    if (open) {
+      const input = this.$('#search-input')
+      input.value = ''
+      this.$('.search-results').innerHTML = ''
+      input.focus()
+    }
+  }
+
+  // ── activity timeline ────────────────────────────────────────────────────────────────
+
+  /**
+   * The timeline panel: preset ranges, a custom from/to pair, and a grid rebuilt whenever
+   * either moves. Presets are simple offsets from now; “All” asks from the distant past and
+   * lets the server's own list say where the data actually begins. Every range change also
+   * drives the colony's time filter, so the heatmap and the world always agree about which
+   * slice of time you are looking at.
+   */
+  _wireTimeline() {
+    for (const b of this.el.querySelectorAll('.timeline-panel [data-range]')) {
+      b.addEventListener('click', () => {
+        this.timelineRange = b.dataset.range
+        this._syncTimelineControls()
+        this._applyTimelineFilter()
+        this._loadTimeline()
+      })
+    }
+    const custom = () => {
+      this.timelineRange = 'custom'
+      this._syncTimelineControls()
+      this._applyTimelineFilter()
+      this._loadTimeline()
+    }
+    this.$('#timeline-from').addEventListener('change', custom)
+    this.$('#timeline-to').addEventListener('change', custom)
+    this.timelineRange = '30d'
+  }
+
+  /**
+   * Push the panel's range at the colony as well as the heatmap. A preset or custom range
+   * becomes the colony's window; “All” clears the filter entirely — the live view, where a
+   * session that starts a second from now walks down the ramp on the next poll, which a
+   * filter spanning all time never would.
+   */
+  _applyTimelineFilter() {
+    if (this.timelineRange === 'all') {
+      this._filterRange = null
+      this.actions.setTimeFilter?.(null)
+    } else {
+      const { from, to } = this._timelineWindow()
+      this._filterRange = { from, to }
+      this.actions.setTimeFilter?.(from, to)
+    }
+    this._syncFilterBadge()
+  }
+
+  /**
+   * The badge's ✕: exactly what pressing “All” in the panel does, from anywhere. Widening
+   * the heatmap too keeps the two views honest about the same range.
+   */
+  _clearTimeFilter() {
+    this.timelineRange = 'all'
+    this._syncTimelineControls()
+    this._applyTimelineFilter()
+    if (!this.$('.timeline-panel').classList.contains('closed')) this._loadTimeline()
+  }
+
+  /** The badge that says the colony is a slice of time, not the live thing. */
+  _syncFilterBadge() {
+    const badge = this.$('#time-filter-badge')
+    if (!this._filterRange) {
+      badge.hidden = true
+      return
+    }
+    badge.hidden = false
+    this.$('#time-filter-label').textContent = `Showing: ${this._filterLabel(this._filterRange)}`
+  }
+
+  /** Presets read as their own name; anything else reads as the dates it spans. */
+  _filterLabel({ from, to }) {
+    const fmt = (d) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+    if (dayKey(from) === dayKey(to)) {
+      return from.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    }
+    const days = Math.round((to.getTime() - from.getTime()) / 86400000)
+    if (Math.abs(days - 7) <= 1) return 'Last 7 days'
+    if (Math.abs(days - 30) <= 1) return 'Last 30 days'
+    if (Math.abs(days - 90) <= 1) return 'Last 90 days'
+    const year = from.getFullYear() !== to.getFullYear() ? ` ${to.getFullYear()}` : ''
+    return `${fmt(from)} – ${fmt(to)}${year}`
+  }
+
+  /** Presets light their own button; a custom range lights none of them. */
+  _syncTimelineControls() {
+    for (const b of this.el.querySelectorAll('.timeline-panel [data-range]')) {
+      b.classList.toggle('active', b.dataset.range === this.timelineRange)
+    }
+  }
+
+  toggleTimeline(force) {
+    const panel = this.$('.timeline-panel')
+    const open = force ?? panel.classList.contains('closed')
+    panel.classList.toggle('closed', !open)
+    this.$('#btn-timeline').setAttribute('aria-pressed', String(open))
+    if (open) this._loadTimeline()
+  }
+
+  /** The window the panel is currently looking at, as local Dates. */
+  _timelineWindow() {
+    const to = new Date()
+    if (this.timelineRange === 'all') return { from: new Date(2000, 0, 1), to }
+    if (this.timelineRange === 'custom') {
+      const from = parseDateInput(this.$('#timeline-from').value)
+      const customTo = parseDateInput(this.$('#timeline-to').value)
+      return {
+        from: from || new Date(to.getTime() - 30 * 86400000),
+        to: customTo ? endOfDay(customTo) : to,
+      }
+    }
+    const days = this.timelineRange === '7d' ? 7 : this.timelineRange === '90d' ? 90 : 30
+    return { from: new Date(to.getTime() - days * 86400000), to }
+  }
+
+  /**
+   * Fetch and draw. A reply that arrives after the range moved on is dropped by token, the
+   * same rule the search box lives by — an older answer overwriting a newer one's grid is
+   * what “the timeline is broken” looks like from the outside.
+   */
+  async _loadTimeline() {
+    const token = (this._timelineToken = (this._timelineToken || 0) + 1)
+    const { from, to } = this._timelineWindow()
+    // Presets keep the date inputs honest — “30d” shows as real dates, and editing either
+    // one switches to the custom range those two dates describe.
+    if (this.timelineRange !== 'custom') {
+      this.$('#timeline-from').value = toDateInput(from)
+      this.$('#timeline-to').value = toDateInput(to)
+    }
+    const grid = this.$('.timeline-grid')
+    const result = await this.actions.loadActivity?.(from.toISOString(), to.toISOString())
+    if (token !== this._timelineToken) return
+    if (!result || !result.buckets) {
+      grid.innerHTML = ''
+      const empty = document.createElement('div')
+      empty.className = 'timeline-empty'
+      empty.textContent = 'Could not read session activity'
+      grid.appendChild(empty)
+      return
+    }
+    this._renderTimeline(result.buckets, from, to)
+    // Kept so a filter change can repaint the grid's highlights without refetching —
+    // picking a day should move the outline, not blank the heatmap for a round trip.
+    this._lastBuckets = { buckets: result.buckets, from, to }
+  }
+
+  /**
+   * GitHub-style: a column per week, a row per weekday (Mon–Sun), one cell per day, tinted
+   * by how many sessions moved that day. The server buckets hourly; a day is just the sum
+   * of its hours, so the two views of the same data stay honest. While a colony filter is
+   * active, the days it covers are outlined and the rest step back; every in-window day is
+   * clickable, and picks that one day as the filter.
+   */
+  _renderTimeline(buckets, from, to) {
+    const days = new Map()
+    for (const [key, n] of Object.entries(buckets || {})) {
+      const day = key.slice(0, 10)
+      days.set(day, (days.get(day) || 0) + n)
+    }
+    const grid = this.$('.timeline-grid')
+    grid.innerHTML = ''
+    if (!days.size) {
+      const empty = document.createElement('div')
+      empty.className = 'timeline-empty'
+      empty.textContent = 'No sessions in this range'
+      grid.appendChild(empty)
+      return
+    }
+
+    // The colony filter, when one is set: days inside it are outlined, days outside it dim.
+    const filter = this._filterRange
+    const filterFrom = filter ? startOfDay(filter.from).getTime() : 0
+    grid.classList.toggle('filtered', Boolean(filter))
+
+    let max = 1
+    for (const n of days.values()) if (n > max) max = n
+
+    // From the Monday on/before `from`, so the first column is always a whole week.
+    const start = startOfDay(from)
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7))
+    const end = startOfDay(to)
+
+    // Weekday gutter — Mon, Wed, Fri, the convention the shape comes from.
+    const gutter = document.createElement('div')
+    gutter.className = 'week-gutter'
+    for (const label of ['M', '', 'W', '', 'F', '', '']) {
+      const s = document.createElement('span')
+      s.textContent = label
+      gutter.appendChild(s)
+    }
+    grid.appendChild(gutter)
+
+    const frag = document.createDocumentFragment()
+    let lastMonth = -1
+    for (let w = new Date(start); w <= end; w = new Date(w.getFullYear(), w.getMonth(), w.getDate() + 7)) {
+      const week = document.createElement('div')
+      week.className = 'week'
+      const month = document.createElement('span')
+      month.className = 'month-label'
+      if (w.getMonth() !== lastMonth) {
+        month.textContent = w.toLocaleString(undefined, { month: 'short' })
+        lastMonth = w.getMonth()
+      }
+      week.appendChild(month)
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(w.getFullYear(), w.getMonth(), w.getDate() + i)
+        const cell = document.createElement('i')
+        cell.className = 'day'
+        if (d < startOfDay(from) || d > end) {
+          // Outside the asked-for window: a placeholder keeps the column's shape without
+          // claiming anything about days the range does not cover.
+          cell.classList.add('out')
+        } else {
+          const n = days.get(dayKey(d)) || 0
+          cell.style.background = HEAT_LEVELS[n === 0 ? 0 : Math.min(4, Math.ceil((n / max) * 4))]
+          cell.title = `${d.toLocaleString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} — ${n} session${n === 1 ? '' : 's'}`
+          // The day this cell is, for the click that filters the colony to it.
+          cell.dataset.date = dayKey(d)
+          if (filter) {
+            cell.classList.toggle('in-range', d.getTime() >= filterFrom && d.getTime() <= filter.to.getTime())
+          }
+          cell.addEventListener('click', () => this._pickTimelineDay(d))
+        }
+        week.appendChild(cell)
+      }
+      frag.appendChild(week)
+    }
+    grid.appendChild(frag)
+  }
+
+  /**
+   * Clicking a day filters the colony to that one day. The heatmap keeps its window —
+   * seeing which slice you picked is the point — so the grid repaints from the data
+   * already in hand and only the highlight moves. The date inputs follow, because they
+   * describe the filter; the next range change realigns everything.
+   */
+  _pickTimelineDay(d) {
+    const from = startOfDay(d)
+    const to = endOfDay(d)
+    this.timelineRange = 'custom'
+    this.$('#timeline-from').value = toDateInput(from)
+    this.$('#timeline-to').value = toDateInput(to)
+    this._syncTimelineControls()
+    this._filterRange = { from, to }
+    this.actions.setTimeFilter?.(from, to)
+    this._syncFilterBadge()
+    if (this._lastBuckets) {
+      this._renderTimeline(this._lastBuckets.buckets, this._lastBuckets.from, this._lastBuckets.to)
+    }
   }
 
   // ── state in ────────────────────────────────────────────────────────────────────────
@@ -403,9 +797,12 @@ export class Hud {
    * can carry a count and an alarm without running out of room at eleven repos.
    */
   setLegend(projects, activeName = null, hidden = [], folded = []) {
+    const heat = Boolean(this.settings.get('modelHeatmap'))
     const signature =
-      projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
-      `~${activeName}~` +
+      projects
+        .map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}:${heat ? p.modelColor ?? 0 : 0}`)
+        .join('|') +
+      `~${activeName}~${heat ? 1 : 0}` +
       hidden.map((p) => `${p.name}:${p.count}`).join('|') +
       `~${folded.length}`
     if (this._last.legend === signature) return
@@ -419,15 +816,25 @@ export class Hud {
       b.className = 'repo'
       b.title = `${p.count} thread${p.count === 1 ? '' : 's'} in ${p.name}`
       b.setAttribute('aria-pressed', String(p.name === activeName))
+      // With the model heatmap on, a second swatch beside the name says what the repo
+      // thinks with; the zone's own accent stays put, because it is how you find the repo
+      // on the map in the first place.
       b.innerHTML =
         `<i class="swatch" style="background:${hex(p.accent)};color:${hex(p.accent)}"></i>` +
         `<span class="n">${escapeHtml(p.name)}</span>` +
+        (heat && p.modelColor != null
+          ? `<i class="model-swatch" style="background:${hex(p.modelColor)};color:${hex(p.modelColor)}" title="${escapeHtml(modelLabel(p.model))}"></i>`
+          : '') +
         (p.urgent ? '<i class="alarm"></i>' : '') +
         `<span class="count">${p.count}</span>`
       b.addEventListener('click', () => this.actions.pickProject?.(p.name))
       wrap.appendChild(b)
     }
     this.$('.sec-head span').textContent = `${projects.length} repo${projects.length === 1 ? '' : 's'}`
+
+    // The heatmap's own legend: one line of model → colour pairs, built from the zones
+    // actually on the map rather than a fixed list that might name models nobody ran.
+    this._renderModelLegend(heat ? projects : [])
 
     // The hidden list is its own block at the foot of the sidebar: collapsed by default, because
     // the whole point of hiding a repo is not to look at it.
@@ -480,6 +887,28 @@ export class Hud {
   toggleHiddenList() {
     this.hiddenOpen = !this.hiddenOpen
     this._syncHiddenList()
+  }
+
+  /**
+   * The model → colour pairs for the heatmap, one entry per distinct model actually on the
+   * map. Hidden entirely (not just emptied) when the heatmap is off, so the sidebar's foot
+   * is only ever chrome that is doing something.
+   */
+  _renderModelLegend(projects) {
+    const el = this.$('.model-legend')
+    el.innerHTML = ''
+    const seen = new Map()
+    for (const p of projects) {
+      if (p.modelColor == null || !p.model) continue
+      const key = `${p.model}|${p.modelColor}`
+      if (!seen.has(key)) seen.set(key, { color: p.modelColor, model: p.model })
+    }
+    el.hidden = seen.size === 0
+    for (const { color, model } of seen.values()) {
+      const row = document.createElement('div')
+      row.innerHTML = `<i style="background:${hex(color)}"></i>${escapeHtml(modelLabel(model))}`
+      el.appendChild(row)
+    }
   }
 
   _syncHiddenList() {
@@ -579,6 +1008,11 @@ export class Hud {
     if (!agent || !thread) {
       card.classList.remove('on')
       this.selected = null
+      // So the next pick of the same thread reloads its conversation rather than showing
+      // the one from before — the panel is down, whatever it held is spent.
+      this._transcriptId = null
+      this._stopTranscriptTail()
+      this.$('.transcript-live').hidden = true
       return
     }
     this.selected = { agent, thread }
@@ -593,6 +1027,15 @@ export class Hud {
     // The repo is the panel's own heading now, so the card says what the *thread* is.
     if (thread.worktree) bits.push(`<span class="tag">⑂ ${escapeHtml(thread.worktree)}</span>`)
     if (thread.gitBranch) bits.push(`<span class="tag">${escapeHtml(thread.gitBranch)}</span>`)
+    // The PR the session worked on, when the head named one — the number, with what
+    // happened to it in the tooltip.
+    if (thread.ref?.pr?.number) {
+      const pr = thread.ref.pr
+      const state =
+        ({ MERGED: 'merged', APPROVED: 'approved', CLOSED: 'closed', DRAFT: 'draft' }[pr.state] || 'open')
+      const title = escapeHtml(`PR #${pr.number}${pr.repo ? ` in ${pr.repo}` : ''} — ${state}`)
+      bits.push(`<span class="tag pr-tag" title="${title}">#${escapeHtml(String(pr.number))}</span>`)
+    }
     if (thread.model) bits.push(`<span class="tag">${escapeHtml(shortModel(thread.model))}</span>`)
     bits.push(`<span>${ago(thread.lastActivityAt)}</span>`)
     meta.innerHTML = bits.join('')
@@ -609,6 +1052,113 @@ export class Hud {
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
     this.$('#btn-viewed').hidden = !thread.unread
+    this._setOpenLabel(thread)
+    this._loadTranscript(thread)
+    this._armTranscriptTail(thread)
+  }
+
+  /** The open button names where the thread will open — "Open in OpenClaw", not a bare "Open". */
+  _setOpenLabel(thread) {
+    const label = thread.harnessName ? `Open in ${thread.harnessName}` : 'Open'
+    if (this._last.openLabel === label) return
+    this._last.openLabel = label
+    this.$('#btn-open .lbl').textContent = label
+  }
+
+  /**
+   * The conversation itself, in the card.
+   *
+   * Fetched once per selection: `setSelection` runs again on every poll for as long as a
+   * card is open, and rereading a transcript every fifteen seconds is a lot of disk for
+   * nothing new. The fetch never blocks the selection — the card appears immediately with
+   * its loading line, and the chat lands when it lands, re-measuring the card so it keeps
+   * clearing its astronaut and the window edge at its new height.
+   *
+   * Every word of the conversation is untrusted text from a file, so it is escaped before
+   * it touches `innerHTML` — the one place in this HUD that renders content it did not
+   * write itself.
+   */
+  _loadTranscript(thread) {
+    if (this._transcriptId === thread.id) return
+    this._transcriptId = thread.id
+    const card = this.$('.thread-pop')
+    const messagesEl = this.$('.transcript-messages')
+    const loadingEl = this.$('.transcript-loading')
+    const emptyEl = this.$('.transcript-empty')
+    const stale = () => this._transcriptId !== thread.id
+    messagesEl.innerHTML = ''
+    loadingEl.hidden = false
+    emptyEl.hidden = true
+
+    const pending = this.actions.loadTranscript?.(thread)
+    if (!pending || typeof pending.then !== 'function') {
+      loadingEl.hidden = true
+      emptyEl.hidden = false
+      return
+    }
+    pending.then((result) => {
+      if (stale()) return
+      loadingEl.hidden = true
+      if (!result || !result.ok || !result.messages?.length) {
+        emptyEl.hidden = false
+        return
+      }
+      messagesEl.innerHTML = renderMessages(result.messages)
+      // Newest at the bottom, like every chat you have ever read.
+      this.$('.transcript').scrollTop = messagesEl.scrollHeight
+      this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
+    }).catch(() => {
+      if (stale()) return
+      loadingEl.hidden = true
+      emptyEl.hidden = false
+    })
+  }
+
+  /**
+   * Live tail: a running or thinking session keeps its card's conversation fresh on its
+   * own, so watching the card is watching the session. Re-armed on every poll —
+   * `setSelection` runs again with fresh thread data, which is also what retires the tail
+   * once the session goes quiet, without the interval having to guess at state itself.
+   */
+  _armTranscriptTail(thread) {
+    this._stopTranscriptTail()
+    const live = Boolean(thread.running || thread.thinking)
+    this.$('.transcript-live').hidden = !live
+    if (!live) return
+    this._transcriptTail = setInterval(async () => {
+      // Only the card being looked at pays for polling; a tick landing after the user has
+      // moved on retires itself rather than rendering into a closed card.
+      if (this.selected?.thread?.id !== thread.id) {
+        this._stopTranscriptTail()
+        return
+      }
+      let result
+      try {
+        result = await this.actions.loadTranscript?.(thread)
+      } catch {
+        return
+      }
+      if (this.selected?.thread?.id !== thread.id || !result?.ok || !result.messages?.length) return
+      const scroller = this.$('.transcript')
+      const messagesEl = this.$('.transcript-messages')
+      // Follow the conversation only for someone already at the bottom — a reader scrolled
+      // up through history keeps their place.
+      const wasAtBottom = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 20
+      messagesEl.innerHTML = renderMessages(result.messages)
+      this.$('.transcript-loading').hidden = true
+      this.$('.transcript-empty').hidden = true
+      if (wasAtBottom) scroller.scrollTop = messagesEl.scrollHeight
+      // The card's height is cached for placement, and the conversation just grew.
+      const card = this.$('.thread-pop')
+      this._cardSize = { w: card.offsetWidth, h: card.offsetHeight }
+    }, 3000)
+  }
+
+  _stopTranscriptTail() {
+    if (this._transcriptTail) {
+      clearInterval(this._transcriptTail)
+      this._transcriptTail = null
+    }
   }
 
   /**
@@ -841,9 +1391,77 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c])
 }
 
+/**
+ * One message row for the card's transcript — the one place that renders conversation
+ * content, shared by the initial load and the live tail so the two never drift apart in
+ * shape. Every word is untrusted text from a file, so it is escaped before it touches
+ * `innerHTML`.
+ */
+function renderMessages(messages) {
+  return messages
+    .map((m) => {
+      const cls = m.role === 'assistant' ? 'msg-assistant' : 'msg-user'
+      const label = m.role === 'assistant' ? (m.model ? shortModel(m.model) : 'Assistant') : 'You'
+      let text = String(m.text || '')
+      if (text.length > 1500) text = `${text.slice(0, 1500)}…`
+      const body = escapeHtml(text).replace(/\n/g, '<br>')
+      const t = m.timestamp ? new Date(m.timestamp) : null
+      const time = t && !Number.isNaN(t.getTime()) ? t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''
+      const toolBadge = m.hasToolUse ? '<span class="tool-badge">⚒ used tools</span>' : ''
+      return (
+        `<div class="${cls}">` +
+        `<div class="msg-header"><span class="msg-role">${escapeHtml(label)}</span>${toolBadge}<span class="msg-time">${time}</span></div>` +
+        `<div class="msg-body">${body}</div>` +
+        `</div>`
+      )
+    })
+    .join('')
+}
+
+/** A model id a person would say — “Opus” rather than “anthropic/claude-opus-4-6”. */
+function modelLabel(model) {
+  const m = String(model || '').toLowerCase()
+  if (m.includes('opus')) return 'Opus'
+  if (m.includes('sonnet')) return 'Sonnet'
+  if (m.includes('haiku')) return 'Haiku'
+  if (m.includes('glm')) return 'GLM'
+  if (m.includes('deepseek')) return 'DeepSeek'
+  if (m.includes('gemini')) return 'Gemini'
+  if (m.includes('minimax')) return 'MiniMax'
+  if (m.includes('qwen')) return 'Qwen'
+  if (m.includes('kimi')) return 'Kimi'
+  if (m.includes('gpt') || m.includes('o3')) return 'GPT'
+  return shortModel(String(model)) || 'other'
+}
+
+// ── timeline helpers ───────────────────────────────────────────────────────────────────
+
+/** The five steps a day cell can sit on: empty, then four of increasing intensity. */
+const HEAT_LEVELS = [
+  'rgba(200, 140, 100, 0.08)',
+  'rgba(200, 140, 100, 0.28)',
+  'rgba(200, 140, 100, 0.52)',
+  'rgba(200, 140, 100, 0.76)',
+  'rgba(200, 140, 100, 1)',
+]
+
+const pad2 = (n) => String(n).padStart(2, '0')
+const dayKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+const endOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999)
+/** `YYYY-MM-DD` (a date input's value, or a server bucket key's prefix) → the same shape. */
+const toDateInput = (d) => dayKey(d)
+
+/** A date input's `YYYY-MM-DD` → a local Date, or null for anything else. */
+function parseDateInput(value) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value || ''))
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null
+}
+
 /** Status → the colour family the top-bar counters already use for it. */
 function statusClass(status) {
   if (status === 'working') return 'working'
+  if (status === 'thinking') return 'thinking'
   if (status === 'waiting') return 'waiting'
   if (status === 'blocked') return 'blocked'
   if (status === 'celebrating') return 'done'
@@ -908,16 +1526,24 @@ const TEMPLATE = `
     <div class="brand"><i class="dot"></i>Bot Crossing</div>
     <button class="btn icon ghost" id="btn-shot" title="Screenshot (P)">${ICON.camera}</button>
     <button class="btn icon ghost" id="btn-help" title="Help (?)">${ICON.help}</button>
+    <button class="btn icon ghost" id="btn-timeline" title="Activity timeline (T)" aria-pressed="false">${ICON.calendar}</button>
+    <button class="btn icon ghost" id="btn-search" title="Search sessions (F)" aria-pressed="false">${ICON.search}</button>
     <button class="btn icon ghost" id="btn-hide" title="Hide all UI (H)">${ICON.eye}</button>
     <button class="btn icon ghost" id="btn-settings" title="Settings (S)" aria-pressed="false">${ICON.settings}</button>
   </header>
 
   <div class="stats"></div>
 
+  <div class="time-filter-badge" id="time-filter-badge" hidden>
+    <span id="time-filter-label">Showing: last 30 days</span>
+    <button type="button" class="btn icon ghost" id="btn-clear-filter" title="Show all time — back to the live colony">✕</button>
+  </div>
+
   <div class="side-body">
     <div class="projects-pane">
       <div class="sec-head"><span>Repos</span></div>
       <div class="projects"></div>
+      <div class="model-legend" hidden></div>
       <div class="hidden-block" hidden>
         <button type="button" class="hidden-toggle" id="btn-hidden-toggle" aria-expanded="false">
           <span class="label">0 hidden</span>
@@ -964,6 +1590,38 @@ const TEMPLATE = `
   <div class="body"></div>
 </div>
 
+<div class="search-panel panel closed">
+  <div class="search-bar">
+    <input type="text" id="search-input" placeholder="Search sessions…" autocomplete="off" spellcheck="false" />
+    <button class="btn icon ghost" id="btn-close-search" title="Close (Esc)">${ICON.close}</button>
+  </div>
+  <div class="search-results"></div>
+</div>
+
+<div class="timeline-panel panel closed">
+  <header>
+    <span class="timeline-title">Activity Timeline</span>
+    <div class="timeline-controls">
+      <button type="button" class="btn small" data-range="7d">7d</button>
+      <button type="button" class="btn small active" data-range="30d">30d</button>
+      <button type="button" class="btn small" data-range="90d">90d</button>
+      <button type="button" class="btn small" data-range="all">All</button>
+      <input type="date" id="timeline-from" />
+      <input type="date" id="timeline-to" />
+    </div>
+    <button class="btn icon ghost" id="btn-close-timeline" title="Close (Esc)">${ICON.close}</button>
+  </header>
+  <div class="timeline-grid"></div>
+  <div class="timeline-legend">
+    <span>Less</span>
+    <i style="background:rgba(200,140,100,0.28)"></i>
+    <i style="background:rgba(200,140,100,0.52)"></i>
+    <i style="background:rgba(200,140,100,0.76)"></i>
+    <i style="background:rgba(200,140,100,1)"></i>
+    <span>More</span>
+  </div>
+</div>
+
 <div class="thread-pop panel">
   <i class="nib"></i>
   <div class="top">
@@ -975,8 +1633,14 @@ const TEMPLATE = `
     <button class="btn icon ghost" id="btn-deselect" title="Deselect (Esc)">${ICON.close}</button>
   </div>
   <div class="progress"><i></i></div>
+  <div class="transcript">
+    <div class="transcript-live" hidden>● LIVE</div>
+    <div class="transcript-messages"></div>
+    <div class="transcript-loading">Loading conversation…</div>
+    <div class="transcript-empty">No messages in this session</div>
+  </div>
   <div class="pair">
-    <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
+    <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} <span class="lbl">Open</span></button>
     <button class="btn" id="btn-viewed" title="Stop this thread asking for you until it moves on again (V)">${ICON.eye} Viewed</button>
     <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>
   </div>
@@ -1000,6 +1664,7 @@ const TEMPLATE = `
         <div class="k"><span>Reset view</span><kbd>0</kbd></div>
         <div class="k"><span>Hide all UI</span><kbd>H</kbd> <kbd>${IS_MAC ? '⌘' : 'Ctrl'}\\</kbd></div>
         <div class="k"><span>Settings</span><kbd>S</kbd></div>
+        <div class="k"><span>Activity timeline</span><kbd>T</kbd></div>
         <div class="k"><span>Screenshot</span><kbd>P</kbd></div>
       </div>
       <div>
@@ -1008,6 +1673,7 @@ const TEMPLATE = `
         <div class="k"><span>Mark viewed</span><kbd>V</kbd></div>
         <div class="k"><span>Archive</span><kbd>A</kbd></div>
         <div class="k"><span>New conversation</span><kbd>C</kbd></div>
+        <div class="k"><span>Search sessions</span><kbd>F</kbd> <kbd>/</kbd></div>
         <div class="k"><span>Orbit mode</span><kbd>O</kbd></div>
         <div class="k"><span>Change planet</span><kbd>Tab</kbd></div>
         <div class="k"><span>Time of day</span><kbd>L</kbd></div>
@@ -1019,6 +1685,7 @@ const TEMPLATE = `
       <div class="legend-row"><i class="badge" style="background:#1a2b46;color:#8fb4ee">?</i> waiting on your reply — click to open the thread</div>
       <div class="legend-row"><i class="badge" style="background:#3d1c1c;color:#e88b8b">!</i> the session hit an error</div>
       <div class="legend-row"><i class="badge" style="background:#16301f;color:#7fd39a">⚒</i> running right now, building</div>
+      <div class="legend-row"><i class="badge" style="background:#2a1d3e;color:#b088e8">…</i> thinking — the model is processing</div>
       <div class="legend-row"><i class="badge" style="background:#332b12;color:#e6c67f">✓</i> its pull request landed</div>
       <div class="legend-row"><i class="badge" style="background:#1d1f2e;color:#a9a8c0">z</i> nothing for three days</div>
     </div>

@@ -135,6 +135,19 @@ const DEFAULTS = {
    * one click and a folded repo returns to the same ground the moment a thread wakes up.
    */
   hideDormant: true,
+  /**
+   * Archive sessions that have been dormant this many days, on the colony's own books only —
+   * the same thing clicking Archive does, done for you. Off by default: retiring astronauts
+   * without being asked is a bigger step than folding a zone away, and it should be chosen.
+   */
+  autoArchive: false,
+  autoArchiveDays: 30,
+  /**
+   * Tint each repo's sidebar swatch with the colour of the model its sessions use most.
+   * Off by default: the per-repo accent is the colony's own identity system, and the
+   * heatmap is a lens you put on deliberately rather than one that is always in the way.
+   */
+  modelHeatmap: false,
   timeOfDay: 0.32, // 0..1 — 0 is midnight, 0.5 is noon
   autoTime: false,
   /** Sky follows this machine's own clock. Wins over `autoTime`; both off is manual. */

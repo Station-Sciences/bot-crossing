@@ -320,6 +320,30 @@ export class Particles {
   }
 
   /**
+   * Thought bubbles — a soft purple dot drifting up off a pensive head. Same shape as the
+   * sleepy `z` but its own colour and a smaller size, so thinking and sleeping read as
+   * different things from across a plot even though both of them are "standing still".
+   */
+  thought(x, y, z) {
+    if (!this.enabled) return
+    this.glow.spawn(
+      x + (Math.random() - 0.5) * 0.1,
+      y,
+      z + (Math.random() - 0.5) * 0.1,
+      0.06,
+      0.26 + Math.random() * 0.16,
+      0.02,
+      0.72,
+      0.52,
+      1.2,
+      0.055 + Math.random() * 0.025,
+      1.5 + Math.random() * 0.6,
+      0.45,
+      -0.02
+    )
+  }
+
+  /**
    * Planet haze — dust on Mars, pollen on Terra. Spawned in a ring around the camera so it
    * is always where you are looking without simulating the whole world.
    */

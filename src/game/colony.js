@@ -48,10 +48,26 @@ const LIVE_GROWTH = 0.004
 /** How many zones' positions to remember, including repos with nothing running in them. */
 const LAYOUT_MEMORY = 80
 
-export const STATUS_ORDER = ['blocked', 'waiting', 'working', 'celebrating', 'idle', 'sleeping']
+/**
+ * The model heatmap: one colour per model, so a zone's swatch can say what its sessions
+ * think with rather than only which repo they are. Keys are matched by substring against
+ * the model id (which may arrive prefixed, `anthropic/claude-opus-4-6`), and anything
+ * unknown lands on the grey.
+ */
+const MODEL_COLORS = {
+  'claude-opus-4-6': 0x9070c8, // purple
+  'claude-sonnet-4-6': 0xc97050, // warm orange
+  'glm-5.3': 0x50a868, // green
+  'deepseek-v4-pro': 0x5080c0, // blue
+  'gemini-3.1-pro-preview': 0xc0a050, // gold
+}
+const DEFAULT_MODEL_COLOR = 0x8b8b85 // grey
+
+export const STATUS_ORDER = ['blocked', 'waiting', 'working', 'thinking', 'celebrating', 'idle', 'sleeping']
 
 export const STATUS_LABEL = {
   working: 'Working',
+  thinking: 'Thinking',
   waiting: 'Waiting on you',
   blocked: 'Blocked',
   celebrating: 'Shipped',
@@ -65,6 +81,9 @@ export const STATUS_LABEL = {
 export function statusFor(thread, now = Date.now()) {
   if (thread.hasError) return 'blocked'
   if (thread.running) return 'working'
+  // The model is processing — streaming output or grinding through tools reads as `working`
+  // above; a session that took input moments ago and has written nothing back yet is this.
+  if (thread.thinking) return 'thinking'
   if (thread.prState === 'MERGED') return 'celebrating'
   if (thread.unread) return 'waiting'
   if (now - thread.lastActivityAt > STALE_MS) return 'sleeping'
@@ -80,6 +99,7 @@ const BADGE_FOR = {
   waiting: BADGE.waiting,
   blocked: BADGE.blocked,
   working: BADGE.working,
+  thinking: BADGE.thinking,
   celebrating: BADGE.done,
   sleeping: BADGE.none,
   idle: BADGE.none,
@@ -160,7 +180,7 @@ export class Colony {
     this.activePlots = new Set()
     this._dustTint = new THREE.Color(this.planet.ground.high)
     this._c = new THREE.Color()
-    this.stats = { agents: 0, projects: 0, working: 0, waiting: 0, blocked: 0, done: 0 }
+    this.stats = { agents: 0, projects: 0, working: 0, thinking: 0, waiting: 0, blocked: 0, done: 0 }
 
     this._buildTerrain()
   }
@@ -267,6 +287,45 @@ export class Colony {
     const now = Date.now()
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
 
+    /**
+     * The dominant model per project, for the heatmap. Model ids may carry a cost suffix
+     * ("claude-opus-4-6 ($0.42)") — only the first word is the model, so that is all that
+     * votes. Counted over the same live list the rest of the colony is built from, so the
+     * swatch and the astronauts always agree about who is standing where.
+     */
+    const modelsByProject = new Map()
+    for (const thread of live) {
+      if (!thread.model) continue
+      const baseModel = String(thread.model).split(' ')[0].toLowerCase()
+      if (!baseModel) continue
+      const key = thread.project || 'unknown'
+      const projModels = modelsByProject.get(key) || new Map()
+      projModels.set(baseModel, (projModels.get(baseModel) || 0) + 1)
+      modelsByProject.set(key, projModels)
+    }
+    const modelInfo = new Map()
+    for (const [name, models] of modelsByProject) {
+      let dominant = ''
+      let best = 0
+      for (const [model, count] of models) {
+        if (count > best) {
+          dominant = model
+          best = count
+        }
+      }
+      let color = DEFAULT_MODEL_COLOR
+      if (dominant) {
+        for (const [key, c] of Object.entries(MODEL_COLORS)) {
+          if (dominant.includes(key) || key.includes(dominant)) {
+            color = c
+            break
+          }
+        }
+      }
+      modelInfo.set(name, { color, model: dominant })
+    }
+    this.modelInfo = modelInfo
+
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
     const byProject = new Map()
     for (const thread of live) {
@@ -320,6 +379,11 @@ export class Colony {
     const seenBuildings = new Set()
     const stats = { agents: 0, projects: projects.length }
     for (const key of STATUS_ORDER) stats[key] = 0
+    // The crew behind each count, keyed by status, filled in by the same pass that counts
+    // them. The stat bar's buttons are sent to exactly these astronauts — see
+    // `focusStatus` in main.js — so a click can never land on a roster that a poll has
+    // since moved underneath the number the user saw.
+    const statusAgents = new Map()
     // Plots holding anything that wants your attention get a pulsing rim, so you can spot
     // the repo that needs you from right across the colony without reading a single label.
     const urgent = new Set()
@@ -336,8 +400,10 @@ export class Colony {
       list.forEach((thread, i) => {
         const status = statusFor(thread, now)
         if (stats[status] !== undefined) stats[status]++
+        if (!statusAgents.has(status)) statusAgents.set(status, [])
+        statusAgents.get(status).push(thread.id)
         if (status === 'waiting' || status === 'blocked') urgent.add(plot.id)
-        if (status === 'waiting' || status === 'blocked' || status === 'working') active.add(plot.id)
+        if (status === 'waiting' || status === 'blocked' || status === 'working' || status === 'thinking') active.add(plot.id)
         stats.agents++
 
         const building = this._syncBuilding(thread, plot, i)
@@ -367,7 +433,17 @@ export class Colony {
     this.urgentPlots = urgent
     this.activePlots = active
     this._rebuildNavigation()
+    this.statusAgents = statusAgents
     this.stats = { ...stats, done: stats.celebrating }
+    // Active threads (running, thinking, waiting, blocked) must always be in the visible
+    // set, regardless of the maxAgents cap. Without this the stat bar can count a thread
+    // that has no astronaut, and clicking "1 building" answers "nobody is working".
+    const activeStatuses = new Set(['working', 'thinking', 'waiting', 'blocked', 'celebrating'])
+    roster.sort((a, b) => {
+      const aActive = activeStatuses.has(a.status) ? 0 : 1
+      const bActive = activeStatuses.has(b.status) ? 0 : 1
+      return aActive - bActive || a.id.localeCompare(b.id)
+    })
     this.astronauts.setRoster(roster, this._world())
     return this.stats
   }
@@ -743,13 +819,13 @@ export class Colony {
 
   _isLive(id) {
     const thread = this.threads.get(id)
-    return Boolean(thread && thread.running)
+    return Boolean(thread && (thread.running || thread.thinking))
   }
 
-  /** A site somebody is standing at: running, or stopped waiting on you. */
+  /** A site somebody is standing at: running, thinking, or stopped waiting on you. */
   _isActive(id) {
     const thread = this.threads.get(id)
-    return Boolean(thread && (thread.running || thread.unread || thread.hasError))
+    return Boolean(thread && (thread.running || thread.thinking || thread.unread || thread.hasError))
   }
 
   _badgeFor(agent) {
@@ -799,6 +875,12 @@ export class Colony {
 
       if (agent.state === 'at-site' && agent.status === 'sleeping' && Math.random() < dt * 0.35) {
         this.particles.snooze(agent.pos.x + 0.2, agent.pos.y + 1.05, agent.pos.z + 0.15)
+      }
+
+      // Thought bubbles above a pensive head — gentler than sparks, and purple to match
+      // the trim, so the pose and the particles say the same thing.
+      if (agent.state === 'at-site' && agent.status === 'thinking' && Math.random() < dt * 0.8) {
+        this.particles.thought(agent.pos.x + 0.18, agent.pos.y + 1.08, agent.pos.z + 0.12)
       }
 
       // Boot dust, on the footfall.

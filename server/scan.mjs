@@ -118,3 +118,17 @@ const dispatch = (harnessId) => {
 export const openThread = async (harnessId, ref) => dispatch(harnessId).openThread(ref)
 
 export const newSession = async (harnessId, dir) => dispatch(harnessId).newSession(dir)
+
+/**
+ * The conversation behind a thread, for the chat panel on its card. Optional on an adapter —
+ * a harness whose store cannot be read back as messages says so, and the panel shows its
+ * empty state rather than pretending the conversation was blank.
+ */
+export async function getTranscript(harnessId, ref) {
+  const h = harnessById(harnessId)
+  if (!h) return { ok: false, error: `Unknown harness "${harnessId}"` }
+  if (typeof h.getTranscript !== 'function') {
+    return { ok: false, error: 'That harness does not support transcripts' }
+  }
+  return h.getTranscript(ref)
+}

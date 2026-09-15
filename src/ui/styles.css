@@ -201,6 +201,43 @@ body {
 
 /* ── settings ────────────────────────────────────────────────────────────────────── */
 
+/* The “after N days” row under a toggle, indented under the setting it belongs to. */
+.setting-detail {
+  padding: 0 2px 6px 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: default;
+}
+
+.setting-detail[hidden] {
+  display: none;
+}
+
+.setting-detail label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.setting-detail input[type='number'] {
+  width: 58px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.3);
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  outline: none;
+}
+
+.setting-detail input[type='number']:focus {
+  border-color: var(--accent);
+}
+
 .settings {
   position: absolute;
   /* Level with the sidebar it sits beside. The old 78px was clearing a top bar that no
@@ -487,7 +524,7 @@ body {
   position: absolute;
   top: 0;
   left: 0;
-  width: 284px;
+  width: 360px;
   padding: 11px;
   display: none;
   flex-direction: column;
@@ -616,6 +653,136 @@ body {
   flex: 1;
   min-width: 0;
   height: 34px;
+  /* The open button names its harness ("Open in OpenClaw"), so the row runs a step smaller */
+  /* than the rest of the HUD to keep all three on one line at the card's width. */
+  font-size: 12px;
+  padding: 0 9px;
+  gap: 6px;
+}
+
+/* ── the conversation, inside the card ─────────────────────────────────────────── */
+
+/* The scroller is the wrapper, so the card grows with the chat up to this ceiling and the
+   buttons stay put beneath it. */
+.thread-pop .transcript {
+  max-height: 320px;
+  overflow-y: auto;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.15);
+  padding: 8px;
+  scrollbar-width: thin;
+}
+
+.thread-pop .transcript-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.thread-pop .transcript-loading,
+.thread-pop .transcript-empty {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 16px 8px;
+}
+
+.thread-pop .transcript-loading[hidden],
+.thread-pop .transcript-empty[hidden] {
+  display: none;
+}
+
+/* You on the right, the astronaut on the left — the shape every chat already has. */
+.thread-pop .msg-user,
+.thread-pop .msg-assistant {
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  max-width: 95%;
+  word-break: break-word;
+}
+
+.thread-pop .msg-user {
+  background: rgba(200, 140, 100, 0.2);
+  align-self: flex-end;
+  border-bottom-right-radius: 2px;
+}
+
+.thread-pop .msg-assistant {
+  background: rgba(100, 140, 200, 0.15);
+  align-self: flex-start;
+  border-bottom-left-radius: 2px;
+}
+
+.thread-pop .msg-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 3px;
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.thread-pop .msg-role {
+  font-weight: 600;
+}
+
+.thread-pop .msg-time {
+  margin-left: auto;
+}
+
+.thread-pop .msg-body {
+  white-space: pre-wrap;
+}
+
+.thread-pop .tool-badge {
+  font-size: 9px;
+  background: rgba(127, 211, 154, 0.2);
+  color: #7fd39a;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+/* The PR a session worked on, as a #number tag — green-tinted, like the ✓ it may earn. */
+.thread-pop .tag.pr-tag {
+  background: rgba(100, 180, 100, 0.2);
+  color: #7fd39a;
+}
+
+/* Live tail badge, pinned to the transcript's own top-right corner while the session
+   behind the card is running or thinking. */
+.thread-pop .transcript {
+  position: relative;
+}
+
+.transcript-live {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 1;
+  font-size: 10px;
+  color: #7fd39a;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+
+.transcript-live[hidden] {
+  display: none;
+}
+
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 .progress {
@@ -728,8 +895,10 @@ body {
   border-color: var(--line-strong);
 }
 
+/* A count of zero is not a control — it is a dead button. Hidden entirely rather than
+   dimmed, so the bar only ever offers a click that goes somewhere. */
 .stat[data-empty='true'] {
-  opacity: 0.4;
+  display: none;
 }
 
 .stat .pip {
@@ -751,6 +920,9 @@ body {
 .stat.working {
   color: #7fd39a;
 }
+.stat.thinking {
+  color: #b088e8;
+}
 .stat.waiting {
   color: #8fb4ee;
 }
@@ -762,6 +934,38 @@ body {
 }
 .stat.idle {
   color: #b6b5be;
+}
+
+/* ── time filter badge ───────────────────────────────────────────────────────── */
+
+/* Between the counts and the repo list: the colony is a slice of time, not the live
+   thing, and this is what says so — with the way back. */
+.time-filter-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 9px 15px;
+  align-self: flex-start;
+  flex: none;
+  background: rgba(200, 140, 100, 0.15);
+  border: 1px solid rgba(200, 140, 100, 0.3);
+  border-radius: 6px;
+  padding: 3px 4px 3px 10px;
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.time-filter-badge[hidden] {
+  display: none;
+}
+
+.time-filter-badge .btn {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--accent);
 }
 
 /* ── the two panes: every repo, or the one you picked ───────────────────────────── */
@@ -873,7 +1077,7 @@ body {
 .side .hidden-repo:hover { background: transparent; }
 .side .hidden-repo .n { opacity: 0.72; }
 
-.thread-pop .actions #btn-viewed[hidden] {
+.thread-pop #btn-viewed[hidden] {
   display: none;
 }
 
@@ -927,6 +1131,46 @@ body {
   font-variant-numeric: tabular-nums;
   font-size: 11.5px;
   color: var(--dim);
+}
+
+/* The heatmap's second swatch, beside the name — smaller than the zone's own, so the
+   accent stays the thing you scan for and the model reads as the annotation it is. */
+.side .repo .model-swatch {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  box-shadow: 0 0 7px currentColor;
+}
+
+/* The heatmap legend, at the foot of the repo list. */
+.model-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 8px 15px 10px;
+  border-top: 1px solid var(--line);
+  font-size: 10.5px;
+  color: var(--muted);
+  flex: none;
+}
+
+.model-legend[hidden] {
+  display: none;
+}
+
+.model-legend > div {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.model-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  display: inline-block;
+  flex: none;
 }
 
 .side .swatch {
@@ -1129,6 +1373,9 @@ body {
 .side .thread.working {
   color: #7fd39a;
 }
+.side .thread.thinking {
+  color: #b088e8;
+}
 .side .thread.waiting {
   color: #8fb4ee;
 }
@@ -1142,7 +1389,287 @@ body {
   color: #7c7b86;
 }
 
-/* ── toasts + readouts ───────────────────────────────────────────────────────────── */
+/* ── search ────────────────────────────────────────────────────────────────────── */
+
+/* Left of the sidebar, which owns the right-hand edge — the same slot the settings panel
+   slides into from the far side, so the two never stack. */
+.search-panel {
+  position: absolute;
+  top: 14px;
+  right: calc(var(--side, 334px) + 28px);
+  width: 320px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.search-panel.closed {
+  display: none;
+}
+
+.search-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.search-bar input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.search-bar input:focus {
+  border-color: var(--accent);
+}
+
+.search-bar .btn {
+  flex: none;
+}
+
+.search-results {
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+.search-results::-webkit-scrollbar {
+  width: 8px;
+}
+
+.search-results::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+}
+
+.search-results .result {
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.search-results .result:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--line);
+}
+
+.search-results .result .result-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-results .result .result-meta {
+  font-size: 10.5px;
+  color: var(--dim);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.search-results .search-empty {
+  padding: 14px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* ── activity timeline ───────────────────────────────────────────────────────────── */
+
+/* Centred in the space the sidebar leaves, at the bottom of the screen where it covers
+   nothing the colony is doing. */
+.timeline-panel {
+  position: absolute;
+  bottom: 60px;
+  left: calc((100% - var(--side, 334px)) / 2);
+  transform: translateX(-50%);
+  width: min(86vw, 720px);
+  max-width: calc(100% - var(--side, 334px) - 28px);
+  padding: 14px;
+  z-index: 10;
+}
+
+.timeline-panel.closed {
+  display: none;
+}
+
+.timeline-panel header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+
+.timeline-panel .timeline-title {
+  white-space: nowrap;
+}
+
+.timeline-controls {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: auto;
+  font-weight: normal;
+}
+
+.timeline-controls .btn.small {
+  height: 24px;
+  min-width: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 7px;
+}
+
+.timeline-controls .btn.small.active {
+  background: var(--accent);
+  border-color: transparent;
+  color: #fff;
+}
+
+.timeline-controls input[type='date'] {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 6px;
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  outline: none;
+}
+
+.timeline-controls input[type='date']:focus {
+  border-color: var(--accent);
+}
+
+.timeline-grid {
+  display: flex;
+  gap: 3px;
+  overflow-x: auto;
+  padding: 4px 0 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+.timeline-grid::-webkit-scrollbar {
+  height: 8px;
+}
+
+.timeline-grid::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+}
+
+.timeline-grid .week-gutter {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: none;
+  padding-top: 13px; /* clears the month-label row the week columns carry */
+}
+
+.timeline-grid .week-gutter span {
+  width: 12px;
+  height: 12px;
+  font-size: 9px;
+  line-height: 12px;
+  color: var(--dim);
+  text-align: center;
+}
+
+.timeline-grid .week {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: none;
+}
+
+.timeline-grid .month-label {
+  height: 11px;
+  font-size: 9px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.timeline-grid .day {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: rgba(200, 140, 100, 0.08);
+  flex: none;
+}
+
+.timeline-grid .day.out {
+  background: transparent;
+}
+
+/* Every real day is a filter pick: the cursor says so before the click does. */
+.timeline-grid .day[data-date] {
+  cursor: pointer;
+}
+
+.timeline-grid .day[data-date]:hover {
+  outline: 1px solid rgba(200, 140, 100, 0.65);
+}
+
+/* A colony filter active: the days it covers are outlined, the rest step back. */
+.timeline-grid.filtered .day:not(.in-range) {
+  opacity: 0.4;
+}
+
+.timeline-grid .day.in-range {
+  outline: 1px solid rgba(200, 140, 100, 0.5);
+}
+
+.timeline-grid .timeline-empty {
+  padding: 18px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  width: 100%;
+}
+
+.timeline-legend {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 8px;
+  justify-content: flex-end;
+}
+
+.timeline-legend i {
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* ── toasts + readouts ──────────────────────────────────────────────────────────── */
 
 .toasts {
   position: absolute;

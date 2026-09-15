@@ -89,6 +89,7 @@ what earns a repo its own zone, and `lastActivityAt` is what sorts the whole map
 | `lastActivityAt` | number | Epoch ms. Sorts the colony and drives the "asleep for 3 days" behaviour |
 | `lastFocusedAt` | number | Epoch ms, `0` if unknowable |
 | `running` | boolean | Working **right now** — the astronaut hammers away |
+| `thinking` | boolean | The model is processing fresh input — the astronaut stands with a thought bubble, purple trim |
 | `unread` | boolean | Moved on since you last looked — the astronaut stops and holds a `?` |
 | `hasError` | boolean | Errored — the astronaut slumps, red eyes |
 | `starred` / `routine` / `prState` | | Optional extras; `prState: 'merged'` triggers the confetti |

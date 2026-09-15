@@ -16,6 +16,20 @@ const post = (url, payload) =>
 
 export const fetchThreads = () => req('/api/threads')
 
+/** Sessions matching a query, from the server's last scan. */
+export const searchThreads = (query) => req(`/api/search?q=${encodeURIComponent(query)}`)
+
+/**
+ * Session activity by hour, for the timeline panel. `from`/`to` are ISO strings; either
+ * may be omitted, in which case the server picks its own window (the last thirty days).
+ */
+export const fetchActivity = (from, to) => {
+  const params = new URLSearchParams()
+  if (from) params.set('from', from)
+  if (to) params.set('to', to)
+  return req(`/api/activity?${params}`)
+}
+
 /**
  * The colony file, and the base every later save is measured against.
  *
@@ -90,5 +104,8 @@ export const openThread = (thread) => post('/api/open', { harness: thread.harnes
 
 /** A brand new thread in a repo, via that harness's own new-session deep link. */
 export const newSession = (folder, harness) => post('/api/new-session', { folder, harness })
+
+/** The conversation behind a thread, for the chat panel on its card. */
+export const fetchTranscript = (thread) => post('/api/transcript', { harness: thread.harness, ref: thread.ref })
 
 export const revealFolder = (folder) => post('/api/reveal', { folder })
