@@ -880,4 +880,8 @@ Everything else you see and hear — the shaders, the terrain, the sky and its c
 the birds and drones, the ship, the crew's helmets and faces, the plot decks and their kerbs,
 and every synthesised sound — is made by this project and is MIT along with the code.
 
+Two things sit outside that: the name **Bot Crossing**, and character design work from here on.
+Everything in the repository today stays MIT; new designs, models and physical forms of the crew
+do not. The code that draws the crew stays MIT either way — see [TRADEMARKS.md](TRADEMARKS.md).
+
 Not affiliated with Anthropic, OpenAI, Google, or any of the other harness vendors listed above.

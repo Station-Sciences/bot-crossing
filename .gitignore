@@ -26,3 +26,9 @@ recordings
 public/audio/*
 !public/audio/README.md
 public/dev-mobile.html
+
+# Character design source — turnarounds, sculpts, high-res art, anything worked up for the
+# crew character itself rather than for the runtime. The built result ships; the source does
+# not. Same reasoning as the sound samples above: what is in the repository is MIT, and this
+# is the one part of the project deliberately kept out of that grant. See TRADEMARKS.md.
+design/character
