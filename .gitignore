@@ -18,3 +18,11 @@ assets-src
 
 # Local capture output — not part of the project.
 recordings
+
+# Sound samples. The game synthesises every sound it needs, so nothing here is required;
+# files dropped in alongside a manifest.json override the synth by name. Kept out of the
+# repository because the samples people use (Splice, most stock libraries) are licensed for
+# use in a work, not for redistribution on their own.
+public/audio/*
+!public/audio/README.md
+public/dev-mobile.html

@@ -197,7 +197,8 @@ async function present(result) {
   if (process.platform !== 'linux') {
     if (!result.url) return { ok: false, error: 'That harness has no deep link to open on this platform' }
     launch(result.url)
-    return { ok: true, url: result.url }
+    // A note is the adapter saying it opened *something* — the repo rather than the thread.
+    return { ok: true, url: result.url, note: result.note }
   }
 
   if (result.url && (await schemeHasHandler(result.url))) {

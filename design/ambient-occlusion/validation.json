@@ -1,0 +1,86 @@
+[
+  {
+    "check": "local shading is visible",
+    "changed": 324981,
+    "darker": 324954,
+    "meanDelta": 3.1936773066926576,
+    "extraCalls": 2
+  },
+  {
+    "check": "frozen frame parity",
+    "frame": 0,
+    "changed": 0,
+    "darker": 0,
+    "meanDelta": 0
+  },
+  {
+    "check": "frozen frame parity",
+    "frame": 1,
+    "changed": 0,
+    "darker": 0,
+    "meanDelta": 0
+  },
+  {
+    "check": "frozen frame parity",
+    "frame": 2,
+    "changed": 0,
+    "darker": 0,
+    "meanDelta": 0
+  },
+  {
+    "check": "frozen frame parity",
+    "frame": 3,
+    "changed": 0,
+    "darker": 0,
+    "meanDelta": 0
+  },
+  {
+    "check": "off restores baseline and frees target",
+    "changed": 0,
+    "darker": 0,
+    "meanDelta": 0,
+    "freed": true
+  },
+  {
+    "check": "flat ground and sky remain unchanged",
+    "changed": 0,
+    "darker": 0,
+    "meanDelta": 0
+  },
+  {
+    "check": "moving camera, defocus, buffer parity and resize",
+    "invalidHDR": 0,
+    "glErrors": 0
+  },
+  {
+    "check": "GPU synchronized frame time, 1080x760",
+    "timings": [
+      {
+        "strength": 0,
+        "ms": 0.28125
+      },
+      {
+        "strength": 0.25,
+        "ms": 0.32500000298023224
+      },
+      {
+        "strength": 0,
+        "ms": 0.24374999850988388
+      },
+      {
+        "strength": 0.25,
+        "ms": 0.23749999701976776
+      }
+    ]
+  },
+  {
+    "check": "AO works alone, then releases the composer when off",
+    "passed": true,
+    "glError": 0
+  },
+  {
+    "complete": true,
+    "passed": true,
+    "glError": 0
+  }
+]

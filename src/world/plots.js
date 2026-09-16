@@ -3,6 +3,9 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { DECK_TEXTURE_SCALE, KERB_UV, deckSurface, kerbSurface } from './surfaces.js'
 import { atlasTexture, hasPart, part } from './kit.js'
 import { mulberry } from './planet.js'
+import { withCurve } from '../core/curve.js'
+import { OVERLAY_LAYER } from '../core/engine.js'
+import { BUILDING_RADIUS } from './buildings.js'
 
 /**
  * Project plots — the fenced-off sections of the map, one per repo.
@@ -209,7 +212,16 @@ export function allocateCells(projects, previous = new Map()) {
 
 function layOut(projects, previous) {
   const reserved = key(SHIP_CELL.q, SHIP_CELL.r)
-  const wanted = projects.map((p) => ({ id: p.id, want: cellsNeeded(p.size) }))
+  // Shrinking has hysteresis. A zone sitting exactly on a cell boundary would otherwise
+  // hand a tile back the moment one thread is archived and claim it again when the next
+  // one starts — and every hand-back rebuilds the plot and walks its whole crew. A tile is
+  // only returned once the repo has lost a few threads past the line.
+  const wanted = projects.map((p) => {
+    const before = previous.get(p.id)
+    let want = cellsNeeded(p.size)
+    if (before && before.length > want) want = Math.min(before.length, cellsNeeded(p.size + 3))
+    return { id: p.id, want }
+  })
   const total = wanted.reduce((n, w) => n + w.want, 0)
 
   // Spiral order decides where a *new* project settles. The pool runs past what is needed
@@ -452,8 +464,8 @@ export class Plot {
     this._buildDeck()
     this._buildBorder()
     this._buildPosts()
-    this._buildClutter()
     this.slots = this._buildSlots()
+    this._buildClutter()
   }
 
   /** One merged slab of hex tiles. */
@@ -590,8 +602,8 @@ export class Plot {
    *
    * A plot with buildings on its slots and nothing anywhere else reads as a car park. This
    * fills the gap for one extra draw call: a merged mesh of kit props, placed against the
-   * outer edge of each cell where the crew's routes between slots do not run, so nothing
-   * has to be added to the navigation grid and nobody ends up walking through a barrel.
+   * outer edge of each cell where the crew's routes between slots do not run. Accepted
+   * footprints also go into the navigation grid so nobody walks through a barrel.
    *
    * Seeded off the plot's own name, so a repo's yard is laid out the same on every reload.
    */
@@ -629,10 +641,18 @@ export class Plot {
         // difference is one an astronaut walks into the corner of.
         geo.computeBoundingBox()
         const box = geo.boundingBox
-        const spread = Math.max(box.max.x - box.min.x, box.max.z - box.min.z) * 0.5
-        geo.translate(px, DECK_TOP, pz)
+        const spread = Math.hypot(Math.max(Math.abs(box.min.x), Math.abs(box.max.x)), Math.max(Math.abs(box.min.z), Math.abs(box.max.z)))
+        // Reserve a full footprint and a walking gap, not just a centre point. Skip a
+        // cramped prop instead of pushing it onto a building or over the kerb.
+        if (!this.containsLocal(px, pz, spread + 0.16) ||
+            this.slots.some((s) => Math.hypot(px - s.x, pz - s.z) < BUILDING_RADIUS + spread + 0.4) ||
+            this.clutterSpots.some((s) => Math.hypot(px - s.x, pz - s.z) < s.r + spread + 0.25)) {
+          geo.dispose()
+          continue
+        }
+        geo.translate(px, DECK_TOP - box.min.y, pz)
         parts.push(geo)
-        this.clutterSpots.push({ x: px, z: pz, r: Math.max(0.45, spread * 0.86) })
+        this.clutterSpots.push({ x: px, z: pz, r: spread })
       }
     })
 
@@ -667,6 +687,22 @@ export class Plot {
 
   slotFor(index) {
     return this.slots[index % this.slots.length]
+  }
+
+  /** A complete circular footprint must fit on one of the deck's actual hex faces. */
+  containsLocal(x, z, radius = 0) {
+    const apothem = TILE * Math.sqrt(3) / 2 - radius
+    return this.localCenters.some((c) => {
+      for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3 + Math.PI / 6
+        if ((x - c.x) * Math.cos(a) + (z - c.z) * Math.sin(a) > apothem) return false
+      }
+      return true
+    })
+  }
+
+  containsWorld(x, z, radius = 0) {
+    return this.containsLocal(x - this.center.x, z - this.center.z, radius)
   }
 
   worldSlot(index, out = new THREE.Vector3()) {
@@ -769,9 +805,12 @@ export function createLabel(text, accent, pixelRatio = 4) {
     opacity: 0,
   })
   mat.onBeforeCompile = (shader) => {
+    withCurve(shader)
     shader.vertexShader = shader.vertexShader.replace(
       '#include <project_vertex>',
-      `vec4 mvPosition = modelViewMatrix * vec4( 0.0, 0.0, 0.0, 1.0 );
+      // The anchor is bent like the ground under it, so a plate stays over its zone when the
+      // world curves away; the quad itself is then built flat in view space as before.
+      `vec4 mvPosition = viewMatrix * vec4( bcBend( ( modelMatrix * vec4( 0.0, 0.0, 0.0, 1.0 ) ).xyz ), 1.0 );
        float dist = -mvPosition.z;
        mvPosition.xy += position.xy * ( 0.55 + dist * 0.03 );
        gl_Position = projectionMatrix * mvPosition;`
@@ -781,6 +820,8 @@ export function createLabel(text, accent, pixelRatio = 4) {
   mesh.renderOrder = 8
   mesh.frustumCulled = false
   mesh.visible = false
+  // After bloom and tilt-shift, with the badges — see the engine's overlay pass.
+  mesh.layers.set(OVERLAY_LAYER)
   mesh.userData.dispose = () => {
     texture.dispose()
     geo.dispose()

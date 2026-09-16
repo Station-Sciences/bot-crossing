@@ -86,3 +86,21 @@ That means a PR can be closed unmerged and still be the reason something shipped
 happens the commit says so and the contributor is credited by name. It is a worse deal for
 contributors than merging their commit, and it is written down here so nobody has to discover
 it from a closed tab.
+
+## Sound samples are not committed; every sound has a synth
+
+`public/audio/` is gitignored apart from its README. Sample libraries — Splice, and most
+stock libraries — license their sounds for use *in* a work, not for redistribution on their
+own, and a public MIT repository is redistribution. So the registry in `src/audio/sounds.js`
+refuses to load if any name lacks a procedural generator: the game is fully audible from a
+fresh clone, and real recordings are an override by name through `manifest.json` on the
+machine that owns them. Sounds under CC0 may be committed, with a line in `CREDITS.md`.
+
+## Every hand-written shader calls `withCurve`
+
+The world curve is patched into three's own `project_vertex`, so built-in materials bend
+without knowing about it and pick their uniforms up from the material prototype's
+`onBeforeCompile`. A material that installs its *own* `onBeforeCompile` replaces that, and
+has to call `withCurve(shader)` itself — otherwise its uniforms are zero, it stays flat, and
+it floats above the ground that bent away under it. Same for a custom depth material, or its
+shadow stays flat while it does not.

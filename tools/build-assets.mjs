@@ -26,6 +26,10 @@ const FOREST = [
 const STEPS = [
   ['tools/build-kit.mjs', 'assets-src/KayKit_Space_Base_Bits_1.0_FREE/Assets/gltf', 'public/assets/spacebase.glb'],
   ['tools/build-kit.mjs', 'assets-src/KayKit_Forest_Nature_Pack_1.0_FREE/Assets/gltf', 'public/assets/forest.glb', FOREST.join(',')],
+  // Kenney's Nature Kit has its own packer: its models are flat-colour primitives rather
+  // than atlas-mapped, and the packer bakes those colours into vertices. The list of what
+  // is kept, and the recolours that turn an oak into a cherry tree, live in there.
+  ['tools/build-nature.mjs', 'assets-src/kenney_nature-kit/Models/GLTF format', 'public/assets/nature.glb'],
   ['tools/build-crew.mjs'],
 ]
 

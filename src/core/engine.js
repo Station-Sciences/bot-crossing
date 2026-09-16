@@ -4,8 +4,18 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js'
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js'
+import { Pass } from 'three/addons/postprocessing/Pass.js'
+
+/**
+ * The layer for things that are *read* rather than looked at — status badges, name plates.
+ * Their own pass follows bloom and depth of field so symbols stay sharp regardless of
+ * the scene depth behind them. With the composer off they are simply part of the scene.
+ */
+export const OVERLAY_LAYER = 1
 import { SHADOW_SIZES } from './settings.js'
 import { createTiltShift } from './tiltshift.js'
+import { OcclusionPass } from './occlusion.js'
 
 /** Safari and friends — not Chrome, which also says "Safari" in its user agent. */
 const IS_WEBKIT =
@@ -78,8 +88,12 @@ export class Engine {
 
     this.composer = null
     this.bloomPass = null
+    this.occlusionPass = null
     this.smaaPass = null
     this.tiltShift = null
+    this.gradePass = null
+    /** The planet's own nudge to the grade, multiplied into the user's sliders. */
+    this._planetGrade = { saturation: 1, warmth: 0 }
     /** How far the view is orbiting; the focal plane sits here. Fed by the frame loop. */
     this._focusDistance = 30
 
@@ -148,16 +162,21 @@ export class Engine {
     this.camera.fov = s.get('fov')
     this.camera.updateProjectionMatrix()
 
-    const wantsPost = s.get('bloom') || s.get('antialias') || s.get('tiltShift')
+    const wantsPost = this._wantsPost()
     if (wantsPost) this._ensureComposer()
     else this._disposeComposer()
 
     if (this.composer) {
+      this.occlusionPass?.setStrength(s.get('ambientOcclusion'))
       if (this.bloomPass) {
         this.bloomPass.enabled = s.get('bloom')
         this.bloomPass.strength = s.get('bloomStrength')
       }
       if (this.smaaPass) this.smaaPass.enabled = s.get('antialias')
+      if (this.gradePass) {
+        this.gradePass.enabled = s.get('colorGrade')
+        this._syncGrade()
+      }
       if (this.tiltShift) {
         this.tiltShift.enabled = s.get('tiltShift')
         this.tiltShift.setStrength(s.get('tiltShiftStrength'))
@@ -187,6 +206,11 @@ export class Engine {
     const composer = new EffectComposer(this.renderer, target)
     composer.addPass(new RenderPass(this.scene, this.camera))
 
+    // Contact shading comes before bloom/defocus and never touches the readable overlays.
+    this.occlusionPass = new OcclusionPass(this.camera)
+    this.occlusionPass.setStrength(this.settings.get('ambientOcclusion'))
+    composer.addPass(this.occlusionPass)
+
     // A high threshold is what keeps this an accent rather than a haze: only the eyes,
     // lamps, sparks and the sun's disc clear it, so lit surfaces stay crisp.
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), this.settings.get('bloomStrength'), 0.55, 0.92)
@@ -208,8 +232,22 @@ export class Engine {
     this.tiltShift.setCamera(this.camera)
     this.tiltShift.setFocusDistance(this._focusDistance)
 
+    // Draw readable overlays after both blur passes. Badges don't write depth, so putting
+    // them before tilt-shift blurs them using the depth of the house or sky behind them.
+    // Keep them in linear HDR here so OutputPass still applies their existing colour treatment.
+    composer.addPass(new OverlayPass(this.scene, this.camera))
+
     // OutputPass is what applies tone mapping + sRGB once, at the end of the chain.
     composer.addPass(new OutputPass())
+
+    // The grade sits on the finished, display-referred image: a touch more saturation, a
+    // warm cast, lifted shadows and a soft vignette. Doing it after tone mapping is what
+    // keeps it a *grade* — the same nudge whatever the exposure — rather than a change to
+    // the lighting.
+    this.gradePass = new ShaderPass(GRADE_SHADER)
+    this.gradePass.enabled = this.settings.get('colorGrade')
+    composer.addPass(this.gradePass)
+    this._syncGrade()
 
     this.smaaPass = new SMAAPass(1, 1)
     composer.addPass(this.smaaPass)
@@ -219,13 +257,33 @@ export class Engine {
 
   _disposeComposer() {
     if (!this.composer) return
-    this.composer.renderTarget1?.dispose()
-    this.composer.renderTarget2?.dispose()
     for (const pass of this.composer.passes) pass.dispose?.()
+    this.composer.dispose()
     this.composer = null
     this.bloomPass = null
+    this.occlusionPass = null
     this.smaaPass = null
     this.tiltShift = null
+    this.gradePass = null
+  }
+
+  _wantsPost() {
+    const s = this.settings
+    return Boolean(s.get('bloom') || s.get('antialias') || s.get('tiltShift') || s.get('colorGrade') || s.get('ambientOcclusion') > 0)
+  }
+
+  /** A planet's own colour character — Mars a little warm, Frost a little cool. */
+  setPlanetGrade(grade) {
+    this._planetGrade = { saturation: grade?.saturation ?? 1, warmth: grade?.warmth ?? 0 }
+    this._syncGrade()
+  }
+
+  _syncGrade() {
+    if (!this.gradePass) return
+    const u = this.gradePass.uniforms
+    u.uSaturation.value = this.settings.get('saturation') * this._planetGrade.saturation
+    u.uWarmth.value = this._planetGrade.warmth
+    u.uVignette.value = this.settings.get('vignette')
   }
 
   resize() {
@@ -237,7 +295,13 @@ export class Engine {
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
 
-    const scale = this._targetScale()
+    const ceiling = this._targetScale()
+    // A focus event or a new window size must not undo an adaptive reduction. Only a
+    // changed resolution setting/DPR or disabling the governor restores native scale.
+    const scale = this.settings.get('autoQuality') && this._scaleCeiling === ceiling
+      ? Math.min(this.viewport?.scale ?? ceiling, ceiling)
+      : ceiling
+    this._scaleCeiling = ceiling
     const bw = Math.max(1, Math.round(w * scale))
     const bh = Math.max(1, Math.round(h * scale))
 
@@ -245,11 +309,22 @@ export class Engine {
     // (`position: absolute; inset: 0`), because a hand-written width is a second opinion
     // about how big the canvas is — and the moment the two disagree, the scene is drawn to
     // one rectangle while every panel is positioned against the other.
-    this.renderer.setSize(bw, bh, false)
-    this.composer?.setSize(bw, bh)
+    this.viewport = { w, h, bw, bh, scale }
+    this.autoScaled = scale < ceiling - 0.01
+    this._resizePending = true
+  }
+
+  /** Resize only immediately before drawing: changing canvas dimensions clears it. */
+  _resizeBuffers() {
+    if (!this._resizePending || !this.viewport) return
+    this._resizePending = false
+    const { bw, bh } = this.viewport
+    if (this.canvas.width !== bw || this.canvas.height !== bh) this.renderer.setSize(bw, bh, false)
+    if (this.composer && (this.composer.renderTarget1.width !== bw || this.composer.renderTarget1.height !== bh)) {
+      this.composer.setSize(bw, bh)
+    }
     this.tiltShift?.setSize(bw, bh)
     this.tiltShift?.setCamera(this.camera)
-    this.viewport = { w, h, bw, bh, scale }
   }
 
   /**
@@ -303,16 +378,11 @@ export class Engine {
 
     for (const u of this.updaters) u.update?.(dt, this.elapsed)
 
+    if (this.settings.get('autoQuality')) this._governQuality()
     this.renderer.info.reset()
-    if (this.composer && (this.settings.get('bloom') || this.settings.get('antialias') || this.settings.get('tiltShift'))) {
-      this._syncDepthTexture()
-      this.composer.render(dt)
-    } else {
-      this.renderer.render(this.scene, this.camera)
-    }
+    this._draw(dt)
 
     this.perf.sample(dt, this.renderer.info)
-    if (this.settings.get('autoQuality')) this._governQuality()
   }
 
   /**
@@ -322,10 +392,18 @@ export class Engine {
    */
   renderFrame() {
     this.renderer.info.reset()
-    if (this.composer && (this.settings.get('bloom') || this.settings.get('antialias') || this.settings.get('tiltShift'))) {
+    this._draw(0)
+  }
+
+  _draw(dt) {
+    this._resizeBuffers()
+    if (this.composer && this._wantsPost()) {
+      // The scene pass sees everything but the overlay; the overlay pass sees only it.
+      this.camera.layers.set(0)
       this._syncDepthTexture()
-      this.composer.render(0)
+      this.composer.render(dt)
     } else {
+      this.camera.layers.enableAll()
       this.renderer.render(this.scene, this.camera)
     }
   }
@@ -349,10 +427,8 @@ export class Engine {
     if (fps <= 0) return
     const ceiling = this._targetScale()
     const current = this.viewport?.scale ?? ceiling
-    // The floor is half the display's own resolution, not half a CSS pixel: on a retina
-    // panel the old absolute 0.5 was a quarter-resolution buffer, which reads as broken
-    // rather than as a machine having a hard time.
-    const floor = 0.35 * (window.devicePixelRatio || 1)
+    // The floor is relative to the display, and never above the user's own ceiling.
+    const floor = Math.min(ceiling, 0.35 * (window.devicePixelRatio || 1))
 
     // Sustained evidence, not one sample: 3 slow seconds to drop, 8 fast ones to climb.
     this._slow = fps < 45 ? (this._slow || 0) + 1 : 0
@@ -376,11 +452,8 @@ export class Engine {
       if (!parent) return
       const bw = Math.max(1, Math.round(parent.clientWidth * next))
       const bh = Math.max(1, Math.round(parent.clientHeight * next))
-      this.renderer.setSize(bw, bh, false)
-      this.composer?.setSize(bw, bh)
-      this.tiltShift?.setSize(bw, bh)
-    this.tiltShift?.setCamera(this.camera)
       this.viewport = { ...this.viewport, bw, bh, scale: next }
+      this._resizePending = true
       this.autoScaled = next < ceiling - 0.01
     }
   }
@@ -397,6 +470,69 @@ export class Engine {
     this._disposeComposer()
     this.renderer.dispose()
   }
+}
+
+/** Draws the overlay layer on top of whatever is in the composer's buffer, keeping its depth. */
+class OverlayPass extends Pass {
+  constructor(scene, camera) {
+    super()
+    this.scene = scene
+    this.camera = camera
+    this.needsSwap = false
+    this.clear = false
+  }
+
+  render(renderer, writeBuffer, readBuffer) {
+    const autoClear = renderer.autoClear
+    renderer.autoClear = false
+    this.camera.layers.set(OVERLAY_LAYER)
+    renderer.setRenderTarget(this.renderToScreen ? null : readBuffer)
+    renderer.render(this.scene, this.camera)
+    this.camera.layers.set(0)
+    renderer.autoClear = autoClear
+  }
+}
+
+/**
+ * The grade. Saturation is pulled around luminance; warmth tips red up and blue down; the
+ * lift adds a faint cool tint into the blacks so shadows read as shade rather than as holes
+ * — the single most Animal Crossing thing in here — and a gentle S-curve gives the mids a
+ * little pop. The vignette is wide and soft so it never reads as a border.
+ */
+const GRADE_SHADER = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uSaturation: { value: 1 },
+    uWarmth: { value: 0 },
+    uVignette: { value: 0.3 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uSaturation;
+    uniform float uWarmth;
+    uniform float uVignette;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D( tDiffuse, vUv );
+      vec3 col = c.rgb;
+      // Lifted, tinted blacks.
+      col += ( 1.0 - col ) * vec3( 0.035, 0.045, 0.075 ) * ( 1.0 - smoothstep( 0.0, 0.5, dot( col, vec3( 0.333 ) ) ) );
+      float l = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
+      col = mix( vec3( l ), col, uSaturation );
+      col *= vec3( 1.0 + uWarmth * 0.9, 1.0 + uWarmth * 0.25, 1.0 - uWarmth * 0.9 );
+      col = mix( col, col * col * ( 3.0 - 2.0 * col ), 0.16 );
+      vec2 d = vUv - 0.5;
+      col *= 1.0 - dot( d, d ) * uVignette * 1.15;
+      gl_FragColor = vec4( clamp( col, 0.0, 1.0 ), c.a );
+    }
+  `,
 }
 
 /** Rolling frame stats — an EMA so the readout does not flicker on a single slow frame. */

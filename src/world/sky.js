@@ -30,6 +30,34 @@ const SKY_FRAG = /* glsl */ `
   uniform float uGlow;       // how much atmosphere there is to scatter light
   uniform float uDisc;       // sun disc brightness, faded out below the horizon
   uniform float uHaze;
+  uniform float uCloudAmount;
+  uniform vec3 uCloudColor;
+  uniform float uCloudTime;
+  uniform float uDay;
+
+  // Value noise on a hashed lattice — the same idea as the terrain's, on the GPU.
+  float cloudHash( vec2 p ) {
+    return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 );
+  }
+  float cloudNoise( vec2 p ) {
+    vec2 i = floor( p );
+    vec2 f = fract( p );
+    f = f * f * ( 3.0 - 2.0 * f );
+    return mix(
+      mix( cloudHash( i ), cloudHash( i + vec2( 1.0, 0.0 ) ), f.x ),
+      mix( cloudHash( i + vec2( 0.0, 1.0 ) ), cloudHash( i + vec2( 1.0, 1.0 ) ), f.x ),
+      f.y );
+  }
+  float cloudFbm( vec2 p ) {
+    float s = 0.0;
+    float a = 0.5;
+    for ( int i = 0; i < 5; i++ ) {
+      s += cloudNoise( p ) * a;
+      p = p * 2.03 + vec2( 17.0, 9.0 );
+      a *= 0.5;
+    }
+    return s;
+  }
 
   void main() {
     vec3 d = normalize( vDir );
@@ -46,6 +74,26 @@ const SKY_FRAG = /* glsl */ `
     col += uSunColor * pow( sun, 6.0 ) * uGlow * 0.14;
     col += uSunColor * pow( sun, 60.0 ) * uGlow * 0.3;
     col += uSunColor * smoothstep( 0.9990, 0.9996, sun ) * uDisc;
+
+    // Cumulus. The dome direction is projected onto a flat sheet some way overhead, which
+    // is what makes clouds foreshorten toward the horizon instead of wrapping the sphere,
+    // and two noise samples — one nudged toward the sun — give each puff a lit side and a
+    // shaded underside for the price of a second lookup.
+    if ( uCloudAmount > 0.001 && d.y > 0.02 ) {
+      vec2 sheet = d.xz / ( d.y + 0.26 ) * 1.05 + vec2( uCloudTime * 0.012, uCloudTime * 0.004 );
+      float n = cloudFbm( sheet );
+      float cover = smoothstep( 1.0 - uCloudAmount * 0.9, 1.05 - uCloudAmount * 0.5, n );
+      vec2 toward = normalize( uSunDir.xz + vec2( 0.0001 ) ) * 0.09;
+      float lit = clamp( ( cloudFbm( sheet + toward ) - n ) * 6.0 + 0.55, 0.0, 1.0 );
+      // Bright where the sun catches them, the sky's own colour underneath; at night they
+      // are dark shapes against the stars rather than white ones.
+      vec3 dayCloud = mix( uCloudColor * 0.68, uCloudColor * 1.02, lit );
+      vec3 nightCloud = uTop * 0.55 + uHorizon * 0.15;
+      vec3 cloud = mix( nightCloud, dayCloud, uDay );
+      // Clouds near the horizon fade into the haze rather than stacking into a wall.
+      cover *= smoothstep( 0.025, 0.11, d.y );
+      col = mix( col, cloud, cover );
+    }
 
     // Haze thickens toward the horizon, so an atmosphere planet gets a soft rim.
     col = mix( col, uHorizon, uHaze * pow( 1.0 - h, 6.0 ) );
@@ -177,6 +225,10 @@ export class Sky {
       uGlow: { value: 1 },
       uDisc: { value: 1 },
       uHaze: { value: 0.3 },
+      uCloudAmount: { value: 0 },
+      uCloudColor: { value: new THREE.Color(0xffffff) },
+      uCloudTime: { value: 0 },
+      uDay: { value: 1 },
     }
     const mat = new THREE.ShaderMaterial({
       uniforms: this.domeUniforms,
@@ -362,6 +414,10 @@ export class Sky {
 
     this._envDirty = true
     this.domeUniforms.uHaze.value = 0.25 + planet.atmosphere * 0.5
+    const clouds = planet.clouds
+    this.domeUniforms.uCloudAmount.value = clouds && this.settings.get('clouds') !== false ? clouds.amount : 0
+    this.domeUniforms.uCloudColor.value.set(clouds?.color ?? 0xffffff)
+    this.cloudSpeed = clouds?.speed ?? 1
     this.scene.fog.color.set(planet.fog.color)
     this.scene.fog.near = planet.fog.near
     this.scene.fog.far = planet.fog.far
@@ -435,6 +491,7 @@ export class Sky {
     this.domeUniforms.uSunColor.value.copy(sunColor)
     this.domeUniforms.uSunDir.value.copy(this.sunDir)
     this.domeUniforms.uGlow.value = (0.3 + planet.atmosphere * 1.1) * Math.max(0.08, day)
+    this.domeUniforms.uDay.value = day
     // The disc fades out as it sets rather than snapping off at the horizon.
     this.domeUniforms.uDisc.value = 2.4 * THREE.MathUtils.smoothstep(this.sunDir.y, -0.06, 0.04)
 
@@ -474,6 +531,15 @@ export class Sky {
     this.companion.position.copy(camera.position).add(this._companionOffset())
     this.companion.lookAt(camera.position)
     this.starUniforms.uTwinkle.value = elapsed
+    // Clouds drift, and a drifting sky is a moving environment map — but only slowly, so
+    // the prefilter is refreshed on its own throttle rather than every frame.
+    if (this.domeUniforms.uCloudAmount.value > 0) {
+      this.domeUniforms.uCloudTime.value = elapsed * (this.cloudSpeed ?? 1)
+      if (elapsed - (this._cloudEnvAt || 0) > 2.5) {
+        this._cloudEnvAt = elapsed
+        this._envDirty = true
+      }
+    }
     this._refreshEnvironment()
 
     // Following the clock beats cycling: both drive the same value, and a cycle running on

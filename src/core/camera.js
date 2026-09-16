@@ -86,6 +86,9 @@ export class CameraRig {
     this._hit = new THREE.Vector3()
     this._hit2 = new THREE.Vector3()
     this._shake = 0
+    this._followAgent = null
+    this._followPosition = new THREE.Vector3()
+    this._followDelta = new THREE.Vector3()
 
     this._bind()
     this._sync()
@@ -128,6 +131,7 @@ export class CameraRig {
 
     if (this._pointers.size === 2) {
       this._mode = 'pinch'
+      this._moved = 6 // lifting either finger must not select/deselect beneath the pinch
       this._pinch = this._pinchDistance()
       this._grab(...this._pinchCentre())
       return
@@ -260,7 +264,6 @@ export class CameraRig {
       t.x = (t.x / len) * WORLD_LIMIT
       t.z = (t.z / len) * WORLD_LIMIT
     }
-    t.y = 0
   }
 
   /** True when the pointer went down and up without really moving — a click, not a drag. */
@@ -276,6 +279,67 @@ export class CameraRig {
     if (distance) this.desiredDistance = THREE.MathUtils.clamp(distance, MIN_DIST, MAX_DIST)
     this._zoom = null
     this.idleFor = 99 // settle to isometric right away rather than after a pause
+  }
+
+  /** Follow translation only: orbit, zoom, and a user's pan offset remain theirs. */
+  setFollow(agent) {
+    agent = agent || null
+    if (agent === this._followAgent) return
+    this._followAgent = agent
+    this._zoom = null
+    if (agent) {
+      this._followPosition.copy(agent.pos)
+      this.desiredTarget.copy(agent.pos)
+      this.desiredTarget.y += 0.65
+      this._clampTarget()
+    } else {
+      // Deselecting also stops an unfinished glide toward the previous agent.
+      this.desiredTarget.copy(this.target)
+    }
+  }
+
+  get following() {
+    return Boolean(this._followAgent)
+  }
+
+  /** Keep the orbit target centered in the space the HUD leaves visible, without
+   * moving it in the world or changing the user's pan, heading, or zoom. CSS pixels
+   * are intentional: adaptive rendering resolution must not change the framing. */
+  setViewportInsets(width, height, { right = 0, bottom = 0 } = {}) {
+    width = Math.max(1, width)
+    height = Math.max(1, height)
+    right = THREE.MathUtils.clamp(right, 0, width * 0.9)
+    bottom = THREE.MathUtils.clamp(bottom, 0, height * 0.9)
+    const previous = this._framing
+    if (previous && previous.width === width && previous.height === height && previous.right === right && previous.bottom === bottom) return
+    this._framing = { width, height, right, bottom }
+    this.camera.aspect = width / height
+    if (right || bottom) this.camera.setViewOffset(width, height, right / 2, bottom / 2, width, height)
+    else this.camera.clearViewOffset()
+    this._refreshInputAnchors()
+  }
+
+  _trackFollow() {
+    if (!this._followAgent) return
+    const delta = this._followDelta.subVectors(this._followAgent.pos, this._followPosition)
+    this._followPosition.copy(this._followAgent.pos)
+    if (delta.lengthSq() === 0) return
+    // Move both sides of the damping together, including while the pointer is held.
+    // Re-centering every frame would erase the user's pan and fight cursor-anchored zoom.
+    this.target.add(delta)
+    this.desiredTarget.add(delta)
+    this._sync()
+    this._refreshInputAnchors()
+  }
+
+  _refreshInputAnchors() {
+    // The ground grabbed by a drag/dolly travels with the follow frame. Reprojecting also
+    // accounts for height/framing changes, while groundPoint still uses the ground plane.
+    if (this._hasAnchor) {
+      const [x, y] = this._mode === 'pinch' ? this._pinchCentre() : [this._last.x, this._last.y]
+      this._hasAnchor = Boolean(this.groundPoint(x, y, this._panAnchor))
+    }
+    if (this._zoom && !this.groundPoint(this._zoom.sx, this._zoom.sy, this._zoom.world)) this._zoom = null
   }
 
   resetView() {
@@ -330,6 +394,7 @@ export class CameraRig {
   // ── frame ───────────────────────────────────────────────────────────────────────────
 
   update(dt) {
+    this._trackFollow()
     if (!this.interacting) this.idleFor += dt
 
     // The sweep yields while you are working the camera and eases back in a couple of
@@ -347,7 +412,7 @@ export class CameraRig {
 
     // Rest back to isometric: after a beat of no input the heading walks to the nearest
     // clean 45° and the tilt returns to the iso angle. Position and zoom are left alone.
-    if (!this.orbiting && this.settings.get('autoFrame') && this.idleFor > 2.2 && !this.interacting) {
+    if (!this.following && !this.orbiting && this.settings.get('autoFrame') && this.idleFor > 2.2 && !this.interacting) {
       const ease = Math.min(1.4, (this.idleFor - 2.2) * 0.7)
       this.desiredAzimuth = damp(this.desiredAzimuth, this._nearestIso(), ease, dt)
       this.desiredPolar = damp(this.desiredPolar, ISO_POLAR, ease, dt)

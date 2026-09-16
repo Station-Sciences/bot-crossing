@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { mulberry } from './planet.js'
 import { ATLAS, CELL, atlasTexture, cellMask, part } from './kit.js'
+import { withCurve } from '../core/curve.js'
 
 /**
  * Colony buildings — one per thread, assembled out of KayKit's *Space Base Bits* (CC0) and
@@ -45,6 +46,8 @@ export const buildingUniforms = {
  * gap at the plot's 4.4-unit slot spacing.
  */
 const BUILDING_SCALE = 1.45
+// Includes accessories and rotated corners. Ring slots have 2.15 m to the kerb.
+export const BUILDING_RADIUS = 2
 
 /** The top face of a base module — where roof modules and masts stack. */
 const DECK = 1.0
@@ -264,6 +267,7 @@ const KIND_IDS = Object.keys(KINDS)
 function decorate(material, uniforms) {
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
+    withCurve(shader)
 
     shader.vertexShader = shader.vertexShader
       .replace(
@@ -384,6 +388,7 @@ function depthMaterial(uniforms) {
   const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking })
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
+    withCurve(shader)
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
@@ -441,15 +446,21 @@ export function createBuilding({ seed = 1, accent = 0xc96442, kind = null } = {}
   const c = new Composer()
   const label = KINDS[chosen](c, rand, accent)
   const geo = c.finish()
-  // Trimmed to fit a slot: the catalogue is authored on the pack's module grid and scaled
-  // once here, so tuning the plot lattice never means re-tuning ten recipes.
-  geo.scale(BUILDING_SCALE, BUILDING_SCALE, BUILDING_SCALE)
+  let radius = 0
+  const positions = geo.getAttribute('position')
+  for (let i = 0; i < positions.count; i++) {
+    radius = Math.max(radius, Math.hypot(positions.getX(i), positions.getZ(i)))
+  }
+  // Fit the complete recipe, including its barrels/rover, at any yaw. Measuring only
+  // the X/Z bounds missed corners and left accessories hanging beyond the deck.
+  const scale = Math.min(BUILDING_SCALE, BUILDING_RADIUS / Math.max(radius, 0.001))
+  geo.scale(scale, scale, scale)
   // `scale()` transforms position and normal and nothing else, so a custom attribute that
   // holds a *position* has to be taken along by hand. Miss this and a rotor turns about a
   // hub left behind at the unscaled height — the blades orbit a point below themselves.
   const pivot = geo.getAttribute('aPivot')
   if (pivot) {
-    for (let i = 0; i < pivot.count * 3; i++) pivot.array[i] *= BUILDING_SCALE
+    for (let i = 0; i < pivot.count * 3; i++) pivot.array[i] *= scale
     pivot.needsUpdate = true
   }
   geo.computeBoundingBox()
@@ -546,7 +557,10 @@ export class Scaffolds {
     for (const site of sites) {
       for (let i = 0; i < 4 && n < this.capacity; i++) {
         const a = (i / 4) * Math.PI * 2 + 0.78
-        d.position.set(site.x + Math.cos(a) * site.radius, site.y, site.z + Math.sin(a) * site.radius)
+        const x = site.x + Math.cos(a) * site.radius
+        const z = site.z + Math.sin(a) * site.radius
+        if (site.contains && !site.contains(x, z)) continue
+        d.position.set(x, site.y, z)
         d.rotation.set(0, a, 0)
         d.scale.set(1, Math.max(0.4, site.height), 1)
         d.updateMatrix()

@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { withCurve } from '../core/curve.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
 /**
@@ -217,8 +218,10 @@ export class Ship {
     this.strips = new THREE.Mesh(mergeWithColors(strips, stripColors), this.stripMaterial)
     this.ramp.add(this.strips)
 
-    // Astronauts appear and vanish a step short of the ground, at the foot of the ramp.
+    // Astronauts appear and vanish a step short of the ground, at the foot of the ramp —
+    // and on a first load they come out of the airlock at its top and walk down it.
     this.doorLocal = new THREE.Vector3(0, 0, footZ + 0.6)
+    this.airlockLocal = new THREE.Vector3(0, topY + 0.02, topZ - 0.3)
   }
 
   _buildLights() {
@@ -256,7 +259,17 @@ export class Ship {
 
   /** World position of the foot of the ramp — where astronauts appear and vanish. */
   shipDoor(out = new THREE.Vector3()) {
+    // The first roster can arrive before the first frame, when the group's world matrix
+    // is still the identity — and the door would be at the world origin, in the middle of
+    // the colony, which is where a whole crew once appeared from.
+    this.group.updateWorldMatrix(true, false)
     return out.copy(this.doorLocal).applyMatrix4(this.group.matrixWorld)
+  }
+
+  /** World position of the airlock at the top of the ramp. */
+  shipAirlock(out = new THREE.Vector3()) {
+    this.group.updateWorldMatrix(true, false)
+    return out.copy(this.airlockLocal).applyMatrix4(this.group.matrixWorld)
   }
 
   update(dt, elapsed, night) {
@@ -333,6 +346,7 @@ function hullMaterial() {
     shadowSide: THREE.BackSide,
   })
   mat.onBeforeCompile = (shader) => {
+    withCurve(shader)
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>\n attribute vec2 aSurface;\n varying vec2 vSurface;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n vSurface = aSurface;`)

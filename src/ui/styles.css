@@ -73,22 +73,37 @@ body {
      content rather than to the window lays the page out that much too wide and leaves a
      dead strip of background beside it. Clipping here costs nothing: a panel still slides
      in from the edge, it simply stops existing beyond it. */
-  overflow: hidden;
+  /* Unlike hidden, clip cannot be scrolled by focusing a control in an animated panel. */
+  overflow: clip;
   z-index: 10;
   transition: opacity 220ms ease, transform 220ms ease;
-  /* How much room the sidebar takes. It is always there now, so this is what anything
-     else on screen has to stay clear of. */
+  /* Updated from the visible sidebar's measured footprint by the HUD. */
   --side: 334px;
 }
 
-.hud.hidden {
-  opacity: 0;
-  transform: scale(0.985);
+/* Hiding the UI fades every panel except the thread card: clicking an astronaut is still
+   how you ask what they are doing, so their card stays, on its own, beside them.
+
+   Once faded, the panels are made *invisible*, not just transparent. A panel with a
+   backdrop blur stays a composited layer at opacity 0, and Chromium redraws those over a
+   live canvas every frame — which, when the camera moves, shows up as large black
+   rectangles flickering where the sidebar and settings would be. `visibility: hidden`
+   takes them out of compositing entirely; its transition is delayed so the fade still
+   plays, and on the way back it is immediate so the fade-in has something to fade. */
+.hud.hidden > :not(.thread-pop) {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  transition: opacity 220ms ease, visibility 0s linear 220ms !important;
+}
+
+.hud.hidden > :not(.thread-pop) * {
   pointer-events: none !important;
 }
 
-.hud.hidden * {
-  pointer-events: none !important;
+/* Zero-specificity, so a panel with a transition of its own keeps it (and adds opacity). */
+.hud > :where(:not(.thread-pop)) {
+  transition: opacity 220ms ease, visibility 0s;
 }
 
 .panel {
@@ -203,12 +218,12 @@ body {
 
 .settings {
   position: absolute;
-  /* Level with the sidebar it sits beside. The old 78px was clearing a top bar that no
-     longer exists. */
+  /* Replace the main sidebar in the same slot. */
   top: 14px;
   right: 14px;
   bottom: 14px;
-  width: 306px;
+  width: 320px;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -439,8 +454,8 @@ body {
 
 .planets {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 7px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
 }
 
 .planet {
@@ -472,8 +487,8 @@ body {
 }
 
 .planet .orb {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   box-shadow: inset -6px -5px 10px rgba(0, 0, 0, 0.5), 0 3px 10px rgba(0, 0, 0, 0.4);
 }
@@ -644,12 +659,13 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
 }
 
-/* Settings shares this edge; the sidebar steps aside rather than stacking under it. */
-.side.shifted {
-  transform: translateX(-320px);
+/* Keep its layout footprint while settings covers it; no second blurred panel underneath. */
+.side.covered {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .side .brandbar {
@@ -1209,6 +1225,7 @@ body {
 /* ── help ────────────────────────────────────────────────────────────────────────── */
 
 .help {
+  z-index: 4;
   position: absolute;
   inset: 0;
   display: none;
@@ -1372,22 +1389,34 @@ kbd {
   }
 }
 
+/* ── small screens ───────────────────────────────────────────────────────────────── */
+
+/* A tablet on its side: the sidebar has no room to sit beside anything, so it covers
+   that corner, and the rail becomes a strip along the top. */
 @media (max-width: 820px) {
-  .settings {
-    width: min(306px, calc(100vw - 28px));
-  }
+  .settings,
   .side {
     width: min(320px, calc(100vw - 28px));
   }
-  /* No room to sit beside it — the sidebar just covers that corner. */
   .hud {
     --side: 0px;
   }
-  .side.shifted {
-    transform: translateX(0);
-  }
   .rail {
-    display: none;
+    top: 10px;
+    left: 10px;
+    transform: none;
+    flex-direction: row;
+    gap: 2px;
+    padding: 4px;
+  }
+  .rail .btn {
+    width: 38px;
+    height: 38px;
+  }
+  .rail .sep {
+    width: 1px;
+    height: auto;
+    margin: 6px 3px;
   }
   .stats {
     gap: 5px;
@@ -1398,17 +1427,139 @@ kbd {
   .legend {
     max-width: calc(100vw - 28px);
   }
+  .hint-pill {
+    top: 60px;
+  }
 }
 
+/* A phone. The sidebar is a sheet along the bottom that peeks its brand and counts and
+   pulls up over the colony; settings and help fill the screen; the thread card docks
+   above the sheet instead of chasing its astronaut round a screen this size; and
+   everything sits inside the safe area. */
 @media (max-width: 600px) {
-  .topbar {
-    height: 46px;
-    padding: 0 6px 0 12px;
+  .hud {
+    --edge: 10px;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-t: env(safe-area-inset-top, 0px);
+    /* The part of the sheet that shows when it is down: the grab, the brand and the counts. */
+    --peek: 118px;
   }
-  .brand span,
-  .stats .stat .lbl {
+
+  .side {
+    top: auto;
+    left: var(--edge);
+    right: var(--edge);
+    bottom: calc(var(--edge) + var(--safe-b));
+    width: auto;
+    height: min(64vh, 560px);
+    max-height: calc(100% - 70px - var(--safe-t));
+    transform: translateY(calc(100% - var(--peek)));
+    border-radius: 18px;
+  }
+  .side.open {
+    transform: translateY(0);
+  }
+  .side .grab {
+    display: block;
+  }
+  .side .brandbar {
+    padding: 4px 8px 8px 15px;
+    cursor: pointer;
+  }
+  .side .brandbar .btn {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+  }
+  .stats {
+    padding: 10px 15px;
+  }
+  .side .repo,
+  .side .thread {
+    min-height: 42px;
+  }
+  .side .project-detail .back {
+    min-height: 40px;
+  }
+
+  .settings {
+    top: calc(var(--edge) + var(--safe-t));
+    left: var(--edge);
+    right: var(--edge);
+    bottom: calc(var(--edge) + var(--safe-b));
+    width: auto;
+    border-radius: 18px;
+  }
+  .settings.closed {
+    transform: translateY(calc(100% + 40px));
+  }
+  .settings header {
+    padding-top: 16px;
+  }
+  .settings .body .btn,
+  .settings .body select {
+    min-height: 38px;
+  }
+
+  .rail {
+    top: calc(var(--edge) + var(--safe-t));
+  }
+
+  .thread-pop.on {
+    left: var(--edge);
+    right: var(--edge);
+    bottom: calc(var(--edge) + var(--safe-b) + var(--peek) + 10px);
+    top: auto;
+    width: auto;
+    transform: none !important;
+    will-change: auto;
+  }
+  .thread-pop .nib {
     display: none;
   }
+
+  .toasts {
+    left: var(--edge);
+    right: var(--edge);
+    bottom: calc(var(--edge) + var(--safe-b) + var(--peek) + 10px);
+    align-items: center;
+  }
+  .toast {
+    max-width: 100%;
+  }
+
+  .fps {
+    left: auto;
+    right: var(--edge);
+    top: calc(var(--edge) + var(--safe-t));
+    bottom: auto;
+  }
+
+  .hint-pill {
+    top: calc(60px + var(--safe-t));
+    max-width: calc(100vw - 40px);
+    text-align: center;
+  }
+
+  .help .sheet {
+    width: calc(100vw - 20px);
+    max-height: calc(100% - 40px - var(--safe-t) - var(--safe-b));
+    overflow-y: auto;
+  }
+  .help .cols {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+}
+
+/* The grab handle on the sheet: only a thing on a phone. */
+.side .grab {
+  display: none;
+  width: 38px;
+  height: 4px;
+  margin: 8px auto 0;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.22);
 }
 
 @media (prefers-reduced-motion: reduce) {

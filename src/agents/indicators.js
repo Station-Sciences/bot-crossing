@@ -1,4 +1,6 @@
 import * as THREE from 'three'
+import { OVERLAY_LAYER } from '../core/engine.js'
+import { withCurve } from '../core/curve.js'
 import {
   mdiHelpCircle,
   mdiAlert,
@@ -38,7 +40,7 @@ export const BADGE = {
   leaving: 7,
 }
 
-/** Badge tint. Pushed past 1.0 so the bloom pass gives them a soft halo. */
+/** HDR badge tint, tone-mapped with the scene after bloom and depth of field. */
 const BADGE_COLOR = {
   0: [0.42, 1.35, 2.9],
   1: [2.9, 0.6, 0.5],
@@ -87,6 +89,8 @@ export class Indicators {
 
     this.material = this._material()
     this.mesh = new THREE.InstancedMesh(geo, this.material, capacity)
+    // Drawn after bloom and tilt-shift, so the symbol stays readable over any scene depth.
+    this.mesh.layers.set(OVERLAY_LAYER)
     this.mesh.count = 0
     this.mesh.frustumCulled = false
     this.mesh.renderOrder = 10
@@ -117,6 +121,7 @@ export class Indicators {
 
     material.onBeforeCompile = (shader) => {
       shader.uniforms.uFrameScale = { value: new THREE.Vector2(1 / COLS, 1 / ROWS) }
+      withCurve(shader)
       this.uniforms = shader.uniforms
 
       shader.vertexShader = shader.vertexShader
@@ -133,7 +138,7 @@ export class Indicators {
         .replace('#include <uv_vertex>', `#include <uv_vertex>\n vMapUv = uv * uFrameScale + aFrame;`)
         .replace(
           '#include <project_vertex>',
-          `vec4 mvPosition = modelViewMatrix * vec4( aCenter, 1.0 );
+          `vec4 mvPosition = viewMatrix * vec4( bcBend( ( modelMatrix * vec4( aCenter, 1.0 ) ).xyz ), 1.0 );
            float dist = -mvPosition.z;
            // Mostly-constant screen size: the linear term cancels perspective so a badge
            // stays readable when the camera is pulled right out, while the constant term

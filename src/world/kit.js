@@ -51,6 +51,12 @@ const KITS = {
   base: { file: 'spacebase.glb', parts: new Map(), solo: new Map(), atlas: null },
   /** Forest Nature Pack: trees, bushes, grass, and the boulders on every world. */
   forest: { file: 'forest.glb', parts: new Map(), solo: new Map(), atlas: null },
+  /**
+   * Kenney's Nature Kit: palms, cacti, pines, autumn canopies and jungle understorey for the
+   * worlds the Forest pack cannot dress. Vertex-coloured rather than atlased — see
+   * `tools/build-nature.mjs` — so this one has no atlas and its material uses `vertexColors`.
+   */
+  nature: { file: 'nature.glb', parts: new Map(), solo: new Map(), atlas: null, vertexColors: true },
 }
 
 let loading = null
@@ -133,8 +139,12 @@ function normalize(geo) {
     ['position', 3],
     ['normal', 3],
     ['uv', 2],
+    // Only the vertex-coloured kit carries this; it is kept where it exists and never
+    // invented where it does not, so the atlas kits stay exactly as they were.
+    ['color', 3],
   ]) {
     const src = geo.getAttribute(name)
+    if (name === 'color' && !src) continue
     const data = new Float32Array(count * size)
     if (src) {
       for (let i = 0; i < count; i++) {
@@ -185,6 +195,16 @@ export function hasPart(name, kit = 'base') {
 
 export function atlasTexture(kit = 'base') {
   return KITS[kit]?.atlas ?? null
+}
+
+/** Whether a kit paints with vertex colours instead of an atlas. */
+export function kitUsesVertexColors(kit = 'base') {
+  return Boolean(KITS[kit]?.vertexColors)
+}
+
+/** Whether a kit has finished loading, so a recipe can fall back rather than throw. */
+export function kitReady(kit = 'base') {
+  return (KITS[kit]?.parts.size ?? 0) > 0
 }
 
 /**

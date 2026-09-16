@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { withCurve } from '../core/curve.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 
@@ -33,13 +34,11 @@ const BAKE_FPS = 30
 const TEXELS_PER_BONE = 4
 
 /**
- * Bones the colony hangs things off. Their *world* transforms are baked into a small
- * side-table on the CPU as well, because a helmet does not want the skinning matrix — it
- * wants to know where the head actually is. Three bones over the whole animation set is a
- * hundred and forty kilobytes; the alternative is evaluating a skeleton per astronaut per
- * frame.
+ * Attachment and picking bones. Their world transforms are baked into a small CPU table:
+ * the helmet needs the head's actual position, and hit detection needs the hands and feet.
+ * Reading this table avoids evaluating a skeleton per astronaut per pointer event.
  */
-const ATTACH = ['head', 'chest', 'hand.r']
+const ATTACH = ['head', 'chest', 'hand.r', 'hand.l', 'foot.r', 'foot.l']
 
 /**
  * The clips, and how the colony uses them. `loop` false means the clip is a one-shot that
@@ -50,7 +49,7 @@ const CLIP = {
   idleAlt: { name: 'Idle_B', loop: true },
   walk: { name: 'Walking_A', loop: true },
   run: { name: 'Running_A', loop: true },
-  work: { name: 'Hammering', loop: true },
+  work: { name: 'Hammering', loop: true, tweak: 'work' },
   workAlt: { name: 'Working_A', loop: true },
   cheer: { name: 'Cheering', loop: true },
   jump: { name: 'Jump_Full_Short', loop: false },
@@ -61,6 +60,101 @@ const CLIP = {
   hit: { name: 'Hit_A', loop: true },
   spawn: { name: 'Spawn_Ground', loop: false },
   interact: { name: 'Interact', loop: true },
+  // The phone check: the idle, with the left arm brought up to hold something in front of
+  // the visor. Raised over a short one-shot, held on a loop, lowered over another.
+  phoneUp: { name: 'Idle_A', loop: false, tweak: 'phoneUp', frames: [0, 15] },
+  phone: { name: 'Idle_A', loop: true, tweak: 'phone' },
+  phoneDown: { name: 'Idle_A', loop: false, tweak: 'phoneDown', frames: [0, 15] },
+}
+
+/**
+ * Adjustments made to KayKit's clips before they are baked — the colony's own reading of
+ * the motion, in the rig's own bone space.
+ *
+ * Per clip, per bone: `scale` multiplies how far the bone strays from its first keyframe
+ * (so a swing from the wrist can be moved up the arm by damping the wrist and amplifying the
+ * shoulder), `offset` turns the bone by a fixed Euler on top of whatever the clip does (an
+ * arm held up through an idle), and `ramp` fades that offset in over the first so many
+ * seconds — or out, with a negative ramp — which is what turns a held pose into a raise.
+ */
+export const TWEAKS = {
+  work: {
+    'hand.r': { scale: 0.45, ref: 'far' },
+    'upperarm.r': { scale: 1.6 },
+    'lowerarm.r': { scale: 1.35 },
+  },
+  // Found by a small search over the joints for a hand in front of the visor.
+  phone: {
+    'upperarm.l': { offset: [3.09, 0.53, -0.96] },
+    'lowerarm.l': { offset: [-0.54, 0.89, 0.92] },
+  },
+}
+// The raise and the lower are the held pose, ramped.
+TWEAKS.phoneUp = Object.fromEntries(Object.entries(TWEAKS.phone).map(([k, v]) => [k, { ...v, ramp: 0.45 }]))
+TWEAKS.phoneDown = Object.fromEntries(Object.entries(TWEAKS.phone).map(([k, v]) => [k, { ...v, ramp: -0.45 }]))
+
+const plainName = (n) => n.replace(/[.\s_]/g, '').toLowerCase()
+
+/**
+ * Apply a tweak table to a clip: a new clip, the source untouched.
+ */
+function tweakClip(clip, table, key) {
+  const id = new THREE.Quaternion()
+  const q = new THREE.Quaternion()
+  const q0 = new THREE.Quaternion()
+  const inv0 = new THREE.Quaternion()
+  const d = new THREE.Quaternion()
+  const d2 = new THREE.Quaternion()
+  const off = new THREE.Quaternion()
+  const off2 = new THREE.Quaternion()
+  const tracks = clip.tracks.map((track) => {
+    if (!track.name.endsWith('.quaternion')) return track
+    const bone = track.name.slice(0, -'.quaternion'.length)
+    const entry = Object.entries(table).find(([name]) => plainName(name) === plainName(bone))
+    if (!entry) return track
+    const t = entry[1]
+    const values = Float32Array.from(track.values)
+    const times = track.times
+    // What `scale` shrinks toward: the first keyframe, or the one farthest from it — for a
+    // swing, the cocked pose or the struck pose.
+    let refAt = 0
+    if (t.ref === 'far') {
+      q0.fromArray(values, 0)
+      let best = -1
+      for (let i = 4; i < values.length; i += 4) {
+        q.fromArray(values, i)
+        const ang = q0.angleTo(q)
+        if (ang > best) {
+          best = ang
+          refAt = i
+        }
+      }
+    }
+    q0.fromArray(values, refAt)
+    inv0.copy(q0).invert()
+    if (t.offset) off.setFromEuler(new THREE.Euler(t.offset[0], t.offset[1], t.offset[2]))
+    for (let i = 0, k = 0; i < values.length; i += 4, k++) {
+      q.fromArray(values, i)
+      if (t.scale !== undefined) {
+        d.copy(inv0).multiply(q)
+        d2.slerpQuaternions(id, d, t.scale)
+        q.copy(q0).multiply(d2)
+      }
+      if (t.offset) {
+        let f = 1
+        if (t.ramp) {
+          const time = times[k]
+          f = t.ramp > 0 ? Math.min(1, time / t.ramp) : Math.max(0, 1 - time / -t.ramp)
+          f = f * f * (3 - 2 * f)
+        }
+        off2.slerpQuaternions(id, off, f)
+        q.multiply(off2)
+      }
+      q.toArray(values, i)
+    }
+    return new THREE.QuaternionKeyframeTrack(track.name, Float32Array.from(times), values)
+  })
+  return new THREE.AnimationClip(`${clip.name}:${key}`, clip.duration, tracks)
 }
 
 const CREW_URL = `${import.meta.env.BASE_URL}assets/crew.glb`
@@ -73,6 +167,7 @@ const DROP_MESHES = ['Mannequin_Medium_Head']
 
 let loading = null
 let rig = null
+let gltfCache = null
 
 /** Load and bake the rig. Idempotent — the first caller owns the work. */
 export function loadCrew() {
@@ -80,13 +175,23 @@ export function loadCrew() {
   return loading
 }
 
+/**
+ * Bake again with a different tweak table. For tuning poses live: the astronauts take the
+ * new rig with `setRig`, and nothing else has to know.
+ */
+export async function rebakeCrew(tweaks = TWEAKS) {
+  rig = await bake(DROP_MESHES, tweaks)
+  return rig
+}
+if (import.meta.env.DEV && typeof window !== 'undefined') window.__rebakeCrew = rebakeCrew
+
 /** The baked rig, or null if `loadCrew()` has not resolved yet. */
 export function crewRig() {
   return rig
 }
 
-async function bake(dropMeshes = DROP_MESHES) {
-  const gltf = await new GLTFLoader().loadAsync(CREW_URL)
+async function bake(dropMeshes = DROP_MESHES, tweaks = TWEAKS) {
+  const gltf = gltfCache || (gltfCache = await new GLTFLoader().loadAsync(CREW_URL))
   const root = gltf.scene
   root.updateMatrixWorld(true)
 
@@ -101,7 +206,7 @@ async function bake(dropMeshes = DROP_MESHES) {
   const boneIndex = new Map(bones.map((b, i) => [b.name, i]))
 
   const geometry = mergeBody(skinned, dropMeshes)
-  const bake = bakeClips(root, skeleton, skinned[0], gltf.animations)
+  const bake = bakeClips(root, skeleton, skinned[0], gltf.animations, tweaks)
 
   return { geometry, bones, boneIndex, ...bake }
 }
@@ -153,19 +258,24 @@ function mergeBody(skinned, dropMeshes) {
  * What is stored is the matrix the shader can use directly — three's bind matrices folded
  * in — so the vertex stage is a plain weighted sum with nothing left to reconstruct.
  */
-function bakeClips(root, skeleton, mesh, animations) {
+function bakeClips(root, skeleton, mesh, animations, tweaks = TWEAKS) {
   const boneCount = skeleton.bones.length
   const byName = new Map(animations.map((a) => [a.name, a]))
+  // The clip each key actually bakes: the source, cut down and tweaked as its spec says.
+  const clipFor = new Map()
 
   // Lay the clips out end to end in one table and remember where each one starts.
   const clips = {}
   let frameCount = 0
   for (const [key, spec] of Object.entries(CLIP)) {
-    const clip = byName.get(spec.name)
+    let clip = byName.get(spec.name)
     if (!clip) {
       console.warn(`crew: crew.glb has no clip "${spec.name}" — run \`npm run assets\``)
       continue
     }
+    if (spec.frames) clip = THREE.AnimationUtils.subclip(clip, `${spec.name}:${key}`, spec.frames[0], spec.frames[1], BAKE_FPS)
+    if (spec.tweak && tweaks[spec.tweak]) clip = tweakClip(clip, tweaks[spec.tweak], spec.tweak)
+    clipFor.set(key, clip)
     // A looping clip needs its wrap-around frame; a one-shot ends where it ends.
     const frames = Math.max(2, Math.round(clip.duration * BAKE_FPS) + 1)
     clips[key] = { start: frameCount, frames, duration: clip.duration, loop: spec.loop, name: spec.name }
@@ -196,8 +306,8 @@ function bakeClips(root, skeleton, mesh, animations) {
   const bind = mesh.bindMatrix
   const pre = new THREE.Matrix4().multiplyMatrices(mesh.matrixWorld, mesh.bindMatrixInverse)
 
-  for (const spec of Object.values(clips)) {
-    const clip = byName.get(spec.name)
+  for (const [key, spec] of Object.entries(clips)) {
+    const clip = clipFor.get(key)
     const action = mixer.clipAction(clip)
     action.play()
 
@@ -297,6 +407,7 @@ export function frameFor(clip, time) {
 export function decorateSkinned(material, uniforms, { normals = true } = {}) {
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms)
+    withCurve(shader)
 
     shader.vertexShader = shader.vertexShader
       .replace(
