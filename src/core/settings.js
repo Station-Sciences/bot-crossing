@@ -189,6 +189,7 @@ const DEFAULTS = {
   // Behaviour
   autoQuality: true, // drop render scale when frames get expensive
   autoFrame: false, // ease the camera back to isometric when you stop dragging; opt-in
+  followSelected: false, // track the selected agent while retaining manual camera controls
   showFps: false,
   showLabels: true,
   reducedMotion: false,

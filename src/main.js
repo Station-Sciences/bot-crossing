@@ -76,7 +76,10 @@ const hoverGround = new THREE.Vector3()
 // ── actions the HUD can trigger ────────────────────────────────────────────────────────
 
 const actions = {
-  resetView: () => rig.resetView(),
+  resetView: () => {
+    if (rig.following) select(null, {})
+    rig.resetView()
+  },
 
   screenshot: () => {
     // Render one more frame, then read the buffer before the compositor clears it — the
@@ -130,6 +133,7 @@ const actions = {
   focusProject: (name) => {
     const plot = colony.plots.get(name)
     if (!plot) return
+    if (rig.following) select(null, {})
     rig.focus(plot.middle || plot.center, { distance: 30 })
   },
 
@@ -334,6 +338,7 @@ function select(id, { fly = false } = {}) {
   const agent = id ? colony.agentFor(id) : null
   if (!agent) {
     selectedId = null
+    rig.setFollow(null)
     colony.astronauts.setSelected(null)
     hud.setSelection(null, null)
     syncProject()
@@ -356,6 +361,7 @@ function select(id, { fly = false } = {}) {
   if (fly) {
     rig.focus(new THREE.Vector3(agent.pos.x, 0, agent.pos.z), { distance: Math.min(rig.desiredDistance, 26) })
   }
+  rig.setFollow(settings.get('followSelected') ? agent : null)
 }
 
 /** Open a zone's sidebar. Any selected astronaut from a different zone lets go. */
@@ -828,6 +834,7 @@ settings.onChange((changed, scope) => {
   colony.onSettingsChanged(changed, scope)
   if (changed.has('planet')) ambience.setPlanet(colony.planet)
   if (changed.has('showFps')) hud.syncSettings()
+  if (changed.has('followSelected')) rig.setFollow(settings.get('followSelected') ? colony.agentFor(selectedId) : null)
   // Folding dormant repos away changes which threads are on the map, so the colony has to be
   // rebuilt from the list rather than merely re-rendered.
   if (changed.has('hideDormant')) applyThreads(threads)
@@ -838,6 +845,7 @@ settings.onChange((changed, scope) => {
 
 engine.add({
   update(dt, elapsed) {
+    rig.setFollow(settings.get('followSelected') ? colony.agentFor(selectedId) : null)
     rig.update(dt)
     // The world bends away from wherever the camera is looking, every frame, before the
     // colony projects anything to the screen.

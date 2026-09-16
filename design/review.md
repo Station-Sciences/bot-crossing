@@ -25,6 +25,13 @@ Ambient occlusion defaults to **25%** on Balanced, High, and Ultra. Low and Pota
 leave it off. **Settings → Look → Ambient occlusion** adjusts it immediately from
 Off to 100%; the choice persists. At zero its extra target is released.
 
+**Settings → View → Follow selected agent** is an optional saved preference, also
+available from the crosshair button on an agent's card. Selecting an agent glides the
+view toward them without changing zoom or angle. Following preserves subsequent pan
+offsets, orbit, wheel zoom, and touch pinch gestures. Deselecting or disabling the
+option stops tracking; selecting another agent transfers it. Reset view and flying to
+a project deselect the followed agent. Return-to-isometric easing pauses while following.
+
 ## Other corrections
 
 - Clamp grass shader inputs to prevent NaN pixels spreading into black blocks through
@@ -40,7 +47,9 @@ Off to 100%; the choice persists. At zero its extra target is released.
 
 ## Validation and local review tools
 
-All **63 Node tests** pass. The production build passes with the existing chunk-size
+All **69 Node tests** pass, including camera follow motion/elevation, pan and zoom
+anchors, orbit, touch pinch, switching targets, deselection, and saved preferences.
+The production build passes with the existing chunk-size
 warning. Browser checks covered finite HDR output during camera movement on Archipelago
 at Balanced/High/Ultra and Terra at Balanced, frozen-frame stability on three planets
 across four presets, sharp notices, resizing, and AO buffer ownership. No WebGL errors

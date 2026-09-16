@@ -245,6 +245,7 @@ export class Hud {
       )
     )
     view.append(
+      this._toggle('Follow selected agent', 'followSelected', 'Tracks the selected agent until you deselect. Drag to pan, right-drag to orbit, and scroll to zoom.'),
       this._toggle('Return to isometric', 'autoFrame', 'Eases the angle back when you stop dragging.'),
       this._slider('Field of view', 'fov', 20, 60, 1, (v) => `${v}°`),
       this._toggle('Project labels', 'showLabels'),
@@ -369,6 +370,7 @@ export class Hud {
     b.type = 'button'
     b.className = 'toggle'
     b.setAttribute('role', 'switch')
+    b.setAttribute('aria-label', label)
     b.addEventListener('click', () => this.settings.set(key, !this.settings.get(key)))
     row.appendChild(b)
     this.controls.push({
@@ -486,6 +488,7 @@ export class Hud {
     on('#btn-viewed', 'click', () => this.actions.markViewed?.())
     on('#btn-archive', 'click', () => this.actions.archiveThread?.())
     on('#btn-deselect', 'click', () => this.actions.select?.(null))
+    on('#btn-follow', 'click', () => this.settings.set('followSelected', !this.settings.get('followSelected')))
     on('#btn-new-session', 'click', () => this.actions.newConversation?.())
     on('#btn-reveal', 'click', () => this.actions.revealProject?.())
     on('#btn-copy-path', 'click', () => this.actions.copyProjectPath?.())
@@ -505,6 +508,9 @@ export class Hud {
   // ── state in ────────────────────────────────────────────────────────────────────────
 
   syncSettings() {
+    const follow = Boolean(this.settings.get('followSelected'))
+    this.$('#btn-follow').setAttribute('aria-pressed', String(follow))
+    this.$('#btn-follow').title = follow ? 'Stop following selected agent' : 'Follow selected agent'
     for (const c of this.controls) c.sync()
     this.$('.fps').classList.toggle('on', Boolean(this.settings.get('showFps')))
     const sound = Boolean(this.settings.get('sound'))
@@ -1132,6 +1138,7 @@ const TEMPLATE = `
       <div class="title"></div>
       <div class="meta"></div>
     </div>
+    <button class="btn icon ghost" id="btn-follow" title="Follow selected agent" aria-label="Follow selected agent" aria-pressed="false">${ICON.locate}</button>
     <button class="btn icon ghost" id="btn-deselect" title="Deselect (Esc)">${ICON.close}</button>
   </div>
   <div class="progress"><i></i></div>
