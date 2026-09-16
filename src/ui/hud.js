@@ -300,58 +300,6 @@ export class Hud {
       this._slider('Effects', 'effectsVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`, 'Hammering, drones, splashes, the chime when somebody needs you.')
     )
     body.appendChild(sound)
-
-    // The sound test: every bed, event and loop the current world uses, and then everything
-    // else, each with a play button and a note of whether it is a recording or a synth.
-    const test = group('Sound test')
-    this.soundTest = document.createElement('div')
-    this.soundTest.className = 'sound-test'
-    test.appendChild(this.soundTest)
-    body.appendChild(test)
-    this.controls.push({ el: test, sync: () => this._syncSoundTest() })
-  }
-
-  _syncSoundTest() {
-    const cat = this.actions.soundCatalog?.()
-    if (!cat) return
-    const signature = `${cat.planet}|${cat.beds.join()}|${cat.events.join()}`
-    if (this._last.soundTest === signature) return
-    this._last.soundTest = signature
-    const wrap = this.soundTest
-    wrap.innerHTML = ''
-    const section = (title, names) => {
-      if (!names.length) return
-      const h = document.createElement('div')
-      h.className = 'sec-head'
-      h.innerHTML = `<span>${escapeHtml(title)}</span>`
-      wrap.appendChild(h)
-      for (const name of [...new Set(names)]) {
-        const row = document.createElement('div')
-        row.className = 'sound-row'
-        const src = cat.sourceOf(name)
-        row.innerHTML = `<span class="n">${escapeHtml(name)}</span><span class="src ${src}">${src}</span>`
-        const b = document.createElement('button')
-        b.type = 'button'
-        b.className = 'btn ghost'
-        b.textContent = 'Play'
-        b.title = `Hear ${name} for a few seconds`
-        b.addEventListener('click', () => this.actions.audition?.(name))
-        row.appendChild(b)
-        wrap.appendChild(row)
-      }
-    }
-    section(`${cat.planet} — beds`, cat.beds)
-    section(`${cat.planet} — events`, cat.events)
-    section('Positional and cues', cat.loops)
-    const used = new Set([...cat.beds, ...cat.events, ...cat.loops])
-    section('Everything else', cat.all.filter((n) => !used.has(n)))
-    const stop = document.createElement('button')
-    stop.type = 'button'
-    stop.className = 'btn'
-    stop.textContent = 'Stop'
-    stop.style.marginTop = '8px'
-    stop.addEventListener('click', () => this.actions.stopAudition?.())
-    wrap.appendChild(stop)
   }
 
   _row(label, hint) {

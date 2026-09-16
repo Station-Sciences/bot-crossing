@@ -21,7 +21,6 @@ import {
   newSession,
   revealFolder,
 } from './game/api.js'
-import { SOUND_NAMES } from './audio/sounds.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 
 /**
@@ -252,29 +251,6 @@ const actions = {
     }
   },
 
-  // ── the sound test ───────────────────────────────────────────────────────────────
-
-  /** Everything the current world can say, grouped the way the mixer thinks of it. */
-  soundCatalog: () => {
-    const audio = colony.planet.audio || {}
-    return {
-      planet: colony.planet.name,
-      beds: (audio.beds || []).map((b) => b.sound),
-      events: (audio.events || []).map((e) => e.sound),
-      loops: ['work-hammer', 'ship-hum', 'drone-whine', 'shore-lap', 'chime-attention', 'drone-drop', 'fish-splash', 'bird-call'],
-      all: SOUND_NAMES,
-      sourceOf: (name) => ambience.sourceOf(name),
-    }
-  },
-
-  audition: (name) => {
-    stopAudition()
-    ambience.unlock()
-    stopAudition = ambience.audition(name, 8)
-  },
-
-  stopAudition: () => stopAudition(),
-
   // Archiving is the colony's own bookkeeping and nothing else: the thread leaves the map and
   // the astronaut walks back to the ship. The harness's own records are never touched — see
   // `reconcileArchived` in server/api.mjs for why that stopped being worth doing.
@@ -318,9 +294,6 @@ const actions = {
 const ambience = new Ambience(settings)
 ambience.setPlanet(colony.planet)
 colony.onSound = (name, x, y, z) => ambience.play(name, { x, y, z, kind: colony.fauna.flock?.kind })
-
-/** Whatever the sound test is playing right now, so the next button replaces it. */
-let stopAudition = () => {}
 
 const hud = new Hud(app, settings, actions)
 // The sidebar is permanent, so the card beside an astronaut has a wall to stay clear of.
