@@ -13,14 +13,47 @@ I would rather say so up front than imply a level of attention I cannot deliver.
 Concretely:
 
 - **Issues** — I read them. I may not act on them, and I may not reply.
-- **Pull requests** — genuinely welcome, and I will try to look. **I use an AI agent to do the
-  first review pass**, and I read its summary before deciding anything. I am telling you that
-  because you deserve to know how your work is being evaluated. A human — me — makes the call.
-  Often that call is to take the *intent* of a PR and implement it directly rather than merge
-  the branch, especially when several PRs are circling the same seam. Your name goes on the
-  commit when that happens. See [DECISIONS.md](DECISIONS.md) for why it works that way.
+- **Pull requests** — genuinely welcome, and please read the next section on how they get
+  used, because it is not the usual thing.
 - **Response times** — no promises. Days, weeks, or never, depending on what else is going on.
 - **Feature requests** — probably not, unless they happen to be something I want too.
+
+## How pull requests actually get used
+
+**A PR here is read as a feature request with a working reference implementation.** That is a
+good thing to send and the most useful kind of issue you can open. It is also, usually, not the
+branch that gets merged.
+
+What happens instead: I batch the open PRs, test them on my own machine, and land the intent of
+them together in one branch. Your name goes on the commit. Then your PR gets closed with a link
+to where it shipped.
+
+Three reasons it works this way rather than merge-by-merge:
+
+- **PRs circling the same seam disagree with each other.** Five separate PRs once widened the
+  same "open a thread" interface five incompatible ways. Merged in arrival order that leaves the
+  codebase with five answers to one question; picking one shape and applying it consistently
+  leaves it with one.
+- **I have to test it on my machine before it goes in**, and often that turns up something the
+  branch could not have known about — a path that is wrong on a real install, a scan cost that
+  only shows at volume.
+- **Batching is faster than negotiating each branch to a common shape.** It keeps the project
+  moving instead of leaving good work sitting in a queue going stale.
+
+**So: your PR may well be closed unmerged and still be the reason something shipped.** That is a
+worse deal for you than having your commit merged, and it is written down here so nobody has to
+work it out from a closed tab. If that is not what you want from contributing, that is entirely
+fair — say so in the PR and I will tell you plainly whether I am likely to merge it as-is.
+
+**What makes a PR most useful under this model:** a small, focused change; a clear description of
+the problem it fixes; and what you verified and on what machine. The last one matters more than
+the diff. I cannot test Windows, and I cannot test Linux, and I cannot test a harness I do not
+have installed — so a PR that says "ran it against 40 real Codex sessions on Fedora, here is what
+happened" is worth more to me than a clean patch I have to take on faith.
+
+**And there is a review agent.** I use one for the first pass and read its summary before
+deciding anything. You deserve to know how your work is being evaluated. A human — me — makes
+the call.
 
 **Forking is a first-class option here, not a consolation prize.** It is MIT. If you want to
 take this somewhere I am not going, or you need it maintained on a schedule I cannot offer,
