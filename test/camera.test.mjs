@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import * as THREE from 'three'
 import { CameraRig } from '../src/core/camera.js'
 import { Settings } from '../src/core/settings.js'
+import { createTiltShift } from '../src/core/tiltshift.js'
 
 // Exercise real perspective rays and input handlers without browser event registration.
 class TestRig extends CameraRig { _bind() {} }
@@ -118,4 +119,59 @@ test('follow preference defaults off, persists, and does not rebuild rendering o
     if (old === undefined) delete globalThis.localStorage
     else globalThis.localStorage = old
   }
+})
+
+test('framing centers the orbit target beside the sidebar, restoring full center when hidden', () => {
+  const { rig } = fixture()
+  const position = rig.camera.position.clone()
+  const target = rig.target.clone()
+  for (const [width, height, right, bottom] of [[900, 600, 334, 0], [760, 600, 334, 0], [390, 844, 0, 128], [900, 600, 0, 0]]) {
+    rig.setViewportInsets(width, height, { right, bottom })
+    const projected = target.clone().project(rig.camera)
+    assert.ok(Math.abs((projected.x + 1) * width / 2 - (width - right) / 2) < 1e-7)
+    assert.ok(Math.abs((1 - projected.y) * height / 2 - (height - bottom) / 2) < 1e-7)
+    near(rig.target, target)
+    near(rig.camera.position, position)
+    assert.equal(rig.distance, 12)
+  }
+  assert.equal(rig.camera.view.enabled, false)
+})
+
+test('sidebar-aware rays still hit the focused ground point and preserve pointer zoom', () => {
+  const { rig, step } = fixture()
+  rig.setFollow(null)
+  rig.target.set(0, 0, 0); rig.desiredTarget.copy(rig.target); rig._sync()
+  rig.setViewportInsets(900, 600, { right: 334 })
+  near(rig.groundPoint(283, 300), rig.target)
+  rig._pointerDown(event(283, 300))
+  rig._pointerMove(event(333, 320))
+  near(rig.groundPoint(333, 320), new THREE.Vector3())
+  rig._pointerUp(event(333, 320))
+  const anchor = rig.groundPoint(410, 350)
+  rig._wheel(event(410, 350, { deltaY: -100, deltaMode: 0 }))
+  step(6)
+  near(rig.groundPoint(410, 350), anchor)
+  const panned = rig.target.clone()
+  rig.setViewportInsets(900, 600)
+  step()
+  assert.ok(rig.target.distanceTo(panned) < 0.1, 'hiding the sidebar during a dolly must not snap back to the old anchor')
+})
+
+test('tilted depth of field reconstructs the same point with an off-center projection', () => {
+  const { rig } = fixture()
+  const effect = createTiltShift()
+  for (const insets of [{ right: 334 }, { bottom: 128 }, {}]) {
+    rig.setViewportInsets(900, 600, insets)
+    effect.setCamera(rig.camera)
+    const u = effect.passes[0].uniforms
+    const view = new THREE.Vector3(0.4, 0.7, -12)
+    const projected = view.clone().applyMatrix4(rig.camera.projectionMatrix)
+    const reconstructed = new THREE.Vector3(
+      (projected.x + u.uProjectionOffset.value.x) * u.uTanHalfFov.value * u.uAspect.value,
+      (projected.y + u.uProjectionOffset.value.y) * u.uTanHalfFov.value,
+      -1,
+    ).multiplyScalar(12)
+    near(reconstructed, view)
+  }
+  for (const pass of effect.passes) pass.dispose()
 })

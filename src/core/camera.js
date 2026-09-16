@@ -302,6 +302,23 @@ export class CameraRig {
     return Boolean(this._followAgent)
   }
 
+  /** Keep the orbit target centered in the space the HUD leaves visible, without
+   * moving it in the world or changing the user's pan, heading, or zoom. CSS pixels
+   * are intentional: adaptive rendering resolution must not change the framing. */
+  setViewportInsets(width, height, { right = 0, bottom = 0 } = {}) {
+    width = Math.max(1, width)
+    height = Math.max(1, height)
+    right = THREE.MathUtils.clamp(right, 0, width * 0.9)
+    bottom = THREE.MathUtils.clamp(bottom, 0, height * 0.9)
+    const previous = this._framing
+    if (previous && previous.width === width && previous.height === height && previous.right === right && previous.bottom === bottom) return
+    this._framing = { width, height, right, bottom }
+    this.camera.aspect = width / height
+    if (right || bottom) this.camera.setViewOffset(width, height, right / 2, bottom / 2, width, height)
+    else this.camera.clearViewOffset()
+    this._refreshInputAnchors()
+  }
+
   _trackFollow() {
     if (!this._followAgent) return
     const delta = this._followDelta.subVectors(this._followAgent.pos, this._followPosition)
@@ -312,8 +329,12 @@ export class CameraRig {
     this.target.add(delta)
     this.desiredTarget.add(delta)
     this._sync()
+    this._refreshInputAnchors()
+  }
+
+  _refreshInputAnchors() {
     // The ground grabbed by a drag/dolly travels with the follow frame. Reprojecting also
-    // accounts for height changes, while groundPoint still uses the world's ground plane.
+    // accounts for height/framing changes, while groundPoint still uses the ground plane.
     if (this._hasAnchor) {
       const [x, y] = this._mode === 'pinch' ? this._pinchCentre() : [this._last.x, this._last.y]
       this._hasAnchor = Boolean(this.groundPoint(x, y, this._panAnchor))

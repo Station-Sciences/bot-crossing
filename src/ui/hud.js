@@ -76,6 +76,11 @@ export class Hud {
     this._buildAvatar()
     this._wire()
     this.syncSettings()
+    // Read layout when panels resize/change, never in the animation loop.
+    this._layoutObserver = new ResizeObserver(() => this._syncLayout())
+    this._layoutObserver.observe(this.el)
+    this._layoutObserver.observe(this.$('.side'))
+    this._syncLayout()
   }
 
   // ── construction ────────────────────────────────────────────────────────────────────
@@ -582,13 +587,17 @@ export class Hud {
       this._last.project = null
       panel.classList.remove('drilled')
       panel.classList.remove('open')
+      this._syncLayout()
       return
     }
 
     this.project = project
     // On a phone, opening a repo pulls the sheet up so its threads are in view — unless an
     // astronaut was just picked, whose card wants the room above the sheet's peek.
-    if (this.isPhone() && !this.selected) panel.classList.add('open')
+    if (this.isPhone() && !this.selected && !panel.classList.contains('open')) {
+      panel.classList.add('open')
+      this._syncLayout()
+    }
     // The minute is part of the signature because `ago()` is: without it a repo where
     // nothing is happening keeps whatever "4m ago" it was first drawn with, for as long as
     // you leave the panel open.
@@ -767,9 +776,26 @@ export class Hud {
     }
   }
 
-  /** How much of the right-hand edge the sidebar is taking, so the card can avoid it. */
-  setSideWidth(px) {
-    this._sideWidth = px
+  /** Share one measured safe area between camera framing, cards, and the legend. */
+  _syncLayout() {
+    const width = this.el.clientWidth
+    const height = this.el.clientHeight
+    const side = this.$('.side')
+    let right = 0
+    let bottom = 0
+    if (this.visible) {
+      if (this.isPhone()) {
+        // Use the sheet's destination, not an intermediate animation transform.
+        const peek = parseFloat(getComputedStyle(this.el).getPropertyValue('--peek')) || 0
+        const top = side.offsetTop + (side.classList.contains('open') ? 0 : side.offsetHeight - peek)
+        bottom = Math.max(0, height - top)
+      } else {
+        right = Math.max(0, width - side.offsetLeft)
+      }
+    }
+    this._sideWidth = right
+    this.el.style.setProperty('--side', `${right}px`)
+    this.actions.viewportChanged?.({ width, height, right, bottom })
   }
 
   /** Redraw the card's face so it blinks in step with the astronaut it belongs to. */
@@ -862,6 +888,7 @@ export class Hud {
     const side = this.$('.side')
     const open = force ?? !side.classList.contains('open')
     side.classList.toggle('open', open)
+    this._syncLayout()
     return open
   }
 
@@ -870,8 +897,13 @@ export class Hud {
     const open = force ?? panel.classList.contains('closed')
     panel.classList.toggle('closed', !open)
     this.$('#btn-settings').setAttribute('aria-pressed', String(open))
-    // Both live in the same slot on the right; the sidebar steps aside rather than hides.
-    this.$('.side').classList.toggle('shifted', open)
+    // Settings replaces the sidebar in its existing slot, including for keyboard users.
+    const side = this.$('.side')
+    side.classList.toggle('covered', open)
+    side.inert = open
+    panel.inert = !open
+    if (open) this.$('#btn-close-settings').focus({ preventScroll: true })
+    else if (panel.contains(document.activeElement)) this.$('#btn-settings').focus({ preventScroll: true })
   }
 
   toggleHelp(force) {
@@ -890,6 +922,7 @@ export class Hud {
     this.el.classList.toggle('hidden', !this.visible)
     this.$('#btn-hide').innerHTML = this.visible ? ICON.eye : ICON.eyeOff
     this.actions.uiVisibility?.(this.visible)
+    this._syncLayout()
     if (!this.visible) this.toggleHelp(false)
     return this.visible
   }
@@ -1073,7 +1106,7 @@ const TEMPLATE = `
   <button class="btn icon" id="btn-sound" title="Mute (M)" aria-pressed="true">${ICON.sound}</button>
 </div>
 
-<div class="settings panel closed">
+<div class="settings panel closed" inert>
   <header>Settings <button class="btn icon ghost" id="btn-close-settings" title="Close">${ICON.close}</button></header>
   <div class="body"></div>
 </div>

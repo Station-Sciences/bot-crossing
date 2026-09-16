@@ -32,6 +32,11 @@ offsets, orbit, wheel zoom, and touch pinch gestures. Deselecting or disabling t
 option stops tracking; selecting another agent transfers it. Reset view and flying to
 a project deselect the followed agent. Return-to-isometric easing pauses while following.
 
+Camera centering uses the space beside the visible sidebar (or above the phone sheet),
+and returns to the full viewport when the UI is hidden. The world target, pan offset,
+orbit angle, and zoom are preserved. Settings replaces the main sidebar in the same
+slot without shifting it; covered controls are excluded from keyboard focus.
+
 ## Other corrections
 
 - Clamp grass shader inputs to prevent NaN pixels spreading into black blocks through
@@ -47,8 +52,9 @@ a project deselect the followed agent. Return-to-isometric easing pauses while f
 
 ## Validation and local review tools
 
-All **69 Node tests** pass, including camera follow motion/elevation, pan and zoom
-anchors, orbit, touch pinch, switching targets, deselection, and saved preferences.
+All **72 Node tests** pass, including camera follow motion/elevation, pan and zoom
+anchors, orbit, touch pinch, switching targets, deselection, saved preferences,
+sidebar-aware projection/raycasting, and off-center depth-of-field reconstruction.
 The production build passes with the existing chunk-size
 warning. Browser checks covered finite HDR output during camera movement on Archipelago
 at Balanced/High/Ultra and Terra at Balanced, frozen-frame stability on three planets

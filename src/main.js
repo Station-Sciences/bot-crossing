@@ -75,6 +75,11 @@ const hoverGround = new THREE.Vector3()
 // ── actions the HUD can trigger ────────────────────────────────────────────────────────
 
 const actions = {
+  viewportChanged: ({ width, height, right, bottom }) => {
+    rig.setViewportInsets(width, height, { right, bottom })
+    engine.tiltShift?.setCamera(engine.camera)
+  },
+
   resetView: () => {
     if (rig.following) select(null, {})
     rig.resetView()
@@ -296,10 +301,6 @@ ambience.setPlanet(colony.planet)
 colony.onSound = (name, x, y, z) => ambience.play(name, { x, y, z, kind: colony.fauna.flock?.kind })
 
 const hud = new Hud(app, settings, actions)
-// The sidebar is permanent, so the card beside an astronaut has a wall to stay clear of.
-const sideWidth = () => (window.innerWidth <= 820 ? 0 : 334)
-hud.setSideWidth(sideWidth())
-window.addEventListener('resize', () => hud.setSideWidth(sideWidth()))
 
 // ── selection ─────────────────────────────────────────────────────────────────────────
 

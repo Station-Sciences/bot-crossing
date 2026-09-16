@@ -73,11 +73,11 @@ body {
      content rather than to the window lays the page out that much too wide and leaves a
      dead strip of background beside it. Clipping here costs nothing: a panel still slides
      in from the edge, it simply stops existing beyond it. */
-  overflow: hidden;
+  /* Unlike hidden, clip cannot be scrolled by focusing a control in an animated panel. */
+  overflow: clip;
   z-index: 10;
   transition: opacity 220ms ease, transform 220ms ease;
-  /* How much room the sidebar takes. It is always there now, so this is what anything
-     else on screen has to stay clear of. */
+  /* Updated from the visible sidebar's measured footprint by the HUD. */
   --side: 334px;
 }
 
@@ -218,12 +218,12 @@ body {
 
 .settings {
   position: absolute;
-  /* Level with the sidebar it sits beside. The old 78px was clearing a top bar that no
-     longer exists. */
+  /* Replace the main sidebar in the same slot. */
   top: 14px;
   right: 14px;
   bottom: 14px;
-  width: 306px;
+  width: 320px;
+  z-index: 2;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -662,9 +662,10 @@ body {
   transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
 }
 
-/* Settings shares this edge; the sidebar steps aside rather than stacking under it. */
-.side.shifted {
-  transform: translateX(-320px);
+/* Keep its layout footprint while settings covers it; no second blurred panel underneath. */
+.side.covered {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .side .brandbar {
@@ -1224,6 +1225,7 @@ body {
 /* ── help ────────────────────────────────────────────────────────────────────────── */
 
 .help {
+  z-index: 4;
   position: absolute;
   inset: 0;
   display: none;
@@ -1392,17 +1394,12 @@ kbd {
 /* A tablet on its side: the sidebar has no room to sit beside anything, so it covers
    that corner, and the rail becomes a strip along the top. */
 @media (max-width: 820px) {
-  .settings {
-    width: min(306px, calc(100vw - 28px));
-  }
+  .settings,
   .side {
     width: min(320px, calc(100vw - 28px));
   }
   .hud {
     --side: 0px;
-  }
-  .side.shifted {
-    transform: translateX(0);
   }
   .rail {
     top: 10px;
@@ -1461,14 +1458,6 @@ kbd {
   }
   .side.open {
     transform: translateY(0);
-  }
-  /* Settings takes the whole screen; the sheet drops out of the way, open or not. */
-  .side.shifted,
-  .side.open.shifted {
-    transform: translateY(calc(100% + 40px));
-  }
-  .settings {
-    z-index: 3;
   }
   .side .grab {
     display: block;
