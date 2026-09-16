@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Character face sheet</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:24px;background:#111b2b;color:#e4ecfa;font:15px system-ui}header{max-width:1440px;display:flex;align-items:center;justify-content:space-between;gap:24px}h1{font-size:24px;margin:0 0 8px}p{color:#a3b7d0;margin:0 0 16px}button,a{color:inherit;background:#273b55;border:1px solid #475b76;border-radius:8px;padding:9px 14px;text-decoration:none;cursor:pointer}#sheet{width:min(1440px,100%);height:auto;display:block;margin-top:12px;border-radius:12px}#render{position:absolute;left:-10000px;top:0;width:400px;height:400px}#results{color:#a3b7d0;white-space:pre-wrap}
+</style>
+<header><div><h1>Character face sheet</h1><p>All 16 status expressions from the live model · original body · planet lighting and game bloom</p></div><nav><a id="mode" href="?walking">Walking expressions</a> <button id="angle">Three-quarter view</button> <a id="download" download="character-face-sheet.png">Save PNG</a></nav></header>
+<img id="sheet" alt="All sixteen game-rendered character expressions, numbered for review"><div id="render"></div><pre id="results">Rendering expressions…</pre>
+<script type="module" src="./face-sheet.js"></script></html>

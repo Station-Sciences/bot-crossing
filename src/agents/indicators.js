@@ -40,7 +40,7 @@ export const BADGE = {
   leaving: 7,
 }
 
-/** Badge tint. Pushed past 1.0 so the bloom pass gives them a soft halo. */
+/** HDR badge tint, tone-mapped with the scene after bloom and depth of field. */
 const BADGE_COLOR = {
   0: [0.42, 1.35, 2.9],
   1: [2.9, 0.6, 0.5],
@@ -89,8 +89,7 @@ export class Indicators {
 
     this.material = this._material()
     this.mesh = new THREE.InstancedMesh(geo, this.material, capacity)
-    // Drawn by the engine's overlay pass, after bloom: a badge is chrome, and chrome that
-    // blooms is chrome you cannot read.
+    // Drawn after bloom and tilt-shift, so the symbol stays readable over any scene depth.
     this.mesh.layers.set(OVERLAY_LAYER)
     this.mesh.count = 0
     this.mesh.frustumCulled = false

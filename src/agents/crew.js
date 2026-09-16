@@ -34,13 +34,11 @@ const BAKE_FPS = 30
 const TEXELS_PER_BONE = 4
 
 /**
- * Bones the colony hangs things off. Their *world* transforms are baked into a small
- * side-table on the CPU as well, because a helmet does not want the skinning matrix — it
- * wants to know where the head actually is. Three bones over the whole animation set is a
- * hundred and forty kilobytes; the alternative is evaluating a skeleton per astronaut per
- * frame.
+ * Attachment and picking bones. Their world transforms are baked into a small CPU table:
+ * the helmet needs the head's actual position, and hit detection needs the hands and feet.
+ * Reading this table avoids evaluating a skeleton per astronaut per pointer event.
  */
-const ATTACH = ['head', 'chest', 'hand.r', 'hand.l']
+const ATTACH = ['head', 'chest', 'hand.r', 'hand.l', 'foot.r', 'foot.l']
 
 /**
  * The clips, and how the colony uses them. `loop` false means the clip is a one-shot that

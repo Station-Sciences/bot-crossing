@@ -898,7 +898,8 @@ const SCATTER = {
     { part: 'tree_palmBend', kit: N, weight: 3, size: [1.5, 2.3], sink: 0.03, upright: true, zone: 'shore' },
     { part: 'tree_palmTall', kit: N, weight: 2, size: [1.6, 2.4], sink: 0.03, upright: true, zone: 'shore' },
     { part: 'tree_palmDetailedShort', kit: N, weight: 2, size: [1.3, 2.0], sink: 0.03, upright: true, zone: 'shore' },
-    { part: 'Tree_1_A_Color1', weight: 2, size: [0.35, 0.55], sink: 0.02, upright: true },
+    { part: 'tree_palmShort', kit: N, weight: 2, size: [1.3, 1.9], sink: 0.03, upright: true },
+    { part: 'Tree_1_A_Color1', weight: 1, size: [0.6, 0.9], sink: 0.02, upright: true },
     { part: 'Bush_3_B_Color1', weight: 3, size: [0.5, 1.0], sink: 0.06, upright: true },
     { part: 'Grass_2_D_Color1', weight: 4, size: [0.6, 1.2], sink: 0.05, upright: true },
     { part: 'flower_yellowC', kit: N, weight: 2, size: [1.4, 2.0], sink: 0.05, upright: true },
@@ -978,7 +979,8 @@ function fallbackShapes(isFlora) {
 export function createScatter(planet, density, keepClear = [], seed = 4242, inside = null) {
   const group = new THREE.Group()
   group.name = 'scatter'
-  const count = Math.round(SCATTER_BUDGET * THREE.MathUtils.clamp(density, 0, 1))
+  // Islands have much less usable ground. Concentrate a smaller budget into groves.
+  const count = Math.round(SCATTER_BUDGET * THREE.MathUtils.clamp(density, 0, 1) * (planet.shape === 'island' ? 0.5 : 1))
   if (count <= 0) return group
 
   const rand = mulberry(seed)
@@ -1029,16 +1031,25 @@ export function createScatter(planet, density, keepClear = [], seed = 4242, insi
   }
 
   // More attempts than placements: on a world that is mostly sea most throws land in it.
-  const attempts = planet.water ? count * 3 : count
+  const attempts = planet.water ? count * 6 : count
+  const groves = []
   let placed = 0
   for (let i = 0; i < attempts && placed < count; i++) {
     // Near-uniform over the disc, leaning a little toward the colony: the ground you
     // actually look at is the ring just outside the plots, and a strict area-uniform spread
     // leaves it thinner than the far field it is competing with.
     const a = rand() * Math.PI * 2
-    const d = 9 + Math.pow(rand(), 0.58) * 150
-    const x = Math.cos(a) * d
-    const z = Math.sin(a) * d
+    let d = 9 + Math.pow(rand(), 0.58) * 150
+    let x = Math.cos(a) * d
+    let z = Math.sin(a) * d
+    // Mixed groups read as vegetation; isolated tiny trees read as scattered props.
+    if (isFlora && groves.length && rand() < 0.3) {
+      const grove = groves[Math.floor(rand() * groves.length)]
+      const offset = 1.2 + rand() * 3
+      x = grove.x + Math.cos(a) * offset
+      z = grove.z + Math.sin(a) * offset
+      d = Math.hypot(x, z)
+    }
     if (keepClear.some((p) => Math.hypot(x - p.x, z - p.z) < p.r)) continue
     if (inside && !inside(x, z)) continue
 
@@ -1057,6 +1068,9 @@ export function createScatter(planet, density, keepClear = [], seed = 4242, insi
       if (zone === 'water' && (above > -0.05 || above < -1.2)) continue
     }
     placed++
+    if (isFlora && kind.upright && (kind.zone || 'land') === 'land' && groves.length < 48) {
+      if (!groves.some((g) => Math.hypot(x - g.x, z - g.z) < 6)) groves.push({ x, z })
+    }
 
     // Far-field props are allowed to be much bigger, which reads as distance.
     const far = THREE.MathUtils.smoothstep(d, COLONY_RADIUS, 130)

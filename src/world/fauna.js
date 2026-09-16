@@ -3,6 +3,7 @@ import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
 import { withCurve } from '../core/curve.js'
 import { mulberry } from './planet.js'
+import { stepParcel } from './parcel-physics.js'
 
 /**
  * The life layer: birds wheeling over the colony, butterflies in the scatter, fish leaping
@@ -1146,8 +1147,6 @@ class Fleet {
   /** Let the crate go from under the hull. It lands on whatever is below and stays a while. */
   _release(d) {
     if (this.parcels.length >= PARCEL_CAP) this.parcels.shift()
-    // The deck it hovers over is higher than the terrain under it; the crate lands on the deck.
-    const floor = Math.max(this.env.heightAt(d.x, d.z), typeof d.ty === 'number' ? d.ty : -Infinity)
     this.parcels.push({
       x: d.x + (this.rand() - 0.5) * 0.2,
       y: d.y - 0.75,
@@ -1155,7 +1154,6 @@ class Fleet {
       vx: (this.rand() - 0.5) * 0.4,
       vy: 0,
       vz: (this.rand() - 0.5) * 0.4,
-      floor: floor + 0.15,
       spin: (this.rand() - 0.5) * 6,
       yaw: this.rand() * Math.PI * 2,
       tilt: 0,
@@ -1176,35 +1174,8 @@ class Fleet {
     for (let i = list.length - 1; i >= 0; i--) {
       const p = list[i]
       p.life += dt
-      if (!p.landed || p.bounces < 3) {
-        p.vy -= 9.8 * dt
-        p.x += p.vx * dt
-        p.y += p.vy * dt
-        p.z += p.vz * dt
-        p.yaw += p.spin * dt
-        p.tilt += p.spin * 0.6 * dt
-        if (p.y <= p.floor && p.vy < 0) {
-          p.y = p.floor
-          p.bounces++
-          p.vy = -p.vy * 0.38
-          p.vx *= 0.55
-          p.vz *= 0.55
-          p.spin *= 0.4
-          if (!p.landed) {
-            p.landed = true
-            hooks?.sound?.('drone-drop', p.x, p.y, p.z)
-          }
-          if (p.bounces >= 3 || p.vy < 0.4) {
-            p.bounces = 3
-            p.vy = 0
-            p.vx = 0
-            p.vz = 0
-            p.spin = 0
-            p.tilt = 0
-            p.y = p.floor
-          }
-        }
-      }
+      const surfaceAt = this.env.parcelSurfaceAt || ((x, z) => ({ height: this.env.heightAt(x, z) }))
+      if (stepParcel(p, dt, surfaceAt)) hooks?.sound?.('drone-drop', p.x, p.y, p.z)
       // Gone after a while: shrinks away rather than blinking out.
       const fade = THREE.MathUtils.clamp((PARCEL_LIFE - p.life) / 1.2, 0, 1)
       if (fade <= 0) {

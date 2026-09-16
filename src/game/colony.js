@@ -1,7 +1,9 @@
+import { SceneryReflections } from '../world/reflections.js'
 import * as THREE from 'three'
 import { PLANETS, createTerrain, createScatter, terrainHeight } from '../world/planet.js'
 import { createWater } from '../world/water.js'
 import { Fauna } from '../world/fauna.js'
+import { BuildingSurfaces } from '../world/building-surfaces.js'
 import { createGrass } from '../world/grass.js'
 import { createSkyIsland } from '../world/skyisland.js'
 import { SKY_MARGIN, SKY_MAX_CELLS, setIslandFootprint } from '../world/planet.js'
@@ -142,6 +144,7 @@ export class Colony {
      */
     this.plotCells = new Map()
     this.buildings = new Map()
+    this.buildingSurfaces = new BuildingSurfaces(this.buildings, (x, z) => this.surfaceAt(x, z))
     this.threads = new Map()
     this.usedAccents = new Set()
 
@@ -161,6 +164,11 @@ export class Colony {
     this.scaffolds = new Scaffolds(scene, 320)
     // Birds, butterflies, fish and the cargo drones: the life that carries no information.
     this.fauna = new Fauna(scene, settings)
+    this.reflections = new SceneryReflections({
+      scene, renderer, settings, sky: this.sky, astronauts: this.astronauts,
+      excluded: () => [this.labelGroup, this.indicators.mesh, this.particles.points,
+        this.fauna.group, this.grass?.mesh],
+    })
     /** Set by whoever owns the speakers: (name, x, y, z) for a sound the world just made. */
     this.onSound = null
     this.nav = new Navigation()
@@ -219,6 +227,7 @@ export class Colony {
       this._faunaPlanet = this.planet.id
       this.fauna.setPlanet(this.planet, {
         heightAt: (x, z) => this.groundAt(x, z),
+        parcelSurfaceAt: (x, z) => this.buildingSurfaces.at(x, z),
         waterLevel: this.planet.water?.level ?? null,
         waterHeightAt: this.water ? (x, z, t) => this.water.heightAt(x, z, t) : undefined,
       })
@@ -232,7 +241,7 @@ export class Colony {
     for (const [id, entry] of this.buildings) {
       if (entry.retiring) continue
       const p = entry.mesh.position
-      sites.push({ x: p.x, y: p.y, z: p.z, active: this._isActive(id) })
+      sites.push({ x: p.x, y: p.y, z: p.z, radius: entry.mesh.userData.footprint, active: this._isActive(id) })
     }
     const pad = shipPosition()
     pad.y = this.ship.group.position.y
@@ -388,6 +397,7 @@ export class Colony {
    * rebuilt with it: a plot laid over grass would have blades poking up through the deck.
    */
   _buildGrass(clear) {
+    const apron = clear[clear.length - 1]
     if (this.grass) {
       this.grass.dispose()
       this.grass = null
@@ -396,7 +406,9 @@ export class Colony {
     this.grass = createGrass({
       planet: this.planet,
       heightAt: (x, z) => terrainHeight(x, z, this.planet),
-      blocked: (x, z) => !this.onIsland(x, z) || clear.some((p) => (x - p.x) * (x - p.x) + (z - p.z) * (z - p.z) < p.r * p.r),
+      blocked: (x, z) => !this.onIsland(x, z) ||
+        this.plotOrder.some((plot) => plot.containsWorld(x, z, -0.4)) ||
+        (apron && (x - apron.x) ** 2 + (z - apron.z) ** 2 < apron.r * apron.r),
       density: this.settings.get('scatterDensity'),
       quality: detail === 'high' ? 'high' : detail === 'low' ? 'low' : 'medium',
     })
@@ -424,6 +436,7 @@ export class Colony {
     const planet = PLANETS[id]
     if (!planet || planet === this.planet) return
     this.planet = planet
+    this.reflections.invalidate()
     this.sky.setPlanet(planet)
     this._buildTerrain()
   }
@@ -547,7 +560,7 @@ export class Colony {
           id: thread.id,
           thread,
           status,
-          site: this._workSite(plot, building, i),
+          site: null, // assigned after all buildings have reached the navigation map
           // Where the work actually is. A working astronaut circles it rather than standing
           // at one spot, so it needs the building, not just a place to stand near it.
           anchor: building.mesh.position.clone(),
@@ -567,6 +580,10 @@ export class Colony {
     this.urgentPlots = urgent
     this.activePlots = active
     this._rebuildNavigation()
+    for (const member of roster) {
+      const entry = this.buildings.get(member.id)
+      member.site = this._workSite(this.plots.get(entry.plot), entry, entry.slot)
+    }
     this._syncFaunaSites()
     this.stats = { ...stats, done: stats.celebrating }
     this.astronauts.setRoster(roster, this._world())
@@ -785,11 +802,12 @@ export class Colony {
 
     // Scaffold poles. They stand just outside the building's own keep radius, exactly
     // where its builder stands, so without these the builder works with a pole through it.
-    for (const site of this._scaffoldSites()) {
+    for (const site of this._scaffoldSites(true)) {
       for (let i = 0; i < 4; i++) {
         const a = (i / 4) * Math.PI * 2 + 0.78
         const x = site.x + Math.cos(a) * site.radius
         const z = site.z + Math.sin(a) * site.radius
+        if (site.contains && !site.contains(x, z)) continue
         obstacles.push({ x, z, r: 0.14 + TRAVEL_RADIUS, keep: 0.14 + AGENT_RADIUS + 0.12 })
       }
     }
@@ -927,15 +945,13 @@ export class Colony {
       const inward = new THREE.Vector3(b.x - Math.cos(a) * stand, 0, b.z - Math.sin(a) * stand)
       if (onPlot(inward)) site = inward
     }
-    // The grid is the one built for the last roster, so this is a best effort — but sites
-    // are recomputed every poll, and anything walled in by a neighbour is nudged out to the
-    // nearest ground somebody can stand on rather than left as a trap.
-    if (this.nav?.isBlocked(site.x, site.z)) {
-      const free = this.nav.nearestFree(site.x, site.z)
-      if (free) site.set(this.nav.toWorld(free.ix), 0, this.nav.toWorld(free.iz))
-    }
-    // And out of any keep circle, or the astronaut is pushed off its own site every frame.
-    this.nav?.keepOut(site)
+    // Pick against the complete, current map, including scaffolds about to rise. A grid
+    // cell alone is insufficient: it can still be inside a building's keep-out radius.
+    const free = this.nav?.nearestClear(site.x, site.z, PLOT_CELL, (x, z) => {
+      const cell = worldToHex(x, z)
+      return plot.cellKeys.has(`${cell.q},${cell.r}`)
+    }) || this.nav?.nearestClear(site.x, site.z, PLOT_CELL * 2)
+    if (free) site.set(free.x, 0, free.z)
     return site
   }
 
@@ -974,6 +990,7 @@ export class Colony {
     this._updatePlots(night, elapsed)
     this._updateScaffolds()
     this._updateLabels(dt)
+    this.reflections.update(dt, focus || this.sky.focus, this.camera)
   }
 
   _growBuildings(dt) {
@@ -1125,13 +1142,13 @@ export class Colony {
   }
 
   /** Which buildings have scaffolding up right now, and where its poles stand. */
-  _scaffoldSites() {
+  _scaffoldSites(includePlanned = false) {
     const sites = []
     for (const [id, entry] of this.buildings) {
       // Scaffolding says a thread is running here — the README's own promise. It used to be
       // gated on the building being unfinished as well, which was fine while "unfinished"
       // was most of them and useless the moment buildings stopped standing in a hole.
-      if (entry.progress <= 0.03) continue
+      if (entry.retiring || (!includePlanned && entry.progress <= 0.03)) continue
       if (!this._isActive(id)) continue
       const p = entry.mesh.position
       sites.push({
@@ -1139,7 +1156,8 @@ export class Colony {
         x: p.x,
         z: p.z,
         y: p.y,
-        radius: (entry.mesh.userData.footprint || 1.4) + 0.35,
+        radius: (entry.mesh.userData.footprint || 1.4) + 0.25,
+        contains: (x, z) => this.plots.get(entry.plot)?.containsWorld(x, z, 0.2),
         height: Math.max(0.6, entry.mesh.userData.height * entry.progress + 0.5),
       })
     }
@@ -1179,6 +1197,7 @@ export class Colony {
   }
 
   dispose() {
+    this.reflections.dispose()
     this.sky.dispose()
     this.fauna.dispose()
     this.grass?.dispose()

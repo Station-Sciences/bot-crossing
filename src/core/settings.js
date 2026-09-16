@@ -36,6 +36,7 @@ export const PRESETS = {
       ibl: false,
       tiltShift: false,
       colorGrade: false,
+      ambientOcclusion: 0,
       clouds: false,
       fauna: 'low',
     },
@@ -57,6 +58,7 @@ export const PRESETS = {
       ibl: false,
       tiltShift: false,
       colorGrade: true,
+      ambientOcclusion: 0,
       clouds: true,
       fauna: 'low',
     },
@@ -78,6 +80,7 @@ export const PRESETS = {
       ibl: true,
       tiltShift: true,
       colorGrade: true,
+      ambientOcclusion: 0.25,
       clouds: true,
       fauna: 'full',
     },
@@ -99,6 +102,7 @@ export const PRESETS = {
       ibl: true,
       tiltShift: true,
       colorGrade: true,
+      ambientOcclusion: 0.25,
       clouds: true,
       fauna: 'full',
     },
@@ -120,6 +124,7 @@ export const PRESETS = {
       ibl: true,
       tiltShift: true,
       colorGrade: true,
+      ambientOcclusion: 0.25,
       clouds: true,
       fauna: 'full',
     },
@@ -193,6 +198,7 @@ const DEFAULTS = {
 const WORLD_KEYS = new Set(['planet', 'groundDetail', 'scatterDensity', 'stars'])
 /** Keys that only need the renderer reconfigured. */
 const RENDER_KEYS = new Set([
+  'autoQuality',
   'renderScale',
   'shadows',
   'bloom',
@@ -205,11 +211,17 @@ const RENDER_KEYS = new Set([
   'colorGrade',
   'saturation',
   'vignette',
+  'ambientOcclusion',
 ])
 
 export class Settings {
   constructor() {
-    this.values = { ...DEFAULTS, ...load() }
+    const stored = load()
+    this.values = { ...DEFAULTS, ...stored }
+    // An existing Low/Potato install should not inherit Balanced's new effect by accident.
+    if (!Object.hasOwn(stored, 'ambientOcclusion')) {
+      this.values.ambientOcclusion = PRESETS[this.values.preset]?.values.ambientOcclusion ?? DEFAULTS.ambientOcclusion
+    }
     this.listeners = new Set()
     this._saveTimer = 0
   }
@@ -279,8 +291,13 @@ export class Settings {
    * of thirty times on the way in.
    */
   applyAll(values) {
+    const incoming = { ...values }
+    // The colony file may predate this setting too (for example, in a fresh browser).
+    if (PRESETS[incoming.preset] && !Object.hasOwn(incoming, 'ambientOcclusion')) {
+      incoming.ambientOcclusion = PRESETS[incoming.preset].values.ambientOcclusion
+    }
     const changed = []
-    for (const [key, value] of Object.entries(values || {})) {
+    for (const [key, value] of Object.entries(incoming)) {
       if (!(key in this.values) || this.values[key] === value) continue
       this.values[key] = value
       changed.push(key)

@@ -40,9 +40,9 @@ const RADIUS_MAX = 125
 const INNER_SHARE = 0.8
 
 /** Blades grow in small tufts — a meadow is clumpy, and a tuft reads at a distance where a lone blade is a speck. */
-const TUFT_MIN = 2
-const TUFT_MAX = 5
-const TUFT_RADIUS = 0.38
+const TUFT_MIN = 5
+const TUFT_MAX = 9
+const TUFT_RADIUS = 0.26
 
 /** Steeper than this (rise over half a metre either way) and the ground is a hillside, not a lawn. */
 const MAX_SLOPE = 0.9
@@ -154,7 +154,9 @@ const FRAG_COLOR = /* glsl */ `
   // Root to tip, biased toward the root so the bright tip colour is a highlight rather
   // than half the blade; ±12% brightness per blade; darker still right at the ground so
   // the base of the field sinks into the terrain instead of floating on it.
-  diffuseColor.rgb = mix( uRoot, uTip, pow( vHeight, 1.2 ) );
+  // Perspective interpolation can put the root a fraction below zero on a grazing
+  // blade. pow(negative, fractional) is NaN, which bloom spreads into black blocks.
+  diffuseColor.rgb = mix( uRoot, uTip, pow( clamp( vHeight, 0.0, 1.0 ), 1.2 ) );
   diffuseColor.rgb *= 0.88 + 0.24 * vTint;
   diffuseColor.rgb *= 0.72 + 0.28 * smoothstep( 0.0, 0.3, vHeight );
   // The terrain darkens toward the horizon so the eye settles on the colony; grass that
@@ -257,14 +259,14 @@ function resolve(planet) {
   const ground = planet.ground || {}
   const root = new THREE.Color(g.root ?? ground.low ?? 0x2f5a34)
   const tip = new THREE.Color(g.tip ?? ground.high ?? 0x6d9a4a)
-  if (g.root === undefined) root.offsetHSL(0, 0.12, -0.03)
-  if (g.tip === undefined) tip.offsetHSL(0, 0.12, 0.06)
-  const height = Array.isArray(g.height) && g.height.length === 2 ? g.height : [0.22, 0.48]
+  if (g.root === undefined) root.offsetHSL(0, 0.04, -0.05)
+  if (g.tip === undefined) tip.offsetHSL(0, 0.04, -0.01)
+  const height = Array.isArray(g.height) && g.height.length === 2 ? g.height : [0.25, 0.55]
   return {
     root,
     tip,
     height,
-    width: g.width ?? 0.05,
+    width: g.width ?? 0.085,
     sway: THREE.MathUtils.clamp(g.sway ?? 0.6, 0, 1),
   }
 }
@@ -326,6 +328,7 @@ export function createGrass({ planet, heightAt, blocked, density = 1, seed = 777
     // Far blades grow taller, as the scatter does: at a hundred metres a half-metre blade
     // is under a pixel, and a field that vanishes with distance looks bald out there.
     const far = THREE.MathUtils.smoothstep(d, COLONY_RADIUS, RADIUS_MAX)
+    const tuftTint = rand()
     const tuft = TUFT_MIN + Math.floor(rand() * (TUFT_MAX - TUFT_MIN + 1))
     for (let k = 0; k < tuft && placed < capacity; k++) {
       const ta = rand() * Math.PI * 2
@@ -345,7 +348,7 @@ export function createGrass({ planet, heightAt, blocked, density = 1, seed = 777
       dummy.updateMatrix()
       dummy.matrix.toArray(matrices, placed * 16)
       phase[placed] = rand() * Math.PI * 2
-      tint[placed] = rand()
+      tint[placed] = tuftTint * 0.75 + rand() * 0.25
       placed++
     }
   }

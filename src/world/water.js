@@ -231,21 +231,25 @@ vec2 bcRippleTilt = vec2( 0.0 );
   vec3 water = mix( uShallow, uDeep, deepT );
   float alpha = mix( uOpacity.x, uOpacity.y, smoothstep( 0.0, 2.4, depth ) );
 
-  // Shoreline foam. The wobble is on the depth, not the band edges, so all three bands
-  // wander together and keep their spacing.
-  float wobble = ( bcFbm( vWaterXZ * 0.55 + vec2( uTime * 0.11, -uTime * 0.07 ) ) - 0.5 ) * 0.34;
-  float breathe = sin( uTime * 0.55 + vWaterXZ.x * 0.05 + vWaterXZ.y * 0.04 ) * 0.045;
-  float d = depth + wobble + breathe;
-  // Lace along the very edge, a wide band just off it, and a thinner one further out.
-  float line = 1.0 - smoothstep( 0.0, 0.05, d );
-  float band1 = smoothstep( 0.11, 0.16, d ) * ( 1.0 - smoothstep( 0.27, 0.34, d ) );
-  float band2 = smoothstep( 0.46, 0.51, d ) * ( 1.0 - smoothstep( 0.58, 0.66, d ) );
-  // A second, finer noise eats holes in the bands so they are lace rather than stripes.
-  float holes = smoothstep( 0.32, 0.6, bcFbm( vWaterXZ * 1.9 + vec2( -uTime * 0.2, uTime * 0.13 ) ) );
-  bcFoam = clamp( line + band1 * holes + band2 * holes * 0.8, 0.0, 1.0 );
-  // Nothing above the waterline: negative depth is under the terrain and is only ever seen
-  // for a frame where a crest lifts the surface through a sliver of beach.
-  bcFoam *= step( -0.02, depth );
+  // Foam cannot reach depth 1 even at maximum wobble/breathing. Most of an ocean is
+  // deeper, so skip the six shoreline noise octaves there. Gameplay ripples still run.
+  if ( depth < 1.0 ) {
+    // Shoreline foam. The wobble is on the depth, not the band edges, so all three bands
+    // wander together and keep their spacing.
+    float wobble = ( bcFbm( vWaterXZ * 0.55 + vec2( uTime * 0.11, -uTime * 0.07 ) ) - 0.5 ) * 0.34;
+    float breathe = sin( uTime * 0.55 + vWaterXZ.x * 0.05 + vWaterXZ.y * 0.04 ) * 0.045;
+    float d = depth + wobble + breathe;
+    // Lace along the very edge, a wide band just off it, and a thinner one further out.
+    float line = 1.0 - smoothstep( 0.0, 0.05, d );
+    float band1 = smoothstep( 0.11, 0.16, d ) * ( 1.0 - smoothstep( 0.27, 0.34, d ) );
+    float band2 = smoothstep( 0.46, 0.51, d ) * ( 1.0 - smoothstep( 0.58, 0.66, d ) );
+    // A second, finer noise eats holes in the bands so they are lace rather than stripes.
+    float holes = smoothstep( 0.32, 0.6, bcFbm( vWaterXZ * 1.9 + vec2( -uTime * 0.2, uTime * 0.13 ) ) );
+    bcFoam = clamp( line + band1 * holes + band2 * holes * 0.8, 0.0, 1.0 );
+    // Nothing above the waterline: negative depth is under the terrain and is only ever seen
+    // for a frame where a crest lifts the surface through a sliver of beach.
+    bcFoam *= step( -0.02, depth );
+  }
 
   // Ripple rings, from whatever gameplay has dropped on the surface lately.
   float rippleFoam = 0.0;
@@ -294,7 +298,8 @@ const FRAGMENT_NORMAL = /* glsl */ `
   vec3 tilt = ( viewMatrix * vec4( bcRippleTilt.x, 0.0, bcRippleTilt.y, 0.0 ) ).xyz;
   normal = normalize( normal + tilt );
   nonPerturbedNormal = normal;
-  float facing = max( dot( normal, normalize( vViewPosition ) ), 0.0 );
+  // Roundoff can put a dot of unit vectors just above 1. Keep pow's base nonnegative.
+  float facing = clamp( dot( normal, normalize( vViewPosition ) ), 0.0, 1.0 );
   float fresnel = pow( 1.0 - facing, 3.0 );
   diffuseColor.a = mix( diffuseColor.a, 0.98, fresnel * 0.7 );
 }

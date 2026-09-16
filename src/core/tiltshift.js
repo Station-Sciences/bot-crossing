@@ -136,18 +136,16 @@ const common = {
       }
 
       vec2 unit = uAxis * uTexel;
-      // Sigma a third of the radius puts three standard deviations at the outermost tap, so
-      // what is being ignored is negligible rather than chopped off — a truncated gaussian
-      // is what gives a blur a hard edge.
-      float sigma = max( radius / 3.0, 0.0001 );
-      float twoSigmaSq = 2.0 * sigma * sigma;
-
       vec4 sum = texture2D( tDiffuse, vUv );
       float weight = 1.0;
 
       for ( int i = 1; i <= STEPS; i++ ) {
-        float offset = ( float( i ) / float( STEPS ) ) * radius;
-        float w = exp( -( offset * offset ) / twoSigmaSq );
+        float fraction = float( i ) / float( STEPS );
+        float offset = fraction * radius;
+        // Sigma is radius/3: the radius cancels out of the Gaussian exponent. These
+        // weights are constant, so the compiler can fold them instead of doing eight
+        // exponentials per blurred pixel in each pass.
+        float w = exp( -4.5 * fraction * fraction );
         sum += texture2D( tDiffuse, vUv + unit * offset ) * w;
         sum += texture2D( tDiffuse, vUv - unit * offset ) * w;
         weight += 2.0 * w;

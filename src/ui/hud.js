@@ -257,6 +257,15 @@ export class Hud {
     const look = group('Look')
     look.append(
       this._slider(
+        'Ambient occlusion',
+        'ambientOcclusion',
+        0,
+        1,
+        0.05,
+        (v) => v === 0 ? 'Off' : `${Math.round(v * 100)}%`,
+        'Soft shading in creases and where surfaces meet. Try 20–35% for a subtle effect; 0 turns it off.'
+      ),
+      this._slider(
         'World curve',
         'worldCurve',
         0,
@@ -400,6 +409,7 @@ export class Hud {
     wrap.style.cssText = 'display:flex;align-items:center;gap:8px'
     const input = document.createElement('input')
     input.type = 'range'
+    input.setAttribute('aria-label', label)
     input.className = 'slider'
     input.min = min
     input.max = max
