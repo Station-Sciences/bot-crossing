@@ -23,14 +23,15 @@ const STATE_VERSION = 1
 
 /**
  * Colony state is only ever the things the *game* invents — which plot a project got,
- * what a thread's building looks like, what you archived or renamed. The threads themselves
- * stay read-only: nothing here ever writes to a harness's data except the archive flag and
- * the title.
+ * what a thread's building looks like, what you archived, unarchived or renamed. The threads
+ * themselves stay read-only: nothing here ever writes to a harness's data except the archive
+ * flag and the title.
  */
 const emptyState = () => ({
   version: STATE_VERSION,
   archived: [],
   archivedAt: {},
+  unarchivedAt: {},
   titles: {},
   renamedAt: {},
   opened: [],
@@ -50,6 +51,7 @@ async function readState() {
       version: STATE_VERSION,
       archived: asArray(raw.archived),
       archivedAt: asObject(raw.archivedAt),
+      unarchivedAt: asObject(raw.unarchivedAt),
       titles: asObject(raw.titles),
       renamedAt: asObject(raw.renamedAt),
       opened: asArray(raw.opened),
@@ -64,11 +66,11 @@ async function readState() {
 }
 
 /**
- * Split ownership. The page PUTs layout/seen/opened/settings whole, but the archive list
- * and the renames belong to the server: `/api/archive` and `/api/rename` write them straight
- * into this file, and a PUT keeps whatever is on disk. Otherwise a page holding older state
- * (or a second tab, or a script hitting the endpoints directly) would silently drop every
- * archive or rename made since it loaded.
+ * Split ownership. The page PUTs layout/seen/opened/settings whole, but the archive list,
+ * pending unarchives and renames belong to the server: `/api/archive` and `/api/rename`
+ * write them straight into this file, and a PUT keeps whatever is on disk. Otherwise a page
+ * holding older state (or a second tab, or a script hitting the endpoints directly) would
+ * silently drop every archive, unarchive or rename made since it loaded.
  * Writes are chained so two requests never race on the temp file.
  */
 let stateWriteChain = Promise.resolve()
@@ -94,6 +96,7 @@ function writeState(next) {
       version: STATE_VERSION,
       archived: current.archived,
       archivedAt: current.archivedAt,
+      unarchivedAt: current.unarchivedAt,
       titles: current.titles,
       renamedAt: current.renamedAt,
       opened: asArray(next.opened),
@@ -105,20 +108,38 @@ function writeState(next) {
   })
 }
 
-/** Add or remove one thread id from the on-disk archive list. */
+/**
+ * Add or remove one thread id from the on-disk archive list. Unarchiving also leaves a
+ * timestamp behind, so the scan can keep the thread out of the ship until the harness's own
+ * app has let go of its archived copy; archiving again cancels that.
+ */
 function setColonyArchived(id, archived) {
   return withStateLock(async () => {
     const current = await readState()
     const archivedAt = { ...current.archivedAt }
+    const unarchivedAt = { ...current.unarchivedAt }
     let list
     if (archived) {
       list = [...new Set([...current.archived, id])]
       archivedAt[id] = archivedAt[id] || Date.now()
+      delete unarchivedAt[id]
     } else {
       list = current.archived.filter((x) => x !== id)
       delete archivedAt[id]
+      unarchivedAt[id] = Date.now()
     }
-    return persistState({ ...current, archived: list, archivedAt, updatedAt: Date.now() })
+    return persistState({ ...current, archived: list, archivedAt, unarchivedAt, updatedAt: Date.now() })
+  })
+}
+
+/** The harness has taken an unarchive over; stop re-asserting it. */
+function forgetUnarchive(id) {
+  return withStateLock(async () => {
+    const current = await readState()
+    if (!(id in current.unarchivedAt)) return current
+    const unarchivedAt = { ...current.unarchivedAt }
+    delete unarchivedAt[id]
+    return persistState({ ...current, unarchivedAt, updatedAt: Date.now() })
   })
 }
 
@@ -236,12 +257,17 @@ async function resolveFolder(folder) {
  * and re-asserts the flag on every scan; an archive that gets stomped comes back within one
  * poll. `archivePending` is true while the flag is on disk but the running app has not read
  * it yet — that astronaut is walking to the ship but has not boarded.
+ *
+ * Unarchiving is the same fight in the other direction: the app can write its archived copy
+ * back, so a recent unarchive is re-asserted until the harness agrees and no running app
+ * could still be holding the old record.
  */
 async function reconcileWithHarness(threads) {
   const state = await readState()
   const wanted = new Set(state.archived)
   const titled = Object.keys(state.titles)
-  if (!wanted.size && !titled.length) return threads
+  const unarchived = Object.keys(state.unarchivedAt)
+  if (!wanted.size && !titled.length && !unarchived.length) return threads
 
   // One `ps` sweep per harness rather than one per thread.
   const startedAt = new Map()
@@ -250,10 +276,13 @@ async function reconcileWithHarness(threads) {
   }
 
   const settled = []
+  const settledUnarchives = []
   const out = await Promise.all(
     threads.map(async (thread) => {
       let next = thread
       const appStart = startedAt.get(thread.harness) || 0
+      // `canArchive` is the tell for a record some long-lived app owns and may rewrite.
+      const appHasLetGo = (since) => !thread.canArchive || Boolean(appStart && appStart > since)
 
       if (wanted.has(thread.id)) {
         if (!thread.archived && thread.canArchive) {
@@ -261,24 +290,37 @@ async function reconcileWithHarness(threads) {
         }
         const at = state.archivedAt[thread.id] ?? 0
         next = { ...next, archived: true, archivePending: !(appStart && appStart > at) }
+      } else if (thread.id in state.unarchivedAt) {
+        if (appHasLetGo(state.unarchivedAt[thread.id])) {
+          // The app launched after the unarchive and so loaded it; whatever the record says
+          // now is your own doing, archived again inside the app included. Hand it back.
+          settledUnarchives.push(thread.id)
+        } else {
+          if (thread.archived && thread.canArchive) {
+            await setThreadArchived(thread.harness, thread.ref, false).catch(() => {})
+          }
+          next = { ...next, archived: false }
+        }
       }
 
       const title = state.titles[thread.id]
       if (title) {
-        if (thread.title !== title && thread.canRename) {
-          await setThreadTitle(thread.harness, thread.ref, title).catch(() => {})
-        } else if (thread.title === title && (!thread.canArchive || (appStart && appStart > state.renamedAt[thread.id]))) {
-          // The harness agrees, and no running app is holding an older copy in memory
-          // (`canArchive` is the tell for an app-owned record). Let the harness be the
-          // source of truth again, so a rename made *there* is not hidden by this one.
+        if (appHasLetGo(state.renamedAt[thread.id])) {
+          // Same rule: once no running app can be holding a pre-rename copy, the harness is
+          // the source of truth again, so a rename made *there* is not hidden by this one.
           settled.push(thread.id)
+        } else {
+          if (thread.title !== title && thread.canRename) {
+            await setThreadTitle(thread.harness, thread.ref, title).catch(() => {})
+          }
+          next = { ...next, title }
         }
-        next = { ...next, title }
       }
       return next
     })
   )
   for (const id of settled) await setColonyTitle(id, '')
+  for (const id of settledUnarchives) await forgetUnarchive(id)
   return out
 }
 

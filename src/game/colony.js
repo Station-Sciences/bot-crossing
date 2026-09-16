@@ -807,6 +807,18 @@ export class Colony {
     return this.astronauts.pick(this.camera, ndcX, ndcY, aspect)
   }
 
+  /**
+   * Is the ship under the cursor? It is the one object in the scene that is tall, oddly
+   * shaped and seen from every angle, so this is a real raycast against its meshes rather
+   * than a footprint test on the ground — pointing at the hull from low down still counts.
+   */
+  pickShip(ndcX, ndcY) {
+    const ray = this._shipRay || (this._shipRay = new THREE.Raycaster())
+    const at = this._shipNdc || (this._shipNdc = new THREE.Vector2())
+    ray.setFromCamera(at.set(ndcX, ndcY), this.camera)
+    return ray.intersectObject(this.ship.group, true).length > 0
+  }
+
   agentFor(id) {
     return this.astronauts.byId.get(id)
   }

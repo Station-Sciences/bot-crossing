@@ -1,86 +1,24 @@
-/**
- * Rename, end to end against real files in a throwaway home directory.
- *
- * The adapters read their locations from the environment at import time, so this file
- * points HOME / USERPROFILE / APPDATA / BOT_CROSSING_DATA at a temp dir *before* importing
- * anything under server/. Run with `npm test`.
- */
+/** Rename, end to end against real files in a throwaway home directory. Run with `npm test`. */
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
-import { Readable } from 'node:stream'
+import {
+  adapter,
+  api,
+  line,
+  readState,
+  readTranscriptMeta,
+  setupHome,
+  teardownHome,
+  threadById,
+  userRecord,
+  uuid,
+  writeDesktopRecord,
+  writeTranscript,
+} from './helpers.mjs'
 
-const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-test-'))
-process.env.HOME = root
-process.env.USERPROFILE = root
-process.env.APPDATA = path.join(root, 'AppData', 'Roaming')
-process.env.BOT_CROSSING_DATA = path.join(root, 'data')
-
-const adapter = (await import('../harnesses/claude-code.mjs')).default
-const { readTranscriptMeta } = await import('../harnesses/claude-code.mjs')
-const { apiMiddleware } = await import('../api.mjs')
-
-const { DESKTOP_SESSIONS, CLI_PROJECTS } = adapter.paths
-const PROJECT_DIR = path.join(CLI_PROJECTS, 'C--Dev-repo')
-const ORG_DIR = path.join(DESKTOP_SESSIONS, 'account', 'org')
-
-const uuid = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
-const line = (o) => JSON.stringify(o) + '\n'
-
-async function writeTranscript(id, records) {
-  await fsp.mkdir(PROJECT_DIR, { recursive: true })
-  const file = path.join(PROJECT_DIR, `${id}.jsonl`)
-  await fsp.writeFile(file, records.map(line).join(''))
-  return file
-}
-
-async function writeDesktopRecord(record) {
-  await fsp.mkdir(ORG_DIR, { recursive: true })
-  const file = path.join(ORG_DIR, `${record.sessionId}.json`)
-  await fsp.writeFile(file, JSON.stringify(record, null, 2))
-  return file
-}
-
-const userRecord = (id, text) => ({
-  type: 'user',
-  sessionId: id,
-  cwd: 'C:\\Dev\\repo',
-  timestamp: '2026-09-14T10:00:00.000Z',
-  message: { role: 'user', content: text },
-})
-
-/** Drive the middleware the way Vite would, with a same-origin request. */
-async function api(method, pathname, body) {
-  const payload = body === undefined ? '' : JSON.stringify(body)
-  const req = Readable.from(payload ? [Buffer.from(payload)] : [])
-  req.url = pathname
-  req.method = method
-  req.headers = { host: 'localhost:5274', origin: 'http://localhost:5274' }
-  let status = 0
-  let out = ''
-  const res = {
-    writeHead: (s) => {
-      status = s
-    },
-    end: (chunk) => {
-      out = String(chunk || '')
-    },
-  }
-  await apiMiddleware(req, res)
-  return { status, body: out ? JSON.parse(out) : null }
-}
-
-const readState = async () => JSON.parse(await fsp.readFile(path.join(root, 'data', 'colony.json'), 'utf8'))
-
-before(async () => {
-  await fsp.mkdir(path.join(root, '.claude', 'sessions'), { recursive: true })
-})
-
-after(async () => {
-  await fsp.rm(root, { recursive: true, force: true })
-})
+before(setupHome)
+after(teardownHome)
 
 test('the last custom title in a transcript wins, matching the CLI', () => {
   const meta = readTranscriptMeta([
@@ -156,7 +94,7 @@ test('setTitle refuses an empty title and an unknown thread', async () => {
 test('POST /api/rename saves the name in the colony and in the harness', async () => {
   const id = uuid(5)
   await writeTranscript(id, [userRecord(id, 'Opening prompt')])
-  const [thread] = (await api('GET', '/api/threads')).body.threads.filter((t) => t.id === id)
+  const thread = await threadById(id)
 
   const res = await api('POST', '/api/rename', {
     id,
@@ -170,8 +108,7 @@ test('POST /api/rename saves the name in the colony and in the harness', async (
   assert.equal(res.body.harnessRecord, true)
 
   assert.equal((await readState()).titles[id], 'Renamed via colony')
-  const [after] = (await api('GET', '/api/threads')).body.threads.filter((t) => t.id === id)
-  assert.equal(after.title, 'Renamed via colony')
+  assert.equal((await threadById(id)).title, 'Renamed via colony')
 })
 
 test('POST /api/rename rejects a missing id or a blank title', async () => {
@@ -182,7 +119,7 @@ test('POST /api/rename rejects a missing id or a blank title', async () => {
 test('the colony lets go of its copy once the harness agrees, so a later /rename shows through', async () => {
   const id = uuid(6)
   const file = await writeTranscript(id, [userRecord(id, 'Opening prompt')])
-  const [thread] = (await api('GET', '/api/threads')).body.threads.filter((t) => t.id === id)
+  const thread = await threadById(id)
   await api('POST', '/api/rename', { id, harness: thread.harness, ref: thread.ref, title: 'Colony name' })
 
   // A terminal-only thread has no app that could stomp it: one agreeing scan is enough.
@@ -191,8 +128,32 @@ test('the colony lets go of its copy once the harness agrees, so a later /rename
 
   // Now the user renames it in Claude Code itself; nothing here should hide that.
   await fsp.appendFile(file, line({ type: 'custom-title', customTitle: 'CLI name', sessionId: id }))
-  const [after] = (await api('GET', '/api/threads')).body.threads.filter((t) => t.id === id)
-  assert.equal(after.title, 'CLI name')
+  assert.equal((await threadById(id)).title, 'CLI name')
+})
+
+test('once the app has restarted, a rename made inside it is not overwritten by the colony', async (t) => {
+  const cli = uuid(9)
+  const desktop = `local_${uuid(10)}`
+  await writeTranscript(cli, [userRecord(cli, 'Opening prompt')])
+  const file = await writeDesktopRecord({ sessionId: desktop, cliSessionId: cli, title: 'Old name', cwd: 'C:\\Dev\\repo' })
+  const thread = await threadById(cli)
+  await api('POST', '/api/rename', { id: cli, harness: thread.harness, ref: thread.ref, title: 'Colony name' })
+
+  // The app relaunches after the colony's rename, then you rename the thread in the app.
+  const realStart = adapter.appStartedAt
+  t.after(() => {
+    adapter.appStartedAt = realStart
+  })
+  const launchedAt = Date.now() + 1000
+  adapter.appStartedAt = async () => launchedAt
+
+  const record = JSON.parse(await fsp.readFile(file, 'utf8'))
+  record.title = 'App name'
+  await fsp.writeFile(file, JSON.stringify(record, null, 2))
+
+  assert.equal((await threadById(cli)).title, 'App name')
+  assert.equal(JSON.parse(await fsp.readFile(file, 'utf8')).title, 'App name')
+  assert.equal((await readState()).titles[cli], undefined)
 })
 
 test('a desktop thread keeps the colony name until the app has restarted, and is re-asserted if stomped', async () => {
@@ -200,7 +161,7 @@ test('a desktop thread keeps the colony name until the app has restarted, and is
   const desktop = `local_${uuid(8)}`
   await writeTranscript(cli, [userRecord(cli, 'Opening prompt')])
   const file = await writeDesktopRecord({ sessionId: desktop, cliSessionId: cli, title: 'Old name', cwd: 'C:\\Dev\\repo' })
-  const [thread] = (await api('GET', '/api/threads')).body.threads.filter((t) => t.id === cli)
+  const thread = await threadById(cli)
   await api('POST', '/api/rename', { id: cli, harness: thread.harness, ref: thread.ref, title: 'Colony name' })
 
   await api('GET', '/api/threads')
@@ -211,7 +172,6 @@ test('a desktop thread keeps the colony name until the app has restarted, and is
   record.title = 'Old name'
   await fsp.writeFile(file, JSON.stringify(record, null, 2))
 
-  const [after] = (await api('GET', '/api/threads')).body.threads.filter((t) => t.id === cli)
-  assert.equal(after.title, 'Colony name')
+  assert.equal((await threadById(cli)).title, 'Colony name')
   assert.equal(JSON.parse(await fsp.readFile(file, 'utf8')).title, 'Colony name')
 })

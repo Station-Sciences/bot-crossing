@@ -1032,13 +1032,151 @@ body {
   scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }
 
+/* ── archived: collapsed under the repo list until you want something back ────────── */
+
+.side .archived-sec {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+}
+
+.side .archived-sec.flash {
+  animation: archived-flash 900ms ease-out;
+}
+
+@keyframes archived-flash {
+  0% {
+    background: rgba(201, 100, 66, 0.22);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+/* Both carry their own `display`, which would otherwise win over the `hidden` attribute. */
+.side .archived-sec[hidden],
+.side .archived-list[hidden] {
+  display: none;
+}
+
+.side .archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 15px;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.side .archived-toggle:hover {
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.side .archived-toggle svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.side .archived-toggle .label {
+  flex: 1;
+}
+
+.side .archived-toggle .count {
+  font-variant-numeric: tabular-nums;
+  font-size: 11.5px;
+  letter-spacing: 0;
+}
+
+.side .archived-toggle .chev {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 160ms ease;
+}
+
+.side .archived-toggle[aria-expanded='true'] .chev {
+  transform: rotate(45deg);
+}
+
+.side .archived-list {
+  max-height: 38vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+.side .archived-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 10px;
+  border-radius: 10px;
+}
+
+.side .archived-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.side .archived-row .text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.side .archived-row .t {
+  font-size: 12.5px;
+  line-height: 1.3;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side .archived-row .sub {
+  font-size: 10.5px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side .archived-row .unarchive {
+  flex: none;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
 .side .projects::-webkit-scrollbar,
-.side .threads::-webkit-scrollbar {
+.side .threads::-webkit-scrollbar,
+.side .archived-list::-webkit-scrollbar {
   width: 8px;
 }
 
 .side .projects::-webkit-scrollbar-thumb,
-.side .threads::-webkit-scrollbar-thumb {
+.side .threads::-webkit-scrollbar-thumb,
+.side .archived-list::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.14);
   border-radius: 8px;
 }

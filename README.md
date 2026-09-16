@@ -198,6 +198,10 @@ browser makes without touching layout, so following a walking astronaut costs no
 - **Archive** sets `isArchived` on Claude Code's own session record — the thread lands in
   Claude Code's Archived list, not just here — and the astronaut walks back up the ramp and
   boards the ship.
+- **Unarchive**: click the ship, or open **Archived** under the repo list on the sidebar's
+  home pane. Every archived thread is listed there — including ones archived inside Claude Code, and
+  ones whose repo has no zone left. The flag is cleared on Claude Code's record too, and the
+  astronaut walks back out.
 
 Only one button in the panel is ever the accent colour: whichever action is the immediate
 one. `Esc` steps outward a notch at a time — the thread first, then its zone.
@@ -214,9 +218,11 @@ since that page loaded. Claude Code also rewrites its session records from memor
 stomp the flag, so the colony re-asserts it on every scan — an archive that gets stomped comes
 back within one poll.
 
-Renaming follows the same shape: `/api/rename` remembers the name in `data/colony.json`
-and re-asserts it on every scan until Claude Code has picked it up, then lets go — so a
-rename made later inside Claude Code shows through rather than being overwritten.
+Unarchiving and renaming follow the same shape in the other direction: the colony remembers
+the change in `data/colony.json` and re-asserts it on every scan until the Claude desktop app
+has relaunched after it — which is when the app loads it from disk — then lets go. So an
+archive or a rename you make inside Claude Code afterwards shows through rather than being
+overwritten. A thread with only a CLI transcript has no app to wait on, and is let go at once.
 
 Nothing is ever written to your Claude Code data except that `isArchived` field and the
 title. The folder buttons only ever hand a path to `open`.

@@ -358,6 +358,12 @@ export class Hud {
     on('#btn-copy-path', 'click', () => this.actions.copyProjectPath?.())
     on('#btn-locate', 'click', () => this.actions.focusProject?.(this.project?.name))
     on('#btn-close-project', 'click', () => this.actions.closeProject?.())
+    on('.archived-toggle', 'click', () => {
+      const toggle = this.$('.archived-toggle')
+      const open = toggle.getAttribute('aria-expanded') !== 'true'
+      toggle.setAttribute('aria-expanded', String(open))
+      this.$('.archived-list').hidden = !open
+    })
     on('.help', 'click', (e) => {
       if (e.target === this.$('.help')) this.toggleHelp(false)
     })
@@ -412,6 +418,70 @@ export class Hud {
       wrap.appendChild(b)
     }
     this.$('.sec-head span').textContent = `${projects.length} repo${projects.length === 1 ? '' : 's'}`
+  }
+
+  /**
+   * Everything you archived, under the repo list. It lives on the home pane rather than in a
+   * repo's own pane because a repo whose last thread you archived has no zone left to open —
+   * and those are exactly the threads you are most likely to want back.
+   */
+  setArchived(archived) {
+    const signature = `${Math.floor(Date.now() / 60000)}~` + archived.map((t) => `${t.id}:${t.title}:${t.project}:${t.at}`).join('|')
+    if (this._last.archived === signature) return
+    this._last.archived = signature
+
+    this.$('.archived-sec').hidden = archived.length === 0
+    this.$('.archived-toggle .count').textContent = String(archived.length)
+
+    const list = this.$('.archived-list')
+    const scroll = list.scrollTop
+    list.innerHTML = ''
+    for (const t of archived) {
+      const row = document.createElement('div')
+      row.className = 'archived-row'
+      row.innerHTML =
+        `<div class="text"><span class="t" title="${escapeHtml(t.title)}">${escapeHtml(t.title)}</span>` +
+        `<span class="sub">${escapeHtml(t.project || 'no repo')} · ${ago(t.at)}</span></div>`
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'btn unarchive'
+      b.title = 'Unarchive — this astronaut walks back out of the ship'
+      b.textContent = 'Unarchive'
+      b.addEventListener('click', async () => {
+        b.disabled = true
+        const ok = await this.actions.unarchiveThread?.(t.id)
+        // On success the row is about to disappear with the next repaint; only a failure
+        // needs the button back.
+        if (!ok) b.disabled = false
+      })
+      row.appendChild(b)
+      list.appendChild(row)
+    }
+    list.scrollTop = scroll
+  }
+
+  /**
+   * What clicking the ship does: bring the sidebar forward on its home pane with the archived
+   * list open. Everything that would be covering it steps out of the way. Returns how many
+   * archived threads there are, so the caller can say so when the ship is empty.
+   */
+  openArchived() {
+    if (!this.visible) this.toggleUi(true)
+    this.toggleSettings(false)
+    this.toggleHelp(false)
+    const sec = this.$('.archived-sec')
+    if (sec.hidden) return 0
+
+    const toggle = this.$('.archived-toggle')
+    toggle.setAttribute('aria-expanded', 'true')
+    const list = this.$('.archived-list')
+    list.hidden = false
+    list.scrollTop = 0
+    // A brief glow, so the eye goes from the ship to the list it just opened.
+    sec.classList.remove('flash')
+    void sec.offsetWidth
+    sec.classList.add('flash')
+    return list.children.length
   }
 
   /**
@@ -874,6 +944,12 @@ const TEMPLATE = `
     <div class="projects-pane">
       <div class="sec-head"><span>Repos</span></div>
       <div class="projects"></div>
+      <div class="archived-sec" hidden>
+        <button class="archived-toggle" type="button" aria-expanded="false" title="Threads you archived — bring one back out">
+          ${ICON.archive}<span class="label">Archived</span><span class="count"></span><i class="chev"></i>
+        </button>
+        <div class="archived-list" hidden></div>
+      </div>
     </div>
 
     <div class="project-detail">

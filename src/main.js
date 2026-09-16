@@ -131,6 +131,13 @@ const actions = {
     syncProject()
   },
 
+  /** The ship is where archived astronauts went, so clicking it lists them. */
+  openArchived: () => {
+    actions.closeProject()
+    colony.ship.ping()
+    if (!hud.openArchived()) hud.hint('The ship is empty — nothing archived')
+  },
+
   select: (id) => select(id, {}),
 
   focusThread: (id) => select(id, { fly: true }),
@@ -234,6 +241,32 @@ const actions = {
       colony.ship.ping()
     } catch (err) {
       hud.toast(err.message || 'Could not archive that thread', 'err')
+    }
+  },
+
+  /** Bring an archived thread back. Resolves true on success, so the row can re-arm on failure. */
+  unarchiveThread: async (id) => {
+    const thread = threads.find((t) => t.id === id)
+    if (!thread) return false
+    try {
+      const res = await archiveThread(thread, false)
+      state.archived = state.archived.filter((x) => x !== id)
+      const { [id]: _dropped, ...archivedAt } = state.archivedAt
+      state.archivedAt = archivedAt
+      // Walk it out now rather than on the next poll; the server keeps it out of the ship.
+      thread.archived = false
+      thread.archivePending = false
+      applyThreads(threads)
+      hud.toast(
+        res.harnessRecord === false
+          ? `Unarchived here (no ${thread.harnessName || 'harness'} record for it)`
+          : 'Unarchived — heading back out'
+      )
+      setTimeout(poll, 1800)
+      return true
+    } catch (err) {
+      hud.toast(err.message || 'Could not unarchive that thread', 'err')
+      return false
     }
   },
 
@@ -416,7 +449,9 @@ engine.canvas.addEventListener('pointermove', (e) => {
   // Pointing at a quiet plot is what makes its name appear.
   const plot = plotUnder(e, p)
   colony.setHoveredPlot(plot)
-  engine.canvas.style.cursor = agent || plot ? 'pointer' : 'grab'
+  const ship = !agent && !plot && colony.pickShip(p.x, p.y)
+  engine.canvas.style.cursor = agent || plot || ship ? 'pointer' : 'grab'
+  engine.canvas.title = ship ? 'The ship — click for archived threads' : ''
 })
 
 /**
@@ -443,6 +478,11 @@ engine.canvas.addEventListener('pointerup', (e) => {
   const agent = colony.pick(p.x, p.y, p.aspect)
   if (agent) {
     select(agent.id, {})
+    return
+  }
+  // An astronaut on the ramp is still an astronaut, which is why the ship comes second.
+  if (colony.pickShip(p.x, p.y)) {
+    actions.openArchived()
     return
   }
   // Nobody there: a zone's deck or its name plate opens that repo's sidebar instead, and
@@ -582,6 +622,20 @@ function applyThreads(list) {
       urgent: colony.urgentPlots?.has(plot.id) ?? false,
     }))
     .sort((a, b) => b.count - a.count)
+
+  // Most recently archived first — the one you just sent home is the one you most likely
+  // want back. A thread archived inside the harness has no colony timestamp to go on.
+  hud.setArchived(
+    list
+      .filter((t) => t.archived || archivedSet.has(t.id))
+      .map((t) => ({
+        id: t.id,
+        title: t.title || 'Untitled thread',
+        project: t.project,
+        at: state.archivedAt[t.id] || t.lastActivityAt || 0,
+      }))
+      .sort((a, b) => b.at - a.at)
+  )
 
   // Keep the card honest if the thread it is showing changed underneath it.
   if (selectedId) {
