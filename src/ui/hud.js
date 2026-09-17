@@ -245,7 +245,13 @@ export class Hud {
         'MCP factory',
         'mcpFactory',
         'A building housing the MCP servers your agents call. A pipe glows from an astronaut to it while their thread is mid-call.'
-      )
+      ),
+      this._toggle(
+        'Usage goo canister',
+        'usageCanister',
+        'A tank of glowing goo standing in for how much of a monthly dollar budget is left, priced from your own transcripts on this machine the way ccusage prices them — there is no real limit to read it against, so set the budget below.'
+      ),
+      this._usageBudgetRow()
     )
     view.append(
       this._toggle('Return to isometric', 'autoFrame', 'Eases the angle back when you stop dragging.'),
@@ -336,6 +342,57 @@ export class Hud {
       },
     })
     return row
+  }
+
+  /**
+   * The monthly dollar budget the goo canister reads its level against. Not a `Settings` key —
+   * it lives on the server, shared with anything else that ever polls `/api/usage`, so a change
+   * here has to go through `actions` rather than `settings.set`. No reset button: the window is
+   * the calendar month, so it empties itself on the 1st rather than waiting for a click.
+   */
+  _usageBudgetRow() {
+    const row = this._row(
+      'Monthly budget',
+      'What counts as “full”. The canister fills to this many dollars of spend, priced the way ccusage prices it, across every Claude Code session on this machine since the 1st of the month.'
+    )
+    const wrap = document.createElement('div')
+    wrap.style.cssText = 'display:flex;align-items:center;gap:6px'
+
+    const prefix = document.createElement('span')
+    prefix.textContent = '$'
+    prefix.style.cssText = 'color:var(--muted);font-size:13px'
+
+    const input = document.createElement('input')
+    input.type = 'number'
+    input.className = 'number'
+    input.min = '1'
+    input.step = '50'
+    const commit = () => {
+      const n = Number(input.value)
+      if (n > 0) this.actions.setUsageBudget?.(n)
+    }
+    input.addEventListener('change', commit)
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') input.blur()
+    })
+
+    wrap.append(prefix, input)
+    row.appendChild(wrap)
+    this._usageBudgetInput = input
+    this._usageHint = row.querySelector('.hint')
+    return row
+  }
+
+  /** Called whenever a fresh `/api/usage` poll lands — see `setUsage` in `main.js`. */
+  setUsage(info) {
+    if (!info) return
+    if (this._usageBudgetInput && document.activeElement !== this._usageBudgetInput) {
+      this._usageBudgetInput.value = String(info.budgetUsd)
+    }
+    if (this._usageHint) {
+      const resets = new Date(info.monthEnd).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+      this._usageHint.textContent = `$${info.usedUsd.toFixed(2)} spent this month — resets ${resets}`
+    }
   }
 
   /** The little face on the agent card, drawn from the same atlas the astronauts use. */
@@ -1009,6 +1066,7 @@ const TEMPLATE = `
       </div>
       <div>
         <div class="k"><span>Next needing you</span><kbd>N</kbd></div>
+        <div class="k"><span>Next agent</span><kbd>M</kbd></div>
         <div class="k"><span>Open thread</span><kbd>Enter</kbd></div>
         <div class="k"><span>Mark viewed</span><kbd>V</kbd></div>
         <div class="k"><span>Archive</span><kbd>A</kbd></div>

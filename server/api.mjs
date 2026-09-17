@@ -11,6 +11,7 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
 } from './scan.mjs'
+import { setBudget, usageSnapshot } from './usage.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
@@ -372,6 +373,15 @@ export async function apiMiddleware(req, res, next) {
 
     if (url.pathname === '/api/harnesses' && req.method === 'GET') {
       return send(res, 200, { harnesses: await harnessStatus() })
+    }
+
+    if (url.pathname === '/api/usage' && req.method === 'GET') {
+      return send(res, 200, await usageSnapshot())
+    }
+
+    if (url.pathname === '/api/usage' && req.method === 'PUT') {
+      const { budgetUsd } = await readJsonBody(req)
+      return send(res, 200, await setBudget(budgetUsd))
     }
 
     if (url.pathname === '/api/state' && req.method === 'GET') {

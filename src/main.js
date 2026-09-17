@@ -16,6 +16,8 @@ import {
   openThread,
   newSession,
   revealFolder,
+  fetchUsage,
+  setUsageBudget,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 
@@ -111,6 +113,15 @@ const actions = {
       return
     }
     pool.sort((a, b) => a.id.localeCompare(b.id))
+    // Nothing selected yet: skip the cycle and go straight to whoever's been busiest most
+    // recently, rather than the arbitrary first id in sorted order.
+    if (!selectedId) {
+      const agent = pool.reduce((most, a) =>
+        (a.thread?.lastActivityAt || 0) > (most.thread?.lastActivityAt || 0) ? a : most
+      )
+      select(agent.id, { fly: true })
+      return
+    }
     const agent = pool[statusCursor++ % pool.length]
     select(agent.id, { fly: true })
   },
@@ -268,6 +279,16 @@ const actions = {
   progressFor: (id) => {
     const thread = threads.find((t) => t.id === id)
     return thread ? transcriptProgress(thread) : 0
+  },
+
+  setUsageBudget: async (budgetUsd) => {
+    try {
+      const usage = await setUsageBudget(budgetUsd)
+      colony.setUsage(usage)
+      hud.setUsage(usage)
+    } catch (err) {
+      hud.toast(err.message || 'Could not set that budget', 'err')
+    }
   },
 }
 
@@ -518,6 +539,10 @@ window.addEventListener('keydown', (e) => {
     case 'N':
       actions.focusStatus('waiting')
       break
+    case 'm':
+    case 'M':
+      actions.focusStatus('agents')
+      break
     case 'p':
     case 'P':
       actions.screenshot()
@@ -662,6 +687,23 @@ async function poll() {
     hud.removeBoot()
   } finally {
     polling = false
+  }
+  pollUsage()
+}
+
+/**
+ * A second poll, kept off the one above: `/api/usage` reads transcripts on disk rather than
+ * asking a harness, so it has its own, unrelated way to fail — a machine with no Claude Code
+ * transcripts at all is a normal, silent answer here, not an error toast.
+ */
+async function pollUsage() {
+  try {
+    const usage = await fetchUsage()
+    colony.setUsage(usage)
+    hud.setUsage(usage)
+    for (const b of usage.bursts || []) colony.burstUsage(b.threadId, b.count)
+  } catch {
+    /* no transcripts to read, or the endpoint failed — the canister just holds its last level */
   }
 }
 

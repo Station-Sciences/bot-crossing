@@ -61,6 +61,8 @@ const MAX_CELLS = 9
 const SHIP_CELL = { q: -2, r: 1 }
 /** The lattice cell the MCP factory owns, on the ship's own side of the colony. */
 const MCP_CELL = { q: -2, r: -1 }
+/** The lattice cell the usage canister owns — between the ship and the MCP factory. */
+const USAGE_CELL = { q: -2, r: 0 }
 
 const HEX_DIRS = [
   [1, 0],
@@ -172,14 +174,15 @@ function hexDistance(a, b) {
  * gone those cells are now islands floating in the sea. That is what folding away dormant repos
  * does the first time it runs.
  *
- * The ship's cell — and the MCP factory's — count as walkable here even though nobody may
- * claim them: a colony that happens to wrap around either is not two colonies.
+ * The ship's cell — and the MCP factory's and usage canister's — count as walkable here even
+ * though nobody may claim them: a colony that happens to wrap around any of them is not two
+ * colonies.
  */
 function isConnected(out) {
   const cells = new Map()
   for (const [, list] of out) for (const c of list) cells.set(key(c.q, c.r), c)
   if (cells.size < 2) return true
-  const stepStones = [key(SHIP_CELL.q, SHIP_CELL.r), key(MCP_CELL.q, MCP_CELL.r)]
+  const stepStones = [key(SHIP_CELL.q, SHIP_CELL.r), key(MCP_CELL.q, MCP_CELL.r), key(USAGE_CELL.q, USAGE_CELL.r)]
   const passable = new Set([...cells.keys(), ...stepStones])
   const [start] = cells.keys()
   const seen = new Set([start])
@@ -210,7 +213,11 @@ export function allocateCells(projects, previous = new Map()) {
 }
 
 function layOut(projects, previous) {
-  const reserved = new Set([key(SHIP_CELL.q, SHIP_CELL.r), key(MCP_CELL.q, MCP_CELL.r)])
+  const reserved = new Set([
+    key(SHIP_CELL.q, SHIP_CELL.r),
+    key(MCP_CELL.q, MCP_CELL.r),
+    key(USAGE_CELL.q, USAGE_CELL.r),
+  ])
   const wanted = projects.map((p) => ({ id: p.id, want: cellsNeeded(p.size) }))
   const total = wanted.reduce((n, w) => n + w.want, 0)
 
@@ -312,6 +319,11 @@ export const shipPosition = () => {
 
 export const mcpFactoryPosition = () => {
   const { x, z } = hexToWorld(MCP_CELL.q, MCP_CELL.r)
+  return new THREE.Vector3(x, 0, z)
+}
+
+export const usageCanisterPosition = () => {
+  const { x, z } = hexToWorld(USAGE_CELL.q, USAGE_CELL.r)
   return new THREE.Vector3(x, 0, z)
 }
 
