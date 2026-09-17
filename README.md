@@ -43,9 +43,10 @@ somebody writing that adapter.
 | --- | --- |
 | **[Claude Code](https://claude.com/claude-code)** (Anthropic) | ✅ **Supported** — desktop app and CLI, including worktrees and live-process detection |
 | **[Codex](https://developers.openai.com/codex/cli)** (OpenAI) | ✅ **Supported** — desktop, VS Code and CLI sessions, opened through `codex://` |
-| [OpenCode](https://opencode.ai) | ⬜ Not yet |
-| [Antigravity CLI](https://antigravity.google) (Google) | ⬜ Not yet — the successor to Gemini CLI, which Google stopped serving individual accounts on 18 June 2026 |
+| **[OpenCode](https://opencode.ai)** | ✅ **Supported** — top-level sessions from its own store; no per-thread link to open |
+| **[Antigravity CLI](https://antigravity.google)** (Google) | ✅ **Supported** — transcripts, opened through `antigravity://`. The successor to Gemini CLI, which Google stopped serving individual accounts on 18 June 2026 |
 | **[Cursor](https://cursor.com)** (Anysphere) | ✅ **Supported** — agent transcripts; the composer/sidebar threads are not read yet |
+| **[Hermes](https://github.com/opsmason/hermes)** | ✅ **Supported** — sessions per pilot profile. Lives in the terminal and chat apps, so there is no link to open |
 | [Amp](https://ampcode.com) (Sourcegraph) | ⬜ Not yet |
 | [Aider](https://aider.chat) | ⬜ Not yet |
 | [Goose](https://block.github.io/goose/) (Block) | ⬜ Not yet |
