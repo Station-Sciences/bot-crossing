@@ -24,6 +24,7 @@ import {
   revealFolder,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
+import { withErrands } from './game/errands.js'
 
 /**
  * Boot and the outer game loop.
@@ -897,6 +898,8 @@ function applyThreads(list) {
     drag.pendingThreads = list
     return
   }
+  list = withErrands(list)
+
   // A thread you have said you looked at stops counting as unread until it moves on again.
   // Done here rather than in `statusFor` so the card, the badge and the astronaut all agree.
   const viewed = state.viewedAt || {}
