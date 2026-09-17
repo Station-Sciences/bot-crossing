@@ -887,16 +887,6 @@ export class Astronauts {
 
       case 'walking': {
         agent.scale = Math.min(1, agent.scale + dt * 3)
-        // Review harness (#34): you picked it to look at it, so it holds still mid-stride
-        // rather than making the camera and the sidebar chase it. The age reset keeps the
-        // pause out of the give-up clocks below, which would otherwise read a long inspection
-        // as an astronaut that cannot reach its site.
-        if (this.selected === agent && this.settings.get('reviewFreezeSelected')) {
-          agent.vel.set(0, 0, 0)
-          agent.stateAge = 0
-          this._settle(agent, dt)
-          break
-        }
         this._walk(agent, toSite, dist, dt, 1)
         // Close enough — settle into whatever this thread is actually doing. Or close
         // enough to *give up*: a site that something was built on top of between polls can
@@ -929,11 +919,7 @@ export class Astronauts {
       }
 
       case 'at-site': {
-        if (this.selected === agent && this.settings.get('reviewFreezeSelected')) {
-          // Same deal as mid-walk: no pottering, no circling the site while it is inspected.
-          agent.vel.set(0, 0, 0)
-          this._settle(agent, dt)
-        } else if (agent.status === 'idle') {
+        if (agent.status === 'idle') {
           // Idlers potter around their plot, and `_drift` owns their velocity outright.
           this._drift(agent, dt, elapsed)
         } else if (agent.status === 'working' && agent.anchor) {
