@@ -129,7 +129,10 @@ export const CATALOGUE = [
       'An underwater world: caustics on the seabed, sand ripples combed by a current, coral grown from ' +
       'primitives, marine snow. Split out from the rest of #48 — the automations harness and the ' +
       'Windows terminal are separate questions.',
-    measured: '~2,100 lines across reef.js, fish.js, planet.js, plots.js and sky.js.',
+    measured:
+      'Rebuilt against the current planet.js, not merged — the branch predates #53 and conflicts in ' +
+      'five files. Preset, ripples and caustics are live; its coral scatter, fish and light shafts ' +
+      'are not wired yet, so this is the water and the seabed, not the reef life.',
     preview: { kind: 'planet', id: 'reef' },
   },
   {

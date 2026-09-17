@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { decorateCaustics, reefUniforms } from './reef.js'
+import { decorateCaustics } from './reef.js'
 import { atlasTexture, hasPart, kitReady, kitUsesVertexColors, part } from './kit.js'
 import { withCurve } from '../core/curve.js'
 
