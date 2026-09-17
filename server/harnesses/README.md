@@ -131,9 +131,14 @@ Verified on a real machine:
 
 - **Claude Code** — desktop records in
   `~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_*.json`
-  (`%APPDATA%\Claude\claude-code-sessions\…` on Windows); CLI transcripts in
-  `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`; live processes in
-  `~/.claude/sessions/*.json`. Implemented in `claude-code.mjs`.
+  (`%APPDATA%\Claude\claude-code-sessions\…` on Windows), and in the same folder a
+  `deleted_<cliSessionId>` marker for every thread deleted in the app, holding the deletion time
+  in epoch ms — the record goes, the CLI transcript stays, and the marker is all that tells a
+  deleted thread from one started in a terminal, so the adapter reports it as `archived`; CLI
+  transcripts in `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`; live processes in
+  `~/.claude/sessions/*.json`. `CLAUDE_CONFIG_DIR` (the CLI's own override for `~/.claude`) and
+  `BOT_CROSSING_CLAUDE_DESKTOP` (the session store) point both roots elsewhere, which is how
+  `test/harness.test.mjs` fakes an install. Implemented in `claude-code.mjs`.
 - **Codex CLI** — transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-<iso>-<uuid>.jsonl`,
   with records shaped `{ timestamp, type, payload }`, and what looks like an index at
   `~/.codex/session_index.jsonl`. Not implemented yet.

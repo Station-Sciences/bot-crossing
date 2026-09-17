@@ -10,7 +10,8 @@
  * archiving in `server/harnesses/README.md`.
  *
  * Two stores, deliberately merged rather than picked between:
- *   - the desktop app keeps one JSON record per thread (title, cwd, model, timestamps)
+ *   - the desktop app keeps one JSON record per thread (title, cwd, model, timestamps), and
+ *     leaves a marker behind for each thread deleted in it
  *   - the CLI keeps the raw transcript, which is the only source for terminal-started work
  */
 import fsp from 'node:fs/promises'
@@ -32,8 +33,27 @@ function desktopDataDir() {
     case 'linux':
       return path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'Claude')
     default:
-      return path.join(HOME, 'Library', 'Application Support', 'Claude')
+      return macDataDir()
   }
+}
+
+/**
+ * macOS has two answers as well, because the app ships under two Electron app names: the
+ * classic `Claude`, and `Claude-3p`, which is what a current install writes to. Both can be
+ * present at once — an older install leaves an empty `Claude` behind, and an empty directory
+ * is indistinguishable from the app never having been installed. Hard-coding `Claude` there
+ * means every desktop thread is missed, and the colony falls back to drawing the CLI
+ * transcript alone: no title, no model, and `Open` resorts to `claude://resume`, which
+ * imports rather than navigates.
+ *
+ * So pick whichever one actually holds session records, the same rule windowsDataDir uses
+ * below — and, like it, resolved once at import, so installing the app under the colony
+ * wants a restart to be noticed.
+ */
+function macDataDir() {
+  const support = path.join(HOME, 'Library', 'Application Support')
+  const candidates = [path.join(support, 'Claude-3p'), path.join(support, 'Claude')]
+  return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || candidates[1]
 }
 
 /**
@@ -71,12 +91,22 @@ function windowsDataDir() {
   return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || roaming
 }
 
+/**
+ * Both roots take an override, which is how the tests fake an install without touching a real
+ * one. `CLAUDE_CONFIG_DIR` is the CLI's own: a shell that sets it has its transcripts written
+ * there, so the variable that moves the CLI's home moves where the colony looks for it too.
+ * `BOT_CROSSING_CLAUDE_DESKTOP` names the session store itself, the sibling of Cursor's
+ * `BOT_CROSSING_CURSOR_PROJECTS`.
+ */
 /** Where the Claude desktop app keeps one JSON record per thread. */
-const DESKTOP_SESSIONS = path.join(desktopDataDir(), 'claude-code-sessions')
+const DESKTOP_SESSIONS =
+  process.env.BOT_CROSSING_CLAUDE_DESKTOP || path.join(desktopDataDir(), 'claude-code-sessions')
+/** The CLI's home: `~/.claude`, unless the CLI itself has been told otherwise. */
+const CLI_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude')
 /** Where the CLI keeps the raw transcript: ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl */
-const CLI_PROJECTS = path.join(HOME, '.claude', 'projects')
+const CLI_PROJECTS = path.join(CLI_HOME, 'projects')
 /** One file per live CLI process: {pid, sessionId, cwd, ...}. Stale files outlive their pid. */
-const CLI_LIVE = path.join(HOME, '.claude', 'sessions')
+const CLI_LIVE = path.join(CLI_HOME, 'sessions')
 
 const HEAD_BYTES = 192 * 1024
 
@@ -267,21 +297,37 @@ async function scanLiveSessions() {
   return live
 }
 
-/** Every thread the desktop app has a record for. */
+/**
+ * What deleting a thread in the desktop app leaves behind, in the folder its record was in:
+ * `deleted_<cliSessionId>`, holding the deletion time in epoch ms. The record goes; the CLI
+ * transcript does not. Without the marker that transcript is indistinguishable from a thread
+ * started in a terminal, so a thread you had got rid of walked straight back onto the map as one.
+ */
+const DELETED_MARKER = /^deleted_(.+)$/
+const isRecord = (name) => name.startsWith('local_') && name.endsWith('.json')
+
+/** Every thread the desktop app has a record for, and the ids of the ones it has deleted. */
 async function scanDesktopSessions() {
-  const out = []
+  const records = []
+  const deleted = new Set()
   for (const account of await listDirs(DESKTOP_SESSIONS)) {
     for (const org of await listDirs(account)) {
-      for (const file of await listFiles(org, (n) => n.startsWith('local_') && n.endsWith('.json'))) {
+      for (const file of await listFiles(org, (n) => isRecord(n) || DELETED_MARKER.test(n))) {
+        const marker = DELETED_MARKER.exec(path.basename(file))
+        if (marker) {
+          // Only the name is read. When it was deleted is not something the map shows.
+          if (isCliId(marker[1])) deleted.add(marker[1])
+          continue
+        }
         try {
-          out.push(JSON.parse(await fsp.readFile(file, 'utf8')))
+          records.push(JSON.parse(await fsp.readFile(file, 'utf8')))
         } catch {
           /* a session mid-write — skip this pass */
         }
       }
     }
   }
-  return out
+  return { records, deleted }
 }
 
 /**
@@ -340,7 +386,7 @@ function toThread(t) {
 }
 
 async function scanThreads() {
-  const [desktop, transcripts, live] = await Promise.all([
+  const [{ records: desktop, deleted }, transcripts, live] = await Promise.all([
     scanDesktopSessions(),
     scanTranscripts(),
     scanLiveSessions(),
@@ -403,7 +449,8 @@ async function scanThreads() {
     })
   }
 
-  // Transcripts with no desktop record — usually threads started straight from the terminal.
+  // Transcripts with no desktop record — threads started straight from the terminal, and threads
+  // the app has since deleted.
   for (const [id, entry] of transcripts) {
     if (claimed.has(id)) continue
     const meta = await transcriptMeta(entry)
@@ -433,7 +480,13 @@ async function scanThreads() {
       starred: false,
       routine: '',
       prState: '',
-      archived: false,
+      // Deleted in the app, and reported the way an archive made there is. `archived` is the
+      // read-only field an adapter has for "gone from the harness's own UI", and the colony sends
+      // the astronaut home for it exactly as it does for an archive of its own — rather than the
+      // thread simply vanishing from one scan to the next. Only a transcript with no record left
+      // qualifies: resuming a deleted thread makes the app write a fresh record while the marker
+      // stays behind, and a record that exists is the newer truth.
+      archived: deleted.has(id),
       hasTranscript: true,
       sizeBytes: entry.size,
       transcriptFile: entry?.file || '',
