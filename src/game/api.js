@@ -56,6 +56,24 @@ const SAVE_TRIES = 3
  * happened mid-flight, and only a real merge hands back something new.
  */
 export async function saveState(state) {
+  // Nothing may be written before the file has been read. The page boots holding an EMPTY
+  // archive list and only swaps it for the real one when fetchState() resolves; a save that
+  // slips out inside that window PUTs the empty list and erases every archive on disk.
+  //
+  // The optimistic-concurrency guard does not cover it, by design: `baseUpdatedAt` is 0 until
+  // a base is adopted, and the server reads a zero base as a first write and allows it. That
+  // is right for a fresh install and wrong for a tab whose read failed — and the two are
+  // distinguishable here, which is why the guard lives at this seam rather than at the caller.
+  // A fresh install still *read* the file; the server answers a missing one with an empty state
+  // rather than an error, so `baseSnapshot` is an object. Only a read that never happened
+  // leaves it null.
+  //
+  // The damage hides itself, which is what makes this worth a guard rather than a comment: the
+  // scan carries each harness's own archived flag independently of this file, so a wiped list
+  // reads back populated rather than empty. Measured twice by the contributor who found it —
+  // an archive list of 50 came back as 11, exactly the number with a Claude Code desktop record.
+  if (baseSnapshot === null) throw new Error('Refusing to save a colony that was never read')
+
   let local = state
   for (let attempt = 0; attempt < SAVE_TRIES; attempt++) {
     const res = await fetch('/api/state', {

@@ -767,7 +767,11 @@ async function boot() {
         if (!hasStoredSettings() && state.settings) settings.applyAll(state.settings)
       })
       .catch(() => {
-        /* first run, or the file is gone — an empty colony state is a valid one */
+        // Not "first run, or the file is gone": the server answers a missing file with an empty
+        // state rather than an error, so a rejection means it could not be reached and we do not
+        // know what is on disk. Saves stay off for this session and say so, because an archive
+        // that silently fails to persist is worse than one that refuses.
+        hud.toast('Could not read the saved colony — archiving is off until you reload', 'err')
       }),
     settle(loadKit()),
     settle(loadCrew()),

@@ -53,6 +53,34 @@ test('settings are not merged field-wise — the last tab to touch a slider wins
 
 // ── the API, against a real socket ────────────────────────────────────────────
 
+// ── the save gate ─────────────────────────────────────────────────────────────
+
+/**
+ * The page boots holding an empty archive list and only swaps it for the real one when the
+ * read resolves. A save inside that window PUTs the empty list, and the server allows it: the
+ * base is still 0, which it reads as a first write. Nothing else catches this — the wipe even
+ * hides itself afterwards, because the scan carries each harness's own archived flag and a
+ * wiped file reads back populated.
+ *
+ * So the refusal has to happen before the request leaves, which is what this asserts: not that
+ * the save fails, but that nothing was sent at all.
+ */
+test('a colony that was never read is not saved — the request never leaves', async () => {
+  const { saveState } = await import('../src/game/api.js')
+  const realFetch = globalThis.fetch
+  let calls = 0
+  globalThis.fetch = async (...args) => {
+    calls++
+    return realFetch(...args)
+  }
+  try {
+    await assert.rejects(() => saveState({ archived: [] }), /never read/)
+    assert.equal(calls, 0, 'a colony that was never read must not reach the network')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
 async function withServer(run) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-test-'))
   process.env.BOT_CROSSING_DATA = dir
