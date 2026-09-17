@@ -193,6 +193,11 @@ const DEFAULTS = {
   showFps: false,
   showLabels: true,
   reducedMotion: false,
+
+  // Review harness (see src/review/). Scaffolding for one round of pull requests, not settings
+  // anybody is meant to find: they are driven by the review panel and default off, so a colony
+  // with no review panel open behaves exactly as it did before.
+  reviewFreezeSelected: false, // #34 — a selected astronaut holds still instead of walking on
 }
 
 /** Keys whose change forces a full rebuild of the world (terrain, scatter, sky). */

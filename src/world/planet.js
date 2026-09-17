@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { decorateCaustics, reefUniforms } from './reef.js'
 import { atlasTexture, hasPart, kitReady, kitUsesVertexColors, part } from './kit.js'
 import { withCurve } from '../core/curve.js'
 
@@ -524,10 +525,41 @@ export const PLANETS = {
     },
     grade: { saturation: 1.15, warmth: 0.04 },
   },
+  /**
+   * Reef — #48, under review. The one world you are inside rather than on: the "sky" is the
+   * surface seen from below, the fog is the water itself, and the sun arrives through it wide
+   * and soft. Ground is pale sand, combed into ripples that exist to catch the caustics.
+   */
+  reef: {
+    id: 'reef',
+    name: 'Reef',
+    blurb: 'Shallow, sunlit, and everybody here is a fish.',
+    // Pale sand, mottled where seagrass has taken. `tint` is the warm dry-sand highlight.
+    ground: { low: 0x9c8f6a, high: 0xd9c8a0, tint: 0xf0e2bc },
+    rock: 0x5f6a66,
+    horizon: 0x0e4f66,
+    // From under the water the "sky" is the surface: bright and green-blue straight up,
+    // deepening to the same haze the fog uses at the edge of sight.
+    sky: { top: 0x8fe0ea, bottom: 0x0f5a72 },
+    fog: { color: 0x0f5a72, near: 22, far: 118 },
+    sun: { color: 0xcaf4f0, intensity: 2.1, night: 0.12 },
+    ambient: { sky: 0x4fb8d8, ground: 0x2f5a4a, intensity: 0.9 },
+    // Water scatters like a thick atmosphere would: soft shadows, no stars, a wide sun.
+    atmosphere: 1,
+    craters: 0,
+    roughness: 0.55,
+    scatter: 'coral',
+    companion: { name: 'Sun', color: 0xffffff, size: 0, glow: 0xffffff },
+    // Marine snow: the slow drift of particulate that is what makes water read as water.
+    dust: 0.7,
+    underwater: true,
+    ripples: 1,
+    grade: { saturation: 1.06, warmth: -0.06 },
+  },
 }
 
 /** Display order for the picker: home first, then outward, then the pretty ones. */
-export const PLANET_ORDER = ['moon', 'mars', 'terra', 'beach', 'ocean', 'jungle', 'desert', 'tundra', 'autumn', 'sakura', 'volcanic', 'sky']
+export const PLANET_ORDER = ['moon', 'mars', 'terra', 'beach', 'ocean', 'jungle', 'desert', 'tundra', 'autumn', 'sakura', 'volcanic', 'sky', 'reef']
 
 export const GROUND_SIZE = 340
 /** Everything inside this radius is the buildable colony, and is kept nearly flat. */
@@ -622,6 +654,11 @@ export function createTerrain(planet, detail, seed = 1337) {
     // is what sells "dust" rather than "plastic".
     envMapIntensity: 0.3,
   })
+  // Under water the sand is where the light show lands: the caustic pattern is multiplied into
+  // the albedo, so it is lit and shadowed by the same sun as everything standing on it rather
+  // than glowing through the shade.
+  if (planet.underwater) decorateCaustics(mat, 1.0)
+
   const mesh = new THREE.Mesh(geo, mat)
   mesh.receiveShadow = true
   mesh.name = 'terrain'
@@ -741,6 +778,7 @@ function sampleHeight(x, z, field, planet) {
   }
 
   let y = gentle * planet.roughness * (1 - outside) + hills * outside * planet.roughness
+  y += ripple(x, z, field.noise, planet.ripples)
   if (sea > 0) {
     // Hills sink with the land rather than poking up out of the water as pinnacles. The bed
     // falls away slowly at first and steeply later, which is what makes a beach a beach:
@@ -779,6 +817,17 @@ function sampleHeight(x, z, field, planet) {
 }
 
 /** Craters only ever land outside the colony, so they never eat a build plot. */
+/**
+ * Sand ripples: the parallel ridges a current combs into a seabed. A single sine along one axis,
+ * bent by the low-frequency noise so the lines wander rather than ruling the ground, and small
+ * enough that nothing standing on them notices — they exist to catch the caustics.
+ */
+function ripple(x, z, noise, amount) {
+  if (!amount) return 0
+  const bend = fbm(noise, x * 0.05, z * 0.05, 2) * 2.2
+  return Math.sin(x * 1.35 + z * 0.4 + bend) * 0.045 * amount
+}
+
 function makeCraters(count, seed) {
   const rand = mulberry(seed ^ 0x9e37)
   const out = []

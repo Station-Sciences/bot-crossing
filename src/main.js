@@ -22,6 +22,7 @@ import {
   revealFolder,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
+import { ReviewPanel } from './review/panel.js'
 
 /**
  * Boot and the outer game loop.
@@ -301,6 +302,8 @@ ambience.setPlanet(colony.planet)
 colony.onSound = (name, x, y, z) => ambience.play(name, { x, y, z, kind: colony.fauna.flock?.kind })
 
 const hud = new Hud(app, settings, actions)
+// Scaffolding for one round of pull requests — see src/review/. Hidden until R is pressed.
+const review = new ReviewPanel(app, { settings, hud })
 
 // ── selection ─────────────────────────────────────────────────────────────────────────
 
@@ -541,6 +544,13 @@ window.addEventListener('keydown', (e) => {
     return
   }
   if (e.metaKey || e.ctrlKey || e.altKey) return
+
+  // The review panel gets first refusal: while it is open the arrows walk the round rather
+  // than doing whatever they normally do.
+  if (review.handleKey(e)) {
+    e.preventDefault()
+    return
+  }
 
   switch (e.key) {
     case 'h':
