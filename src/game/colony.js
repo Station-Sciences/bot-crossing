@@ -129,6 +129,7 @@ export class Colony {
     this.renderer = renderer
 
     this.planet = PLANETS[settings.get('planet')] || PLANETS.moon
+    this._applyPlanetTint()
     this.sky = new Sky(scene, settings, renderer)
     this.sky.setPlanet(this.planet)
     // Push the stored time in explicitly. `settings.set` is a no-op when the value has not
@@ -438,8 +439,19 @@ export class Colony {
     if (!planet || planet === this.planet) return
     this.planet = planet
     this.reflections.invalidate()
+    this._applyPlanetTint()
     this.sky.setPlanet(planet)
     this._buildTerrain()
+  }
+
+  /**
+   * The buildings' shared planet-tint uniforms. Shared is the point: every standing
+   * building re-themes on a planet switch without a single rebuild.
+   */
+  _applyPlanetTint() {
+    const tint = this.planet.buildingTint
+    buildingUniforms.uPlanetTint.value.set(tint ?? 0xffffff)
+    buildingUniforms.uPlanetTintAmount.value = tint != null ? 1 : 0
   }
 
   onSettingsChanged(changed, scope) {
