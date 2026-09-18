@@ -7,7 +7,7 @@ import { Colony, STATUS_LABEL, STATUS_ORDER, statusFor, transcriptProgress } fro
 import { Hud } from './ui/hud.js'
 import { PLANETS } from './world/planet.js'
 import { DECK_TOP, PLOT_CELL, hexToWorld, worldToHex } from './world/plots.js'
-import { moveIsValid } from './world/plot-move.js'
+import { planMove } from './world/plot-move.js'
 import { loadKit } from './world/kit.js'
 import { crewRig, loadCrew } from './agents/crew.js'
 import { TIMES } from './world/sky.js'
@@ -537,6 +537,7 @@ const drag = {
   dq: 0,
   dr: 0,
   valid: true,
+  plan: null, // the layout a drop would apply, from planMove — null while the drop is illegal
   swallowClick: false,
   ghost: null, // { group, meshes, material, geometry }
   pendingThreads: null, // a poll that landed mid-carry, applied on the drop
@@ -591,8 +592,11 @@ function roundedHexGeometry(radius, round) {
  * turns a routine drag into something that looks like an error state.
  */
 function buildGhost(count) {
-  const geometry = roundedHexGeometry(PLOT_CELL * 0.94, PLOT_CELL * 0.34)
-  const inner = roundedHexGeometry(PLOT_CELL * 0.82, PLOT_CELL * 0.3)
+  // Corner radius is a tenth of the tile, not a third: enough to take the points off so the
+  // footprint sits with the rest of the art, not so much that a hexagon reads as a circle.
+  // The rim is a line, not a border — 0.04 of a cell, about a third of a unit on the ground.
+  const geometry = roundedHexGeometry(PLOT_CELL * 0.94, PLOT_CELL * 0.1)
+  const inner = roundedHexGeometry(PLOT_CELL * 0.9, PLOT_CELL * 0.096)
   const material = new THREE.MeshBasicMaterial({
     color: GHOST_VALID,
     transparent: true,
@@ -683,13 +687,14 @@ function liftPlot() {
 function settleDrag(apply) {
   colony.setPlotLift(drag.name, 0)
   disposeGhost()
-  if (apply) colony.movePlot(drag.name, drag.dq, drag.dr)
+  if (apply && drag.plan) colony.applyLayout(drag.plan)
   const pending = drag.pendingThreads
   drag.lifted = false
   drag.pendingThreads = null
   drag.name = null
   drag.cells = null
   drag.grab = null
+  drag.plan = null
   if (apply || pending) applyThreads(pending || threads)
   engine.canvas.style.cursor = 'grab'
 }
@@ -726,7 +731,11 @@ window.addEventListener('pointermove', (e) => {
   if (dq === drag.dq && dr === drag.dr) return
   drag.dq = dq
   drag.dr = dr
-  drag.valid = moveIsValid(colony.visibleLayout(), drag.name, dq, dr)
+  // The plan, not just a yes/no: a drop that strands a zone is allowed, and what comes back
+  // says where everything ends up. Kept so the drop applies exactly what the ghost was drawn
+  // against rather than recomputing against a layout a poll may have moved on.
+  drag.plan = planMove(colony.visibleLayout(), drag.name, dq, dr)
+  drag.valid = Boolean(drag.plan)
   placeGhost()
 })
 

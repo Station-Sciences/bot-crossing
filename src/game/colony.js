@@ -934,6 +934,26 @@ export class Colony {
   }
 
   /**
+   * Adopt a whole planned layout at once.
+   *
+   * A drag no longer moves only the zone under the cursor: carrying one out from between its
+   * neighbours strands whatever it was bridging, and `planMove` slides those back into contact
+   * rather than refusing the drop. That arrives as a layout for several zones, and it has to
+   * land in one write — applied one zone at a time, the intermediate states are fragmented
+   * colonies, and any roster pass that ran between them would throw the layout memory away and
+   * re-seed the whole map, which is the exact jump the drag exists to prevent.
+   *
+   * Bookkeeping only, like `movePlot`: the caller re-runs the roster pass, and the signature
+   * diff in `_syncPlots` raises each moved zone on its new ground.
+   */
+  applyLayout(layout) {
+    if (!layout) return
+    for (const [name, cells] of layout) {
+      if (this.plotCells.has(name)) this.plotCells.set(name, cells)
+    }
+  }
+
+  /**
    * Cosmetic lift while a zone is being dragged. Safe to fake with a raw y-offset because
    * nothing consults it — the real move is a rebuild on drop, and a cancelled drag sets it
    * back to zero. Buildings ride along by position: they live in the world group, not the

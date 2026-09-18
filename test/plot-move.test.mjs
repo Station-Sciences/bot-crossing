@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { SHIP_CELL, isConnected, moveIsValid, translateCells } from '../src/world/plot-move.js'
+import { SHIP_CELL, componentsOf, isConnected, moveIsValid, planMove, translateCells } from '../src/world/plot-move.js'
 
 const layout = (zones) => new Map(Object.entries(zones))
 
@@ -64,3 +64,88 @@ test('the ship bridges two zones without counting as one', () => {
   const bridged = layout({ a: [{ q: -2, r: 0 }], b: [{ q: -2, r: 2 }] })
   assert.equal(isConnected(bridged), true)
 })
+
+// ── carrying a zone out from between its neighbours ───────────────────────────
+
+/** Names of each group, sorted, so a component split is easy to assert on. */
+const groups = (l) => componentsOf(l).map((g) => [...g].sort().join('+')).sort()
+
+test('a colony that has not fragmented is one group', () => {
+  const zones = layout({ a: [{ q: 0, r: 0 }], b: [{ q: 1, r: 0 }], c: [{ q: 2, r: 0 }] })
+  assert.deepEqual(groups(zones), ['a+b+c'])
+})
+
+test('components split where the cells stop touching', () => {
+  const zones = layout({ a: [{ q: 0, r: 0 }], b: [{ q: 6, r: 0 }], c: [{ q: 7, r: 0 }] })
+  assert.deepEqual(groups(zones), ['a', 'b+c'])
+})
+
+test('carrying the middle zone away no longer refuses — the stranded one follows', () => {
+  // a — b — c in a row. b swings round to a's other side, which cuts c loose: its only
+  // neighbour was b. Lifting b out of the middle like this used to be refused outright.
+  const zones = layout({ a: [{ q: 0, r: 0 }], b: [{ q: 1, r: 0 }], c: [{ q: 2, r: 0 }] })
+  assert.equal(moveIsValid(zones, 'b', -1, 1), false, 'the old rule still says it splits the colony')
+
+  const after = planMove(zones, 'b', -1, 1)
+  assert.ok(after, 'but the drop is allowed now')
+  assert.deepEqual(after.get('b'), [{ q: 0, r: 1 }], 'b lands exactly where it was dropped')
+  assert.equal(isConnected(after), true, 'and the colony is whole again')
+})
+
+test('a stranded group keeps its own shape and spacing', () => {
+  // c and d sit together past b; swinging b round to a's far side strands them as one body.
+  const zones = layout({
+    a: [{ q: 0, r: 0 }],
+    b: [{ q: 1, r: 0 }],
+    c: [{ q: 2, r: 0 }],
+    d: [{ q: 3, r: 0 }],
+  })
+  const after = planMove(zones, 'b', -2, 1)
+  assert.ok(after)
+  const [c] = after.get('c')
+  const [d] = after.get('d')
+  assert.equal(hexStep(c, d), 1, 'c and d are still neighbours, carried as one piece')
+  assert.equal(isConnected(after), true)
+})
+
+test('the zone you dropped is the one that does not move', () => {
+  const zones = layout({ a: [{ q: 0, r: 0 }], b: [{ q: 1, r: 0 }], c: [{ q: 2, r: 0 }] })
+  const after = planMove(zones, 'b', -1, 1)
+  assert.ok(after)
+  assert.deepEqual(after.get('b'), [{ q: 0, r: 1 }], 'exactly where the cursor left it')
+  assert.deepEqual(after.get('a'), [{ q: 0, r: 0 }], 'what it landed against did not budge')
+})
+
+test('a drop onto an occupied cell is still refused', () => {
+  const zones = layout({ a: [{ q: 0, r: 0 }], b: [{ q: 1, r: 0 }] })
+  assert.equal(planMove(zones, 'b', -1, 0), null)
+})
+
+test('a drop past the pool is still refused', () => {
+  const zones = layout({ a: [{ q: 0, r: 0 }], b: [{ q: 1, r: 0 }] })
+  assert.equal(planMove(zones, 'b', 40, 0), null)
+})
+
+test('a move that keeps contact asks nobody else to move', () => {
+  // c swings from the end of the row round to b's other side; the chain never breaks.
+  const zones = layout({ a: [{ q: 0, r: 0 }], b: [{ q: 1, r: 0 }], c: [{ q: 2, r: 0 }] })
+  const after = planMove(zones, 'c', -1, 1)
+  assert.ok(after)
+  assert.deepEqual(after.get('c'), [{ q: 1, r: 1 }])
+  assert.deepEqual(after.get('a'), [{ q: 0, r: 0 }], 'nobody else was asked to move')
+  assert.deepEqual(after.get('b'), [{ q: 1, r: 0 }])
+})
+
+test('a drop into open ground is refused rather than dragging the colony over to meet it', () => {
+  // Without this the move is still "legal" — the rest of the map would simply slide across to
+  // reach it, so nudging one zone into the sea rearranges everything else to chase it.
+  const zones = layout({ a: [{ q: 0, r: 0 }], b: [{ q: 1, r: 0 }], c: [{ q: 2, r: 0 }] })
+  assert.equal(planMove(zones, 'b', 0, 6), null)
+  // A lone zone has nothing to touch, so the rule does not apply to it.
+  const only = layout({ a: [{ q: 0, r: 0 }] })
+  assert.ok(planMove(only, 'a', 0, 3))
+})
+
+function hexStep(a, b) {
+  return (Math.abs(a.q - b.q) + Math.abs(a.q + a.r - b.q - b.r) + Math.abs(a.r - b.r)) / 2
+}
