@@ -266,7 +266,7 @@ export class Hud {
       )
     )
     view.append(
-      this._toggle('Follow selected agent', 'followSelected', 'Tracks the selected agent until you deselect. Drag to pan, right-drag to orbit, and scroll to zoom.'),
+      this._toggle('Follow selected bot', 'followSelected', 'Tracks the selected bot until you deselect. Drag to pan, right-drag to orbit, and scroll to zoom.'),
       this._toggle('Return to isometric', 'autoFrame', 'Eases the angle back when you stop dragging.'),
       this._slider('Field of view', 'fov', 20, 60, 1, (v) => `${v}°`),
       this._toggle('Project labels', 'showLabels'),
@@ -479,7 +479,7 @@ export class Hud {
   syncSettings() {
     const follow = Boolean(this.settings.get('followSelected'))
     this.$('#btn-follow').setAttribute('aria-pressed', String(follow))
-    this.$('#btn-follow').title = follow ? 'Stop following selected agent' : 'Follow selected agent'
+    this.$('#btn-follow').title = follow ? 'Stop following selected bot' : 'Follow selected bot'
     for (const c of this.controls) c.sync()
     this.$('.fps').classList.toggle('on', Boolean(this.settings.get('showFps')))
     const sound = Boolean(this.settings.get('sound'))
@@ -1135,7 +1135,7 @@ const TEMPLATE = `
       <div class="title"></div>
       <div class="meta"></div>
     </div>
-    <button class="btn icon ghost" id="btn-follow" title="Follow selected agent" aria-label="Follow selected agent" aria-pressed="false">${ICON.locate}</button>
+    <button class="btn icon ghost" id="btn-follow" title="Follow selected bot" aria-label="Follow selected bot" aria-pressed="false">${ICON.locate}</button>
     <button class="btn icon ghost" id="btn-deselect" title="Deselect (Esc)">${ICON.close}</button>
   </div>
   <div class="progress"><i></i></div>
