@@ -634,6 +634,37 @@ async function listing(dir) {
   return out.sort()
 }
 
+test('on a duplicate session id across two project dirs, the newer file wins', async () => {
+  // A session id is only unique per directory it has run in: resuming one from a git worktree
+  // writes a second `<id>.jsonl` under a different project dir rather than moving the first,
+  // and relocating it back out leaves the worktree's copy stale. Directory names are chosen so
+  // that a plain "last one written to the map wins" (no mtime check at all) would pick the
+  // stale one — `-tmp-worktree` sorts after `-tmp-live` in `readdir`'s own order.
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-dup-'))
+  const configDir = path.join(root, 'claude')
+  const liveProject = path.join(configDir, 'projects', '-tmp-live')
+  const staleProject = path.join(configDir, 'projects', '-tmp-worktree')
+  await fsp.mkdir(liveProject, { recursive: true })
+  await fsp.mkdir(staleProject, { recursive: true })
+  await fsp.writeFile(
+    path.join(liveProject, `${SESSION_ID}.jsonl`),
+    `${JSON.stringify(typed('the live session, still being written'))}\n`
+  )
+  await fsp.writeFile(
+    path.join(staleProject, `${SESSION_ID}.jsonl`),
+    `${JSON.stringify(typed('stale copy left behind in a worktree'))}\n`
+  )
+  const now = Date.now()
+  await fsp.utimes(path.join(staleProject, `${SESSION_ID}.jsonl`), new Date(now - 60_000), new Date(now - 60_000))
+  await fsp.utimes(path.join(liveProject, `${SESSION_ID}.jsonl`), new Date(now), new Date(now))
+
+  const h = await claudeWith({ configDir, desktop: path.join(root, 'claude-code-sessions') })
+  const threads = await h.scanThreads()
+  assert.equal(threads.length, 1, 'one session id is one thread, whichever directory won')
+  assert.equal(threads[0].preview, 'the live session, still being written')
+  await fsp.rm(root, { recursive: true, force: true })
+})
+
 test('a thread deleted in the desktop app is reported archived, not dropped', async () => {
   const fx = await fakeClaude({ transcript: [typed('tidy the ledger')] })
   const h = await claudeWith(fx)

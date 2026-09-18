@@ -217,7 +217,16 @@ function decodeProjectDir(name) {
   return name.startsWith('-') ? '/' + name.slice(1).replace(/-/g, '/') : name
 }
 
-/** Index every CLI transcript on disk, keyed by session id. */
+/**
+ * Index every CLI transcript on disk, keyed by session id.
+ *
+ * A session id is only unique *per directory* it has ever run in — resuming it from a git
+ * worktree, or any other second checkout, writes a second `<id>.jsonl` under a different
+ * `projectDir` rather than moving the first. Without a tiebreaker the later `listDirs` entry
+ * would win regardless of which copy is actually live, so a worktree's now-stale copy could
+ * overwrite the real one just by sorting after it. The newer file is always the live one: an
+ * abandoned copy stops being written to the moment the session moves on.
+ */
 async function scanTranscripts() {
   const byId = new Map()
   for (const projectDir of await listDirs(CLI_PROJECTS)) {
@@ -229,6 +238,8 @@ async function scanTranscripts() {
       } catch {
         continue
       }
+      const existing = byId.get(id)
+      if (existing && existing.mtime >= stat.mtimeMs) continue
       byId.set(id, { id, file, projectDir, size: stat.size, mtime: stat.mtimeMs })
     }
   }
