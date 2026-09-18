@@ -32,7 +32,7 @@ all go through a `harness://` deep link handed to the OS opener — `open(1)` on
 `xdg-open` on Linux, ShellExecute on Windows. The scanning half was portable already. On Linux,
 where a desktop app often is not installed, the scheme is checked first and a terminal running
 the harness's own CLI opens instead when nothing answers it.
-A setting, *Open threads in*, makes the terminal the first choice rather than the fallback, on Linux and macOS.
+A setting, *Open threads in*, makes the terminal the first choice rather than the fallback, on all three.
 
 ## Which harnesses work
 
@@ -77,6 +77,7 @@ than have you work around it.
 | --- | --- |
 | One hex zone | One repo. Bigger repos claim more tiles — one per seven threads, grown as a contiguous blob from the middle outward. A zone stays where it is: see below |
 | One bot + one building | One session |
+| A bot with no building of its own | An errand that session has out right now — a subagent |
 | How finished a building looks | How large its transcript is, on a log scale |
 | Scaffolding | Somebody is at that site right now |
 | Walking out of the ship | A thread that just appeared |
@@ -96,6 +97,14 @@ so gaining one does not drag its buildings, its bots and its name sideways; the 
 simply appears alongside. And the arrangement is written to `data/colony.json`, so the map
 you have learned survives a reload — including for a repo whose last thread you archived,
 which comes back to the same ground when you start a new one.
+
+**And a zone can be carried.** Press and hold one, drag it, drop it on ground that is free: the
+footprint follows the cursor as rounded tiles, green where it will land and red where it will not.
+A zone other zones were leaning on used to refuse to move at all, because the allocator throws the
+whole layout away when the colony breaks into islands. Now the drop stands and whatever it cut
+loose is slid back into contact, each stranded group moving as one body so an arrangement you made
+by hand is not reshuffled around you. Two things are still refused: a drop that lands nowhere near
+the colony, and one that would leave the zone holding a corner of the map on its own.
 
 The version before this was a pure function of the thread counts: one session appearing
 anywhere changed the sort order, the order decided the tiles, and the whole colony re-laid
@@ -197,10 +206,17 @@ flipping to its left rather than sliding under the sidebar, and never leaving th
 It is moved with a transform rather than with `left`/`top`, the one geometric change a
 browser makes without touching layout, so following a walking bot costs nothing.
 
+The camera follows the bot you picked, which is on by default — you clicked it to watch it, and a
+working bot rarely stands still long enough to be watched otherwise. Panning, orbiting and zooming
+all still work while it follows; deselecting stops it, and the crosshair on the card turns it off
+for good if you would rather the view stayed put.
+
 - **Open** hands the thread back to whichever harness owns it and its app comes forward. On a
   Linux box with no desktop app to answer the deep link, a terminal opens with the CLI resuming
   the session instead.
-  *Open threads in: Terminal*, in settings, asks for that every time, on Linux and macOS.
+  *Open threads in: Terminal*, in settings, asks for that every time, on any of the three. On Windows a
+  thread that is already running in a terminal gets that window fronted instead of a second copy of
+  itself imported into the desktop app.
 - **Viewed** (`V`), on a thread that is asking for you, puts its hand down. The harness only
   counts a thread as read once it has been focused in its own app, so one you answered in a
   terminal waves for good. This records when you looked, and the thread starts asking again the
