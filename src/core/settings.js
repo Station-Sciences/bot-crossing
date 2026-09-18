@@ -189,10 +189,17 @@ const DEFAULTS = {
   // Behaviour
   autoQuality: true, // drop render scale when frames get expensive
   autoFrame: false, // ease the camera back to isometric when you stop dragging; opt-in
-  followSelected: false, // track the selected agent while retaining manual camera controls
+  // On by default: picking a bot is nearly always the start of watching it, and having to find
+  // the toggle first meant the one you clicked had usually walked off before you got there.
+  followSelected: true, // track the selected bot while retaining manual camera controls
+  /** Set once when the follow default flipped on, so the migration never runs twice. */
+  followDefaultOn: false,
   showFps: false,
   showLabels: true,
   reducedMotion: false,
+
+  // Opening
+  openIn: 'app', // 'app' | 'terminal' — the harness's desktop app, or its CLI in a new window
 }
 
 /** Keys whose change forces a full rebuild of the world (terrain, scatter, sky). */
@@ -222,6 +229,13 @@ export class Settings {
     // An existing Low/Potato install should not inherit Balanced's new effect by accident.
     if (!Object.hasOwn(stored, 'ambientOcclusion')) {
       this.values.ambientOcclusion = PRESETS[this.values.preset]?.values.ambientOcclusion ?? DEFAULTS.ambientOcclusion
+    }
+    // Following the selected bot used to be opt-in, so every existing colony has `false` stored
+    // against it and a changed default would never reach one. Turned on once, and remembered as
+    // done — otherwise this would fight anybody who turns it back off, every single boot.
+    if (!Object.hasOwn(stored, 'followDefaultOn')) {
+      this.values.followSelected = true
+      this.values.followDefaultOn = true
     }
     this.listeners = new Set()
     this._saveTimer = 0

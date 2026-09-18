@@ -129,6 +129,9 @@ export const PLANETS = {
     name: 'Dune',
     blurb: 'Sand seas, heat haze, and a sky that goes on forever.',
     ground: { low: 0xc2884a, high: 0xefc07a, tint: 0xfbe0a8 },
+    // Clay on the hull. The neutral structural swatches lean toward this, so the same kit
+    // reads as adobe here without a second set of models — see `buildingTint` in buildings.js.
+    buildingTint: 0xc9a176,
     rock: 0xb0703f,
     horizon: 0xf6d6a8,
     sky: { top: 0x3a86d8, bottom: 0xf8dfb8 },

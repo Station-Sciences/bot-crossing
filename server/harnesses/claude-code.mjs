@@ -10,7 +10,8 @@
  * archiving in `server/harnesses/README.md`.
  *
  * Two stores, deliberately merged rather than picked between:
- *   - the desktop app keeps one JSON record per thread (title, cwd, model, timestamps)
+ *   - the desktop app keeps one JSON record per thread (title, cwd, model, timestamps), and
+ *     leaves a marker behind for each thread deleted in it
  *   - the CLI keeps the raw transcript, which is the only source for terminal-started work
  */
 import fsp from 'node:fs/promises'
@@ -32,8 +33,27 @@ function desktopDataDir() {
     case 'linux':
       return path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'Claude')
     default:
-      return path.join(HOME, 'Library', 'Application Support', 'Claude')
+      return macDataDir()
   }
+}
+
+/**
+ * macOS has two answers as well, because the app ships under two Electron app names: the
+ * classic `Claude`, and `Claude-3p`, which is what a current install writes to. Both can be
+ * present at once — an older install leaves an empty `Claude` behind, and an empty directory
+ * is indistinguishable from the app never having been installed. Hard-coding `Claude` there
+ * means every desktop thread is missed, and the colony falls back to drawing the CLI
+ * transcript alone: no title, no model, and `Open` resorts to `claude://resume`, which
+ * imports rather than navigates.
+ *
+ * So pick whichever one actually holds session records, the same rule windowsDataDir uses
+ * below — and, like it, resolved once at import, so installing the app under the colony
+ * wants a restart to be noticed.
+ */
+function macDataDir() {
+  const support = path.join(HOME, 'Library', 'Application Support')
+  const candidates = [path.join(support, 'Claude-3p'), path.join(support, 'Claude')]
+  return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || candidates[1]
 }
 
 /**
@@ -71,12 +91,22 @@ function windowsDataDir() {
   return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || roaming
 }
 
+/**
+ * Both roots take an override, which is how the tests fake an install without touching a real
+ * one. `CLAUDE_CONFIG_DIR` is the CLI's own: a shell that sets it has its transcripts written
+ * there, so the variable that moves the CLI's home moves where the colony looks for it too.
+ * `BOT_CROSSING_CLAUDE_DESKTOP` names the session store itself, the sibling of Cursor's
+ * `BOT_CROSSING_CURSOR_PROJECTS`.
+ */
 /** Where the Claude desktop app keeps one JSON record per thread. */
-const DESKTOP_SESSIONS = path.join(desktopDataDir(), 'claude-code-sessions')
+const DESKTOP_SESSIONS =
+  process.env.BOT_CROSSING_CLAUDE_DESKTOP || path.join(desktopDataDir(), 'claude-code-sessions')
+/** The CLI's home: `~/.claude`, unless the CLI itself has been told otherwise. */
+const CLI_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude')
 /** Where the CLI keeps the raw transcript: ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl */
-const CLI_PROJECTS = path.join(HOME, '.claude', 'projects')
+const CLI_PROJECTS = path.join(CLI_HOME, 'projects')
 /** One file per live CLI process: {pid, sessionId, cwd, ...}. Stale files outlive their pid. */
-const CLI_LIVE = path.join(HOME, '.claude', 'sessions')
+const CLI_LIVE = path.join(CLI_HOME, 'sessions')
 
 const HEAD_BYTES = 192 * 1024
 
@@ -87,6 +117,21 @@ const HEAD_BYTES = 192 * 1024
  * warmed ones sat 16 hours to 3 days idle while genuinely active work was minutes old.
  */
 const ACTIVE_WINDOW_MS = 30 * 60 * 1000
+
+/**
+ * How long a subagent's transcript may sit untouched before its errand counts as abandoned.
+ * A subagent runs inside its parent's process, so the pid probe the rest of this file uses does
+ * not exist for it, and one that is thinking writes nothing for minutes at a time — at two or
+ * three minutes they blink out while still working.
+ */
+const SUBAGENT_WINDOW_MS = 10 * 60 * 1000
+
+/**
+ * A brief can be long: 36 of 147 transcripts on this machine open with more than 8 KB, the
+ * largest at 17 KB. `readHead` drops a trailing partial line, so a head that is too small yields
+ * nothing at all rather than a truncated task.
+ */
+const SUBAGENT_HEAD_BYTES = 64 * 1024
 
 /**
  * Every id this adapter hands out is prefixed. `server/harnesses/README.md` asks for ids unique
@@ -267,21 +312,105 @@ async function scanLiveSessions() {
   return live
 }
 
-/** Every thread the desktop app has a record for. */
+/** Briefs, kept until the file changes — the mtime cache `transcriptMeta` establishes. */
+const subagentCache = new Map()
+
+/** The prompt a parent handed its subagent, which is the only thing about an errand worth showing. */
+async function subagentTask(file, mtime) {
+  const cached = subagentCache.get(file)
+  if (cached && cached.mtime === mtime) return cached.task
+  let task = ''
+  // Not simply the first record, and sometimes not there at all: a forked subagent opens with a
+  // `fork-context-ref` and inherits its parent's context instead of being briefed, so it has no
+  // task text to find. Same test `readTranscriptMeta` puts to a thread's first prompt.
+  for (const record of jsonLines(await readHead(file, SUBAGENT_HEAD_BYTES).catch(() => ''))) {
+    if (record.type !== 'user' || !record.message) continue
+    const text = cleanPrompt(firstText(record.message.content))
+    if (text && !text.startsWith('<')) {
+      task = text
+      break
+    }
+  }
+  subagentCache.set(file, { mtime, task })
+  return task
+}
+
+/**
+ * The subagents a session has out right now, keyed by the session that sent them. Their
+ * transcripts live one level below the session's own, in
+ * `<project>/<sessionId>/subagents/agent-<id>.jsonl`.
+ *
+ * Only sessions with a live process are walked. Every other session on disk has subagent
+ * transcripts too, and all of that work would be thrown away: an errand cannot outlive the
+ * process running it.
+ */
+async function scanSubagents(livePending) {
+  const byParent = new Map()
+  const live = await livePending
+  if (!live.size) return byParent
+  const seen = new Set()
+  const cutoff = Date.now() - SUBAGENT_WINDOW_MS
+  for (const projectDir of await listDirs(CLI_PROJECTS)) {
+    for (const sessionDir of await listDirs(projectDir)) {
+      const parent = path.basename(sessionDir)
+      if (!live.has(parent)) continue
+      const dir = path.join(sessionDir, 'subagents')
+      for (const file of await listFiles(dir, (n) => n.endsWith('.jsonl'))) {
+        const stat = await fsp.stat(file).catch(() => null)
+        if (!stat || stat.mtimeMs < cutoff) continue
+        // A subagent that has handed its answer back is finished however recently it wrote —
+        // the same question `awaitingReply` asks of a thread, put to the errand's own transcript.
+        seen.add(file)
+        if (await awaitingReply(file)) continue
+        const out = byParent.get(parent) || []
+        out.push({
+          id: path.basename(file, '.jsonl'),
+          task: await subagentTask(file, stat.mtimeMs),
+          lastActivityAt: stat.mtimeMs,
+        })
+        byParent.set(parent, out)
+      }
+    }
+  }
+  // Errands are many and short-lived, so the cache is pruned to what this pass actually saw
+  // rather than growing for the life of the process the way the thread cache can afford to.
+  for (const file of subagentCache.keys()) {
+    if (!seen.has(file)) subagentCache.delete(file)
+  }
+  return byParent
+}
+
+/**
+ * What deleting a thread in the desktop app leaves behind, in the folder its record was in:
+ * `deleted_<cliSessionId>`, holding the deletion time in epoch ms. The record goes; the CLI
+ * transcript does not. Without the marker that transcript is indistinguishable from a thread
+ * started in a terminal, so a thread you had got rid of walked straight back onto the map as one.
+ */
+const DELETED_MARKER = /^deleted_(.+)$/
+const isRecord = (name) => name.startsWith('local_') && name.endsWith('.json')
+
+/** Every thread the desktop app has a record for, and the ids of the ones it has deleted. */
 async function scanDesktopSessions() {
-  const out = []
+  const records = []
+  const deleted = new Set()
   for (const account of await listDirs(DESKTOP_SESSIONS)) {
     for (const org of await listDirs(account)) {
-      for (const file of await listFiles(org, (n) => n.startsWith('local_') && n.endsWith('.json'))) {
+      for (const file of await listFiles(org, (n) => isRecord(n) || DELETED_MARKER.test(n))) {
+        const marker = DELETED_MARKER.exec(path.basename(file))
+        if (marker) {
+          // Only the name is read. When it was deleted is not something the map shows.
+          if (isCliId(marker[1])) deleted.add(marker[1])
+          continue
+        }
         try {
-          out.push(JSON.parse(await fsp.readFile(file, 'utf8')))
+          records.push(JSON.parse(await fsp.readFile(file, 'utf8')))
         } catch {
           /* a session mid-write — skip this pass */
         }
       }
     }
   }
-  return out
+  return { records, deleted }
 }
 
 /**
@@ -340,10 +469,14 @@ function toThread(t) {
 }
 
 async function scanThreads() {
-  const [desktop, transcripts, live] = await Promise.all([
+  // The subagent walk needs the live set, and waiting for it here would serialise scans the
+  // README says must never block — so it is handed the promise and waits on it itself.
+  const livePending = scanLiveSessions()
+  const [{ records: desktop, deleted }, transcripts, live, subagents] = await Promise.all([
     scanDesktopSessions(),
     scanTranscripts(),
-    scanLiveSessions(),
+    livePending,
+    scanSubagents(livePending),
   ])
   const byId = new Map()
   const add = (thread) => {
@@ -403,7 +536,8 @@ async function scanThreads() {
     })
   }
 
-  // Transcripts with no desktop record — usually threads started straight from the terminal.
+  // Transcripts with no desktop record — threads started straight from the terminal, and threads
+  // the app has since deleted.
   for (const [id, entry] of transcripts) {
     if (claimed.has(id)) continue
     const meta = await transcriptMeta(entry)
@@ -433,7 +567,13 @@ async function scanThreads() {
       starred: false,
       routine: '',
       prState: '',
-      archived: false,
+      // Deleted in the app, and reported the way an archive made there is. `archived` is the
+      // read-only field an adapter has for "gone from the harness's own UI", and the colony sends
+      // the astronaut home for it exactly as it does for an archive of its own — rather than the
+      // thread simply vanishing from one scan to the next. Only a transcript with no record left
+      // qualifies: resuming a deleted thread makes the app write a fresh record while the marker
+      // stays behind, and a record that exists is the newer truth.
+      archived: deleted.has(id),
       hasTranscript: true,
       sizeBytes: entry.size,
       transcriptFile: entry?.file || '',
@@ -476,28 +616,59 @@ async function scanThreads() {
     // A thread that handed the turn back wants you, whether or not the desktop app has ever seen
     // it — the only way a terminal-only thread can ask for anything at all.
     if (waiting) thread.unread = true
+    const errands = subagents.get(thread.cliSessionId)
+    if (errands) thread.subagents = errands
   }
   return threads.map(toThread)
 }
 
 /**
  * Where the `claude` CLI is, for a machine that has it but no desktop app to answer the deep
- * link. PATH first, then the places its installers put it — never inside an application bundle.
- * Only Linux asks: on macOS and Windows the deep link is always answered, so the walk is wasted.
+ * link, or a page that would rather have a terminal. PATH first, then the places its installers
+ * put it — never inside an application bundle.
  */
 const CLI_DIRS = [
   path.join(HOME, '.local', 'bin'),
   path.join(HOME, '.claude', 'local'),
+  '/opt/homebrew/bin',
   '/usr/local/bin',
   '/usr/bin',
 ]
 const cliBinary = () => findExecutable('claude', CLI_DIRS)
 
 /**
+ * The pid of the live CLI process behind a session, if any. Same registry and same caveat as
+ * `scanLiveSessions`: files outlive their pids, so the pid is probed before it counts.
+ */
+async function liveSessionPid(sessionId) {
+  for (const file of await listFiles(CLI_LIVE, (n) => n.endsWith('.json'))) {
+    let record
+    try {
+      record = JSON.parse(await fsp.readFile(file, 'utf8'))
+    } catch {
+      continue
+    }
+    if (record.sessionId !== sessionId || !record.pid) continue
+    try {
+      process.kill(record.pid, 0)
+      return record.pid
+    } catch {
+      /* process is gone */
+    }
+  }
+  return 0
+}
+
+/**
  * Hands the thread back to Claude Code. `epitaxy/<local_…>` *navigates* the desktop app
  * to a thread it already has; `resume` *imports* the transcript, which spawns a second
  * untitled session and rewrites the .jsonl — so it is only ever the fallback for threads
  * the app has never seen. Ids are pattern-checked before they reach the opener.
+ *
+ * A terminal-started thread that is still running gets its live pid handed along too: it
+ * already has a window somewhere on this machine, and fronting that window is a better answer
+ * than `resume` importing the transcript into the desktop app as a second, untitled session.
+ * Whether and how to front it is the server's call — see `server/lib/windows.mjs`.
  */
 async function openThread(ref) {
   const { desktopSessionId, cliSessionId, cwd } = ref || {}
@@ -505,14 +676,19 @@ async function openThread(ref) {
   if (isDesktopId(desktopSessionId)) url = `claude://claude.ai/epitaxy/${desktopSessionId}`
   else if (isCliId(cliSessionId)) url = `claude://resume?session=${cliSessionId}`
 
+  // Only threads the desktop app has never seen: for the rest the deep link navigates to the
+  // tab the app already has, which is exactly the right window to front.
+  let pid = 0
+  if (!isDesktopId(desktopSessionId) && isCliId(cliSessionId)) pid = await liveSessionPid(cliSessionId)
+
   let command
-  if (process.platform === 'linux' && isCliId(cliSessionId)) {
+  if (isCliId(cliSessionId)) {
     const bin = await cliBinary()
     if (bin) command = { argv: [bin, '--resume', cliSessionId], cwd: typeof cwd === 'string' ? cwd : '' }
   }
 
   if (!url && !command) return { ok: false, error: 'No openable session id on that thread' }
-  return { ok: true, url, command }
+  return { ok: true, url, command, pid }
 }
 
 /**
@@ -522,11 +698,8 @@ async function openThread(ref) {
  */
 async function newSession(dir) {
   const url = `claude://code/new?${new URLSearchParams({ folder: dir })}`
-  let command
-  if (process.platform === 'linux') {
-    const bin = await cliBinary()
-    if (bin) command = { argv: [bin], cwd: dir }
-  }
+  const bin = await cliBinary()
+  const command = bin ? { argv: [bin], cwd: dir } : undefined
   return { ok: true, url, command }
 }
 

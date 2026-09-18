@@ -102,19 +102,45 @@ test('deselect/disable stops immediately, switching follows the new agent, and r
   near(rig.target.clone().sub(agent.pos), new THREE.Vector3(0, 0.65, 0))
 })
 
-test('follow preference defaults off, persists, and does not rebuild rendering or change quality', () => {
+test('follow preference defaults on, persists, and does not rebuild rendering or change quality', () => {
   const old = globalThis.localStorage
   let stored = '{}'
   globalThis.localStorage = { getItem: () => stored, setItem() {} }
   try {
     const settings = new Settings()
-    assert.equal(settings.get('followSelected'), false)
+    assert.equal(settings.get('followSelected'), true)
     settings.onChange((_, scope) => assert.deepEqual(scope, { world: false, render: false }))
-    settings.set('followSelected', true)
+    settings.set('followSelected', false)
     assert.equal(settings.get('preset'), 'balanced')
     stored = JSON.stringify(settings.values)
     clearTimeout(settings._saveTimer)
-    assert.equal(new Settings().get('followSelected'), true)
+    assert.equal(new Settings().get('followSelected'), false, 'turning it off survives a reload')
+  } finally {
+    if (old === undefined) delete globalThis.localStorage
+    else globalThis.localStorage = old
+  }
+})
+
+/**
+ * Follow was opt-in before, so every colony that already existed has `followSelected: false`
+ * written against it — a changed default alone would never reach one. It is turned on once and
+ * the fact recorded, because a migration that cannot tell "never asked" from "asked for off"
+ * would switch it back on at every single boot.
+ */
+test('an existing colony is switched to following once, and only once', () => {
+  const old = globalThis.localStorage
+  let stored = JSON.stringify({ preset: 'balanced', followSelected: false })
+  globalThis.localStorage = { getItem: () => stored, setItem() {} }
+  try {
+    const migrated = new Settings()
+    assert.equal(migrated.get('followSelected'), true, 'the old colony starts following')
+    clearTimeout(migrated._saveTimer)
+
+    // Now turn it off again, the way somebody who does not want it would.
+    migrated.set('followSelected', false)
+    stored = JSON.stringify(migrated.values)
+    clearTimeout(migrated._saveTimer)
+    assert.equal(new Settings().get('followSelected'), false, 'and it stays off — the migration is done')
   } finally {
     if (old === undefined) delete globalThis.localStorage
     else globalThis.localStorage = old

@@ -1,6 +1,6 @@
 # Harness adapters
 
-A **harness** is whatever runs the agent threads you want to see as astronauts — Claude Code,
+A **harness** is whatever runs the agent threads you want to see as bots — Claude Code,
 Codex CLI, OpenCode, and so on. Bot Crossing does not care which one you use: it asks every
 harness present on the machine for its threads and draws whatever comes back.
 
@@ -18,8 +18,8 @@ export default {
   name: 'My Harness',            // what a human sees in the UI
   detect,                        // () => Promise<boolean>
   scanThreads,                   // () => Promise<Thread[]>
-  openThread,                    // (ref) => { ok, url } | { ok: false, error }
-  newSession,                    // (dir) => { ok, url } | { ok: false, error }
+  openThread,                    // (ref) => { ok, url, command? } | { ok: false, error }
+  newSession,                    // (dir) => { ok, url, command? } | { ok: false, error }
 }
 ```
 
@@ -34,7 +34,7 @@ export const HARNESSES = [claudeCode, myHarness]
 
 Is this harness on this machine at all? Usually just "does its data directory exist". Cheap —
 it runs on every scan, so that installing a harness while the colony is open is noticed on the
-next poll. Returning `false` means the harness is skipped entirely, and no astronaut for it
+next poll. Returning `false` means the harness is skipped entirely, and no bot for it
 ever appears.
 
 ### `scanThreads()`
@@ -50,6 +50,10 @@ Return `{ ok: true, url }` and the server hands that URL to the OS opener. `open
 the `ref` from the thread it belongs to; `newSession` gets an absolute directory that the
 server has already checked still exists.
 
+Add `command: { argv, cwd }` — the harness's own CLI resuming the same thread, with an absolute `argv[0]` —
+when the CLI is installed, and the server runs it in a terminal for a machine with no desktop app or a person who asked for one.
+Never spawn it yourself.
+
 If your harness has no deep link, return `{ ok: false, error: '…' }` and say why — the UI
 shows the message rather than pretending the click worked.
 
@@ -57,7 +61,7 @@ shows the message rather than pretending the click worked.
 
 Bot Crossing does not write to a harness. Not the transcripts, not the session records, not one
 flag. Archiving is recorded in `data/colony.json` and nowhere else: the thread leaves the map and
-the astronaut walks back to the ship.
+the bot walks back to the ship.
 
 It used to write one flag — `isArchived` on Claude Code's own session record — and that write
 genuinely landed on disk. It just did not *mean* anything: the desktop app serves from the copy it
@@ -67,7 +71,7 @@ every scan, a `ps` sweep to guess whether the app had re-read the file, and a *p
 the gap between them. All of that is gone, and the scan no longer starts a subprocess at all.
 
 Archiving in the harness's own UI still works and is still the right way to do it — your adapter
-reports it through the `archived` field and the astronaut goes home on the next poll.
+reports it through the `archived` field and the bot goes home on the next poll.
 
 ## The `Thread` your adapter returns
 
@@ -88,14 +92,15 @@ what earns a repo its own zone, and `lastActivityAt` is what sorts the whole map
 | `createdAt` | number | Epoch ms |
 | `lastActivityAt` | number | Epoch ms. Sorts the colony and drives the "asleep for 3 days" behaviour |
 | `lastFocusedAt` | number | Epoch ms, `0` if unknowable |
-| `running` | boolean | Working **right now** — the astronaut hammers away |
-| `unread` | boolean | Moved on since you last looked — the astronaut stops and holds a `?` |
-| `hasError` | boolean | Errored — the astronaut slumps, red eyes |
+| `running` | boolean | Working **right now** — the bot hammers away |
+| `unread` | boolean | Moved on since you last looked — the bot stops and holds a `?` |
+| `hasError` | boolean | Errored — the bot slumps, red eyes |
 | `starred` / `routine` / `prState` | | Optional extras; `prState: 'merged'` triggers the confetti |
 | `archived` | boolean | Archived in the harness's own records. Read-only — reporting it is all an adapter does |
 | `sizeBytes` | number | Transcript size. **This is how finished a building looks**, on a log scale |
 | `source` | string | Free-form, for your own bookkeeping (the Claude adapter uses `desktop` / `cli`) |
 | `canOpen` | boolean | Whether this thread can be opened. The UI greys the button out |
+| `subagents` | array | Optional. Errands this thread has out *right now*: `{ id, task, lastActivityAt }`. Drawn as small companions at the parent's building — no zone, no badge, not counted. Omit it and nothing changes |
 | `ref` | object | **Opaque.** Whatever *you* need to find this thread again |
 
 ### About `ref`
@@ -123,7 +128,7 @@ Do not put a file handle, a class instance, or a secret in it.
 - **Expect malformed data.** A session being written *right now* is a normal thing to trip
   over. Skip that record and move on; do not throw the pass away.
 - **Never widen `id` collisions.** The colony keys its archive list and saved layout on `id`.
-  Two harnesses handing back the same id would merge two unrelated threads into one astronaut.
+  Two harnesses handing back the same id would merge two unrelated threads into one bot.
 
 ## Starting points
 
@@ -131,9 +136,14 @@ Verified on a real machine:
 
 - **Claude Code** — desktop records in
   `~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_*.json`
-  (`%APPDATA%\Claude\claude-code-sessions\…` on Windows); CLI transcripts in
-  `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`; live processes in
-  `~/.claude/sessions/*.json`. Implemented in `claude-code.mjs`.
+  (`%APPDATA%\Claude\claude-code-sessions\…` on Windows), and in the same folder a
+  `deleted_<cliSessionId>` marker for every thread deleted in the app, holding the deletion time
+  in epoch ms — the record goes, the CLI transcript stays, and the marker is all that tells a
+  deleted thread from one started in a terminal, so the adapter reports it as `archived`; CLI
+  transcripts in `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`; live processes in
+  `~/.claude/sessions/*.json`. `CLAUDE_CONFIG_DIR` (the CLI's own override for `~/.claude`) and
+  `BOT_CROSSING_CLAUDE_DESKTOP` (the session store) point both roots elsewhere, which is how
+  `test/harness.test.mjs` fakes an install. Implemented in `claude-code.mjs`.
 - **Codex CLI** — transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-<iso>-<uuid>.jsonl`,
   with records shaped `{ timestamp, type, payload }`, and what looks like an index at
   `~/.codex/session_index.jsonl`. Not implemented yet.
@@ -167,6 +177,6 @@ a new one should clear too:
      console.log(t.length, "threads"); console.dir(t[0], { depth: 4 })
    })'
    ```
-4. `npm run dev`, then confirm the astronauts appear on the right plots, the thread card fills
+4. `npm run dev`, then confirm the bots appear on the right plots, the thread card fills
    in, and Open does what you expect.
 5. Archive one thread and check it shows as archived **in the harness's own UI**, not just here.

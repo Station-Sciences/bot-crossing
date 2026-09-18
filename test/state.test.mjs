@@ -9,9 +9,8 @@ import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import http from 'node:http'
-
 import { mergeState } from '../src/game/merge-state.js'
+import { withServer } from './support/with-server.mjs'
 
 // ── the three-way merge ───────────────────────────────────────────────────────
 
@@ -53,26 +52,33 @@ test('settings are not merged field-wise — the last tab to touch a slider wins
 
 // ── the API, against a real socket ────────────────────────────────────────────
 
-async function withServer(run) {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-test-'))
-  process.env.BOT_CROSSING_DATA = dir
-  // Imported per-server so DATA_DIR is read fresh; the query string defeats the module cache.
-  const { apiMiddleware } = await import(`../server/api.mjs?${dir}`)
-  const server = http.createServer((req, res) => apiMiddleware(req, res, null))
-  await new Promise((r) => server.listen(0, '127.0.0.1', r))
-  const port = server.address().port
-  const call = (p, opts) =>
-    fetch(`http://127.0.0.1:${port}${p}`, {
-      headers: { Origin: `http://localhost:${port}`, 'Content-Type': 'application/json' },
-      ...opts,
-    })
-  try {
-    await run({ call, dir, put: (b) => call('/api/state', { method: 'PUT', body: JSON.stringify(b) }) })
-  } finally {
-    server.close()
-    await fsp.rm(dir, { recursive: true, force: true })
+// ── the save gate ─────────────────────────────────────────────────────────────
+
+/**
+ * The page boots holding an empty archive list and only swaps it for the real one when the
+ * read resolves. A save inside that window PUTs the empty list, and the server allows it: the
+ * base is still 0, which it reads as a first write. Nothing else catches this — the wipe even
+ * hides itself afterwards, because the scan carries each harness's own archived flag and a
+ * wiped file reads back populated.
+ *
+ * So the refusal has to happen before the request leaves, which is what this asserts: not that
+ * the save fails, but that nothing was sent at all.
+ */
+test('a colony that was never read is not saved — the request never leaves', async () => {
+  const { saveState } = await import('../src/game/api.js')
+  const realFetch = globalThis.fetch
+  let calls = 0
+  globalThis.fetch = async (...args) => {
+    calls++
+    return realFetch(...args)
   }
-}
+  try {
+    await assert.rejects(() => saveState({ archived: [] }), /never read/)
+    assert.equal(calls, 0, 'a colony that was never read must not reach the network')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
 
 test('a v1 file has its bare ids prefixed on read, once', async () => {
   await withServer(async ({ call, dir }) => {

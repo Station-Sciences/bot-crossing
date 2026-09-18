@@ -21,6 +21,7 @@ import {
   PLOT_PALETTE,
   PLOT_CELL,
 } from '../world/plots.js'
+import { translateCells } from '../world/plot-move.js'
 import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
@@ -128,6 +129,7 @@ export class Colony {
     this.renderer = renderer
 
     this.planet = PLANETS[settings.get('planet')] || PLANETS.moon
+    this._applyPlanetTint()
     this.sky = new Sky(scene, settings, renderer)
     this.sky.setPlanet(this.planet)
     // Push the stored time in explicitly. `settings.set` is a no-op when the value has not
@@ -437,8 +439,19 @@ export class Colony {
     if (!planet || planet === this.planet) return
     this.planet = planet
     this.reflections.invalidate()
+    this._applyPlanetTint()
     this.sky.setPlanet(planet)
     this._buildTerrain()
+  }
+
+  /**
+   * The buildings' shared planet-tint uniforms. Shared is the point: every standing
+   * building re-themes on a planet switch without a single rebuild.
+   */
+  _applyPlanetTint() {
+    const tint = this.planet.buildingTint
+    buildingUniforms.uPlanetTint.value.set(tint ?? 0xffffff)
+    buildingUniforms.uPlanetTintAmount.value = tint != null ? 1 : 0
   }
 
   onSettingsChanged(changed, scope) {
@@ -898,6 +911,68 @@ export class Colony {
 
   setHoveredPlot(plot) {
     this.hoveredPlot = plot || null
+  }
+
+  /** The zones actually on the map, name → cells — what a drag validates against. */
+  visibleLayout() {
+    const out = new Map()
+    for (const [name, plot] of this.plots) out.set(name, plot.cells)
+    return out
+  }
+
+  /**
+   * Translate one zone's remembered footprint. Deliberately nothing but the bookkeeping:
+   * the caller re-runs the roster pass, and the signature diff in `_syncPlots` is what
+   * tears the old plot down and raises it on the new ground — moving the group directly
+   * would leave every world coordinate baked into it (centres, slots, label) pointing at
+   * where the zone used to be.
+   */
+  movePlot(name, dq, dr) {
+    const cells = this.plotCells.get(name)
+    if (!cells || (!dq && !dr)) return
+    this.plotCells.set(name, translateCells(cells, dq, dr))
+  }
+
+  /**
+   * Adopt a whole planned layout at once.
+   *
+   * A drag no longer moves only the zone under the cursor: carrying one out from between its
+   * neighbours strands whatever it was bridging, and `planMove` slides those back into contact
+   * rather than refusing the drop. That arrives as a layout for several zones, and it has to
+   * land in one write — applied one zone at a time, the intermediate states are fragmented
+   * colonies, and any roster pass that ran between them would throw the layout memory away and
+   * re-seed the whole map, which is the exact jump the drag exists to prevent.
+   *
+   * Bookkeeping only, like `movePlot`: the caller re-runs the roster pass, and the signature
+   * diff in `_syncPlots` raises each moved zone on its new ground.
+   */
+  applyLayout(layout) {
+    if (!layout) return
+    for (const [name, cells] of layout) {
+      if (this.plotCells.has(name)) this.plotCells.set(name, cells)
+    }
+  }
+
+  /**
+   * Cosmetic lift while a zone is being dragged. Safe to fake with a raw y-offset because
+   * nothing consults it — the real move is a rebuild on drop, and a cancelled drag sets it
+   * back to zero. Buildings ride along by position: they live in the world group, not the
+   * plot's, so raising the group alone would leave them standing on air.
+   */
+  setPlotLift(name, dy) {
+    const plot = this.plots.get(name)
+    if (!plot) return
+    plot.group.position.y = dy
+    if (plot.label) plot.label.position.y = 3.2 + dy
+    const faded = dy > 0
+    plot.group.traverse((o) => {
+      if (!o.isMesh) return
+      o.material.transparent = faded
+      o.material.opacity = faded ? 0.55 : 1
+    })
+    for (const entry of this.buildings.values()) {
+      if (entry.plot === name) entry.mesh.position.y = DECK_TOP + dy
+    }
   }
 
   /**

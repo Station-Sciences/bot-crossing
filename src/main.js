@@ -6,6 +6,8 @@ import { CameraRig } from './core/camera.js'
 import { Colony, STATUS_LABEL, STATUS_ORDER, statusFor, transcriptProgress } from './game/colony.js'
 import { Hud } from './ui/hud.js'
 import { PLANETS } from './world/planet.js'
+import { DECK_TOP, PLOT_CELL, hexToWorld, worldToHex } from './world/plots.js'
+import { planMove } from './world/plot-move.js'
 import { loadKit } from './world/kit.js'
 import { crewRig, loadCrew } from './agents/crew.js'
 import { TIMES } from './world/sky.js'
@@ -22,6 +24,7 @@ import {
   revealFolder,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
+import { withErrands } from './game/errands.js'
 
 /**
  * Boot and the outer game loop.
@@ -126,7 +129,7 @@ const actions = {
     const key = status === 'agents' ? null : status
     const pool = colony.astronauts.agents.filter((a) => (key ? a.status === key : true))
     if (!pool.length) {
-      hud.hint(key ? `Nobody is ${(STATUS_LABEL[key] || key).toLowerCase()} right now` : 'No crew on the surface')
+      hud.hint(key ? `Nobody is ${(STATUS_LABEL[key] || key).toLowerCase()} right now` : 'No bots on the surface')
       return
     }
     pool.sort((a, b) => a.id.localeCompare(b.id))
@@ -168,8 +171,9 @@ const actions = {
     }
     try {
       const harness = harnessForProject(name)
-      await newSession(folder, harness)
-      hud.toast(`New thread in ${name} — opening ${harnessLabel(harness)}`)
+      const shown = await newSession(folder, harness, settings.get('openIn'))
+      const label = harnessLabel(harness)
+      hud.toast(`New thread in ${name} — ${shown.via === 'terminal' ? `${label} in a terminal` : `opening ${label}`}`)
       // It lands as an astronaut walking down the ramp, once it has a record to scan.
       setTimeout(poll, 6000)
     } catch (err) {
@@ -246,9 +250,10 @@ const actions = {
     const thread = threads.find((t) => t.id === selectedId)
     if (!thread) return
     try {
-      const res = await openThread(thread)
+      const shown = await openThread(thread, settings.get('openIn'))
       colony.astronauts.celebrate(thread.id)
-      hud.toast(res?.note || `Opened in ${thread.harnessName || 'your harness'}`)
+      const name = thread.harnessName || 'your harness'
+      hud.toast(shown.via === 'terminal' ? `Opened ${name} in a terminal` : `Opened in ${name}`)
       // Opening is the thing that makes a thread no longer unread, so refresh shortly after.
       setTimeout(poll, 1800)
     } catch (err) {
@@ -482,7 +487,9 @@ engine.canvas.addEventListener('pointermove', (e) => {
   // Pointing at a quiet plot is what makes its name appear.
   const plot = plotUnder(e, p)
   colony.setHoveredPlot(plot)
-  engine.canvas.style.cursor = agent || plot ? 'pointer' : 'grab'
+  // A plot is grabbable as well as clickable, so it gets the hand rather than the finger:
+  // 'pointer' promised only a click and hid the hold-to-drag entirely.
+  engine.canvas.style.cursor = agent ? 'pointer' : 'grab'
 })
 
 /**
@@ -497,6 +504,256 @@ function plotUnder(e, p) {
   return ground ? colony.plotAt(ground.x, ground.z) : null
 }
 
+// ── plot dragging ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Hold-to-lift, on the same press that would otherwise pan. The two gestures share a
+ * button, and the split is time: move within the hold and it was a pan all along, keep
+ * still and the plot under the pointer picks up. Everything mid-carry is cosmetic — a
+ * y-offset and a ghost of the footprint — and the real move is a single `movePlot` plus
+ * one roster pass on the drop, so a cancelled drag has nothing to unwind but visuals.
+ */
+const HOLD_MS = 250
+/** How high a carried zone floats. Enough to read as "picked up", not enough to occlude. */
+const LIFT_Y = 1.1
+/**
+ * The carried zone's colours, taken from the palette the rest of the colony already uses —
+ * `working` green and the soft red the HUD reds a thread with, rather than a saturated pair
+ * mixed for this one job. A drag is a normal thing to do and should not look like an alarm.
+ */
+const GHOST_VALID = 0x7fd39a
+const GHOST_INVALID = 0xe88b8b
+/** The rim is the same hue lifted toward white, so the tile has an edge without a second colour. */
+const GHOST_VALID_RIM = 0xcdf3de
+const GHOST_INVALID_RIM = 0xffcfcf
+
+const drag = {
+  timer: 0, // pending long-press
+  candidate: null, // repo name under the pressed pointer
+  startX: 0,
+  startY: 0,
+  lifted: false,
+  name: null,
+  cells: null, // the zone's footprint at lift, root first
+  grab: null, // which lattice cell the press landed on — the drag is relative to it
+  dq: 0,
+  dr: 0,
+  valid: true,
+  plan: null, // the layout a drop would apply, from planMove — null while the drop is illegal
+  swallowClick: false,
+  ghost: null, // { group, meshes, material, geometry }
+  pendingThreads: null, // a poll that landed mid-carry, applied on the drop
+}
+const dragGround = new THREE.Vector3()
+
+/**
+ * A rounded hexagon, flat in XZ and in phase with the lattice.
+ *
+ * Built as a `Shape` rather than a six-sided cylinder because the corners are the whole point:
+ * a hard hex prism reads as a selection box, and the colony is drawn in soft shapes everywhere
+ * else. Corners are quadratic arcs through the true vertex, which keeps the flat-to-flat width
+ * exactly `radius * √3` — the tile still lines up with its neighbours, it has just lost its
+ * points.
+ *
+ * Vertex angles match `CylinderGeometry(…, 6)` after `rotateY(π/6)`: measured from +Z toward +X,
+ * every 60° starting at 30°. `rotateX(-π/2)` flips the shape's y into −z, which for a hexagon at
+ * those angles is the same hexagon, so the phase survives the lay-down.
+ */
+function roundedHexGeometry(radius, round) {
+  const corner = (k) => {
+    const a = Math.PI / 6 + (k * Math.PI) / 3
+    return new THREE.Vector2(radius * Math.sin(a), radius * Math.cos(a))
+  }
+  const towards = (from, to, d) => from.clone().lerp(to, Math.min(d / from.distanceTo(to), 0.5))
+
+  const shape = new THREE.Shape()
+  for (let k = 0; k < 6; k++) {
+    const prev = corner((k + 5) % 6)
+    const here = corner(k)
+    const next = corner((k + 1) % 6)
+    const inbound = towards(here, prev, round)
+    const outbound = towards(here, next, round)
+    if (k === 0) shape.moveTo(inbound.x, inbound.y)
+    else shape.lineTo(inbound.x, inbound.y)
+    shape.quadraticCurveTo(here.x, here.y, outbound.x, outbound.y)
+  }
+  shape.closePath()
+
+  const geo = new THREE.ShapeGeometry(shape, 6)
+  geo.rotateX(-Math.PI / 2)
+  return geo
+}
+
+/**
+ * One tile per cell of the carried zone: a soft fill with a brighter rim sitting a hair above it.
+ *
+ * Two meshes rather than one because an unlit fill on its own has no edge, and over pale ground
+ * — sand, snow — a 30%-opacity wash simply disappears. The rim is what makes the footprint
+ * legible on every world, and it is the same geometry inset, so it costs one more draw and no
+ * new shape. Normal blending, not additive: additive over bright ground blows out to white and
+ * turns a routine drag into something that looks like an error state.
+ */
+function buildGhost(count) {
+  // Corner radius is a tenth of the tile, not a third: enough to take the points off so the
+  // footprint sits with the rest of the art, not so much that a hexagon reads as a circle.
+  // The rim is a line, not a border — 0.04 of a cell, about a third of a unit on the ground.
+  const geometry = roundedHexGeometry(PLOT_CELL * 0.94, PLOT_CELL * 0.1)
+  const inner = roundedHexGeometry(PLOT_CELL * 0.9, PLOT_CELL * 0.096)
+  const material = new THREE.MeshBasicMaterial({
+    color: GHOST_VALID,
+    transparent: true,
+    opacity: 0.38,
+    depthWrite: false,
+  })
+  const rim = new THREE.MeshBasicMaterial({
+    color: GHOST_VALID_RIM,
+    transparent: true,
+    opacity: 0.85,
+    depthWrite: false,
+  })
+  const group = new THREE.Group()
+  const meshes = []
+  for (let i = 0; i < count; i++) {
+    // The rim is the outer tile; the fill sits just inside it and just above, so the two never
+    // z-fight on a deck that is itself a flat plane.
+    const mesh = new THREE.Mesh(geometry, rim)
+    const fill = new THREE.Mesh(inner, material)
+    fill.position.y = 0.01
+    mesh.add(fill)
+    meshes.push(mesh)
+    group.add(mesh)
+  }
+  engine.scene.add(group)
+  drag.ghost = { group, meshes, material, rim, geometry, inner }
+}
+
+function placeGhost() {
+  const { meshes } = drag.ghost
+  drag.cells.forEach((c, i) => {
+    const { x, z } = hexToWorld(c.q + drag.dq, c.r + drag.dr)
+    // Just proud of the deck, which is itself proud of the roughest terrain.
+    meshes[i].position.set(x, DECK_TOP + 0.12, z)
+  })
+  drag.ghost.material.color.setHex(drag.valid ? GHOST_VALID : GHOST_INVALID)
+  drag.ghost.rim.color.setHex(drag.valid ? GHOST_VALID_RIM : GHOST_INVALID_RIM)
+}
+
+function disposeGhost() {
+  if (!drag.ghost) return
+  engine.scene.remove(drag.ghost.group)
+  drag.ghost.geometry.dispose()
+  drag.ghost.inner.dispose()
+  drag.ghost.material.dispose()
+  drag.ghost.rim.dispose()
+  drag.ghost = null
+}
+
+function cancelHold() {
+  clearTimeout(drag.timer)
+  drag.timer = 0
+  drag.candidate = null
+}
+
+function liftPlot() {
+  drag.timer = 0
+  const plot = colony.plots.get(drag.candidate)
+  drag.candidate = null
+  if (!plot) return // a poll rebuilt it out from under the hold — rare, and a lift of nothing
+  drag.lifted = true
+  drag.name = plot.name
+  drag.cells = plot.cells
+  // The drag is relative to the cell the press landed on, not to the zone's root: snapping
+  // the root under a cursor that grabbed the far corner would jump the zone half its own
+  // width on the first pixel of movement.
+  const g = rig.groundPoint(drag.startX, drag.startY, dragGround)
+  drag.grab = g ? worldToHex(g.x, g.z) : { ...plot.cells[0] }
+  drag.dq = 0
+  drag.dr = 0
+  drag.valid = true
+  // The pan gesture is already live under this press; `suppressed` is its escape hatch, and
+  // it self-clears on pointerup, so the rest of the press belongs to carrying the plot.
+  rig.suppressed = true
+  colony.setPlotLift(drag.name, LIFT_Y)
+  buildGhost(drag.cells.length)
+  placeGhost()
+  engine.canvas.style.cursor = 'grabbing'
+}
+
+/**
+ * Put the drag down, applying the move or not. Either way this ends in the standard
+ * "the map changed under the same roster" re-entry: `applyThreads` re-runs the roster pass,
+ * whose signature diff rebuilds the moved plot on its new ground, recomputes navigation and
+ * every crew site so the astronauts walk over rather than hammering at bare dirt, and whose
+ * layout diff writes the move to the colony file.
+ */
+function settleDrag(apply) {
+  colony.setPlotLift(drag.name, 0)
+  disposeGhost()
+  if (apply && drag.plan) colony.applyLayout(drag.plan)
+  const pending = drag.pendingThreads
+  drag.lifted = false
+  drag.pendingThreads = null
+  drag.name = null
+  drag.cells = null
+  drag.grab = null
+  drag.plan = null
+  if (apply || pending) applyThreads(pending || threads)
+  engine.canvas.style.cursor = 'grab'
+}
+
+engine.canvas.addEventListener('pointerdown', (e) => {
+  if (drag.timer) cancelHold()
+  if (drag.lifted) {
+    // A second finger mid-carry is the start of a pinch, not a drop: put the zone back.
+    settleDrag(false)
+    drag.swallowClick = true
+    return
+  }
+  // The camera reads these modifiers as "tilt and rotate" — that press is never a lift.
+  if (e.button !== 0 || e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return
+  const p = ndc(e)
+  if (colony.pick(p.x, p.y, p.aspect)) return // a press on an astronaut is a selection
+  const plot = plotUnder(e, p)
+  if (!plot) return
+  drag.candidate = plot.name
+  drag.startX = e.clientX
+  drag.startY = e.clientY
+  drag.timer = setTimeout(liftPlot, HOLD_MS)
+})
+
+// On window, like the camera's own listeners: a carry does not end at the canvas edge.
+window.addEventListener('pointermove', (e) => {
+  // The same 6px the camera's `wasClick` uses: past it this press was a pan all along.
+  if (drag.timer && Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 6) cancelHold()
+  if (!drag.lifted) return
+  if (!rig.groundPoint(e.clientX, e.clientY, dragGround)) return
+  const cell = worldToHex(dragGround.x, dragGround.z)
+  const dq = cell.q - drag.grab.q
+  const dr = cell.r - drag.grab.r
+  if (dq === drag.dq && dr === drag.dr) return
+  drag.dq = dq
+  drag.dr = dr
+  // The plan, not just a yes/no: a drop that strands a zone is allowed, and what comes back
+  // says where everything ends up. Kept so the drop applies exactly what the ghost was drawn
+  // against rather than recomputing against a layout a poll may have moved on.
+  drag.plan = planMove(colony.visibleLayout(), drag.name, dq, dr)
+  drag.valid = Boolean(drag.plan)
+  placeGhost()
+})
+
+window.addEventListener('pointerup', () => {
+  if (drag.timer) cancelHold()
+  if (drag.lifted) settleDrag(drag.valid && (drag.dq !== 0 || drag.dr !== 0))
+  // Cleared after the canvas's own pointerup has run — bubbling order is what lets the
+  // click handler still see it.
+  drag.swallowClick = false
+})
+
+window.addEventListener('pointercancel', () => {
+  if (drag.timer) cancelHold()
+  if (drag.lifted) settleDrag(false)
+})
+
 // Pressing on an astronaut used to suppress the camera, on the theory that grabbing one
 // should not also drag the world out from under it. But nothing is draggable *about* an
 // astronaut — a press is only ever the start of a selection or the start of a pan — so all
@@ -504,7 +761,9 @@ function plotUnder(e, p) {
 // on top of somebody. Selection is decided on release instead, where `wasClick` already
 // distinguishes a click from a drag.
 engine.canvas.addEventListener('pointerup', (e) => {
-  if (e.button !== 0 || !rig.wasClick) return
+  // A release that ends a lift is the end of a carry, not a click — even an unmoved one:
+  // long-pressing a plot and thinking better of it should not also open its sidebar.
+  if (e.button !== 0 || !rig.wasClick || drag.lifted || drag.swallowClick) return
   const p = ndc(e)
   const agent = colony.pick(p.x, p.y, p.aspect)
   if (agent) {
@@ -623,9 +882,16 @@ window.addEventListener('keydown', (e) => {
     case '_':
       rig.desiredDistance = Math.min(150, rig.desiredDistance * 1.22)
       break
-    // One step at a time, outward: the thread, then the zone it belongs to.
+    // One step at a time, outward: the drag in hand, the thread, then the zone.
     case 'Escape':
-      if (document.querySelector('.help.open')) hud.toggleHelp(false)
+      if (drag.lifted || drag.timer) {
+        cancelHold()
+        if (drag.lifted) {
+          settleDrag(false)
+          // The pointer is still down; the release that follows ends a dead gesture.
+          drag.swallowClick = true
+        }
+      } else if (document.querySelector('.help.open')) hud.toggleHelp(false)
       else if (selectedId) select(null, {})
       else if (selectedProject) actions.closeProject()
       break
@@ -635,6 +901,16 @@ window.addEventListener('keydown', (e) => {
 // ── data ──────────────────────────────────────────────────────────────────────────────
 
 function applyThreads(list) {
+  // Parked while a plot is in hand. `allocateCells` would leave the carried zone's cells
+  // alone, but a sibling that grew a thread still rebuilds — and any rebuild pass disposes
+  // whichever plots changed, which mid-carry means the lifted group can be torn down under
+  // the drag's own hands. Polls are 15s apart and a drag is seconds; the scan waits.
+  if (drag.lifted) {
+    drag.pendingThreads = list
+    return
+  }
+  list = withErrands(list)
+
   // A thread you have said you looked at stops counting as unread until it moves on again.
   // Done here rather than in `statusFor` so the card, the badge and the astronaut all agree.
   const viewed = state.viewedAt || {}
@@ -767,7 +1043,11 @@ async function boot() {
         if (!hasStoredSettings() && state.settings) settings.applyAll(state.settings)
       })
       .catch(() => {
-        /* first run, or the file is gone — an empty colony state is a valid one */
+        // Not "first run, or the file is gone": the server answers a missing file with an empty
+        // state rather than an error, so a rejection means it could not be reached and we do not
+        // know what is on disk. Saves stay off for this session and say so, because an archive
+        // that silently fails to persist is worse than one that refuses.
+        hud.toast('Could not read the saved colony — archiving is off until you reload', 'err')
       }),
     settle(loadKit()),
     settle(loadCrew()),
@@ -791,7 +1071,7 @@ async function boot() {
     hud.toggleHelp(true)
     localStorage.setItem('botcrossing.seen-help', '1')
   } else {
-    hud.hint('Drag to move · click an astronaut · H hides everything', 5200)
+    hud.hint('Drag to move · click a bot · H hides everything', 5200)
   }
 }
 

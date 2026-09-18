@@ -17,7 +17,7 @@ the app rewrote the record from memory the next time it touched the thread. Hold
 together took a re-assert on every scan, a `ps` sweep to guess whether the app had re-read the
 file, and a *pending* state for the gap between them.
 
-So archiving is the colony's own bookkeeping now. The astronaut walks back to the ship exactly
+So archiving is the colony's own bookkeeping now. The bot walks back to the ship exactly
 as before, and archiving in the harness's own UI still sends it home too, because the scan reads
 that flag. `setArchived` is not part of the adapter interface and adding one back is a bug.
 
@@ -53,8 +53,13 @@ the server decides what to do with it:
   claims exits quietly and used to reach the page as "Opened". Failing that, `command` runs in a
   terminal. Failing that, the page is told the truth.
 
-`command` is `{ argv, cwd }` with an absolute `argv[0]`. No harness knowledge reaches
-`launch()` — that seam is the reason `server/harnesses/` is swappable at all.
+When the page asks for a terminal instead, the URL is not consulted on any platform:
+`command` runs in a terminal, or the page is told the CLI is missing.
+It never falls back to the app, because the person chose a terminal.
+Which terminal is `BOT_CROSSING_TERMINAL`, then `$TERMINAL`, then the desktop's own, then whatever is installed.
+
+`command` is `{ argv, cwd }` with an absolute `argv[0]`, offered on every platform when the CLI can be found.
+No harness knowledge reaches `launch()` — that seam is the reason `server/harnesses/` is swappable at all.
 
 ## `sizeBytes` is bytes
 

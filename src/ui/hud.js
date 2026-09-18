@@ -23,7 +23,8 @@ import { PLOT_PALETTE, hashString } from '../world/plots.js'
  * here rather than asked for.
  */
 const IS_MAC = /Mac/.test(navigator.platform)
-const FILE_MANAGER = IS_MAC ? 'Finder' : /Win/.test(navigator.platform) ? 'Explorer' : 'Files'
+const IS_WIN = /Win/.test(navigator.platform)
+const FILE_MANAGER = IS_MAC ? 'Finder' : IS_WIN ? 'Explorer' : 'Files'
 
 const ICON = {
   settings: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
@@ -53,7 +54,7 @@ const STAT_DEFS = [
   { key: 'waiting', label: 'need you', cls: 'waiting' },
   { key: 'blocked', label: 'blocked', cls: 'blocked' },
   { key: 'celebrating', label: 'shipped', cls: 'done' },
-  { key: 'agents', label: 'crew', cls: 'idle' },
+  { key: 'agents', label: 'bots', cls: 'idle' },
 ]
 
 export class Hud {
@@ -93,7 +94,7 @@ export class Hud {
       b.className = `stat ${def.cls}`
       b.type = 'button'
       b.dataset.key = def.key
-      b.title = `Jump to the next ${def.label} astronaut`
+      b.title = `Jump to the next ${def.label} bot`
       b.innerHTML = `<i class="pip"></i><span class="n">0</span><span class="lbl">${def.label}</span>`
       b.type = 'button'
       b.addEventListener('click', () => this.actions.focusStatus?.(def.key))
@@ -177,7 +178,7 @@ export class Hud {
       ),
       this._toggle('Adaptive quality', 'autoQuality', 'Quietly drops render scale if frames get expensive.'),
       this._slider('Scatter', 'scatterDensity', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`),
-      this._slider('Max crew', 'maxAgents', 10, 200, 10, (v) => String(v)),
+      this._slider('Max bots', 'maxAgents', 10, 200, 10, (v) => String(v)),
       this._toggle('Stars', 'stars')
     )
     body.appendChild(perf)
@@ -242,6 +243,21 @@ export class Hud {
 
     // View.
     const view = group('View')
+    // The server refuses terminals on Windows, so a choice there would only ever toast an error.
+    if (!IS_WIN) {
+      view.append(
+        this._select(
+          'Open threads in',
+          'openIn',
+          [
+            ['app', 'Desktop app'],
+            ['terminal', 'Terminal'],
+          ],
+          'Terminal runs the harness’s own CLI in a new window, so the CLI has to be installed. ' +
+            'BOT_CROSSING_TERMINAL or $TERMINAL picks the emulator.'
+        )
+      )
+    }
     view.append(
       this._toggle(
         'Hide dormant repos',
@@ -250,7 +266,7 @@ export class Hud {
       )
     )
     view.append(
-      this._toggle('Follow selected agent', 'followSelected', 'Tracks the selected agent until you deselect. Drag to pan, right-drag to orbit, and scroll to zoom.'),
+      this._toggle('Follow selected bot', 'followSelected', 'Tracks the selected bot until you deselect. Drag to pan, right-drag to orbit, and scroll to zoom.'),
       this._toggle('Return to isometric', 'autoFrame', 'Eases the angle back when you stop dragging.'),
       this._slider('Field of view', 'fov', 20, 60, 1, (v) => `${v}°`),
       this._toggle('Project labels', 'showLabels'),
@@ -463,7 +479,7 @@ export class Hud {
   syncSettings() {
     const follow = Boolean(this.settings.get('followSelected'))
     this.$('#btn-follow').setAttribute('aria-pressed', String(follow))
-    this.$('#btn-follow').title = follow ? 'Stop following selected agent' : 'Follow selected agent'
+    this.$('#btn-follow').title = follow ? 'Stop following selected bot' : 'Follow selected bot'
     for (const c of this.controls) c.sync()
     this.$('.fps').classList.toggle('on', Boolean(this.settings.get('showFps')))
     const sound = Boolean(this.settings.get('sound'))
@@ -1097,7 +1113,7 @@ const TEMPLATE = `
 
 <div class="rail panel">
   <button class="btn icon" id="btn-home" title="Reset the view (0)">${ICON.home}</button>
-  <button class="btn icon" id="btn-next" title="Next astronaut waiting on you (N)">${ICON.next}</button>
+  <button class="btn icon" id="btn-next" title="Next bot waiting on you (N)">${ICON.next}</button>
   <div class="sep"></div>
   <button class="btn icon" id="btn-orbit" title="Orbit mode — sweep around the colony (O)" aria-pressed="false">${ICON.orbit}</button>
   <button class="btn icon" id="btn-planet" title="Change planet (Tab)">${ICON.globe}</button>
@@ -1119,14 +1135,14 @@ const TEMPLATE = `
       <div class="title"></div>
       <div class="meta"></div>
     </div>
-    <button class="btn icon ghost" id="btn-follow" title="Follow selected agent" aria-label="Follow selected agent" aria-pressed="false">${ICON.locate}</button>
+    <button class="btn icon ghost" id="btn-follow" title="Follow selected bot" aria-label="Follow selected bot" aria-pressed="false">${ICON.locate}</button>
     <button class="btn icon ghost" id="btn-deselect" title="Deselect (Esc)">${ICON.close}</button>
   </div>
   <div class="progress"><i></i></div>
   <div class="pair">
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
     <button class="btn" id="btn-viewed" title="Stop this thread asking for you until it moves on again (V)">${ICON.eye} Viewed</button>
-    <button class="btn" id="btn-archive" title="Archive — this astronaut walks back to the ship (A)">${ICON.archive} Archive</button>
+    <button class="btn" id="btn-archive" title="Archive — this bot walks back to the ship (A)">${ICON.archive} Archive</button>
   </div>
 </div>
 
