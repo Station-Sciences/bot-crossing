@@ -48,6 +48,7 @@ somebody writing that adapter.
 | **[Antigravity CLI](https://antigravity.google)** (Google) | ✅ **Supported** — transcripts, opened through `antigravity://`. The successor to Gemini CLI, which Google stopped serving individual accounts on 18 June 2026 |
 | **[Cursor](https://cursor.com)** (Anysphere) | ✅ **Supported** — agent transcripts; the composer/sidebar threads are not read yet |
 | **[Hermes](https://github.com/opsmason/hermes)** | ✅ **Supported** — sessions per pilot profile. Lives in the terminal and chat apps, so there is no link to open |
+| **[Kilo Code](https://kilocode.ai)** | ✅ **Supported** — top-level sessions; a thread opens as its repo folder in VS Code |
 | [Amp](https://ampcode.com) (Sourcegraph) | ⬜ Not yet |
 | [Aider](https://aider.chat) | ⬜ Not yet |
 | [Goose](https://block.github.io/goose/) (Block) | ⬜ Not yet |
