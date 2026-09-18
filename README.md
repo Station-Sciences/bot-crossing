@@ -32,6 +32,7 @@ all go through a `harness://` deep link handed to the OS opener — `open(1)` on
 `xdg-open` on Linux, ShellExecute on Windows. The scanning half was portable already. On Linux,
 where a desktop app often is not installed, the scheme is checked first and a terminal running
 the harness's own CLI opens instead when nothing answers it.
+A setting, *Open threads in*, makes the terminal the first choice rather than the fallback, on Linux and macOS.
 
 ## Which harnesses work
 
@@ -198,6 +199,7 @@ browser makes without touching layout, so following a walking astronaut costs no
 - **Open** hands the thread back to whichever harness owns it and its app comes forward. On a
   Linux box with no desktop app to answer the deep link, a terminal opens with the CLI resuming
   the session instead.
+  *Open threads in: Terminal*, in settings, asks for that every time, on Linux and macOS.
 - **Viewed** (`V`), on a thread that is asking for you, puts its hand down. The harness only
   counts a thread as read once it has been focused in its own app, so one you answered in a
   terminal waves for good. This records when you looked, and the thread starts asking again the
@@ -787,6 +789,18 @@ password, because there was never meant to be anything to guard.
 
 Fine on a network you own. Not something to leave running on café wifi, and worth remembering
 that a machine on a VPN or a mesh network is reachable by everything else on it too.
+
+### Picking the terminal
+
+`BOT_CROSSING_TERMINAL` names the emulator a thread opens in, ahead of `$TERMINAL` and whatever the desktop has:
+
+```bash
+BOT_CROSSING_TERMINAL=kitty npm start
+```
+
+A name on `PATH` or an absolute path, and it has to be one whose flags are known — gnome-terminal, konsole, kitty, alacritty, ghostty, wezterm, foot, xterm and their relatives — since one that is not is skipped rather than guessed at.
+On macOS only a named terminal works; point it at a real binary rather than an `.app`.
+Windows is not supported yet.
 
 What it touches on disk, in full:
 

@@ -193,6 +193,9 @@ const DEFAULTS = {
   showFps: false,
   showLabels: true,
   reducedMotion: false,
+
+  // Opening
+  openIn: 'app', // 'app' | 'terminal' — the harness's desktop app, or its CLI in a new window
 }
 
 /** Keys whose change forces a full rebuild of the world (terrain, scatter, sky). */

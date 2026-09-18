@@ -3,7 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { openInTerminal, schemeHasHandler, schemeOf } from './lib/xdg.mjs'
+import { schemeHasHandler, schemeOf } from './lib/xdg.mjs'
+import { openInTerminal } from './lib/terminal.mjs'
 import {
   defaultHarness,
   harnessStatus,
@@ -175,24 +176,56 @@ async function resolveFolder(folder) {
 }
 
 /**
- * Show a harness's answer to "open this" — `{ ok, url, command }` — and say truthfully whether
- * anything happened.
- *
- * macOS and Windows hand the URL to the opener exactly as before: a scheme the harness's app
- * registers is always answered there, so nothing is probed. Linux is the platform where the URL
- * may have nowhere to go — the desktop app is optional and often absent, and `xdg-open` on a
- * scheme nobody claims exits quietly, which used to reach the page as "Opened". So there the
- * scheme is checked first; failing that, the harness's own CLI runs in a terminal, from the
- * `command` the adapter offered alongside the URL; failing that, the page is told so.
- *
  * `command.cwd` came from the page — inside `ref`, or as the folder itself — so it gets the same
  * check as any other folder the page names. There is no fallback directory on purpose:
  * `claude --resume` looks a session up under the folder it ran in, and a terminal that opens on
  * "No conversation found" and closes is worse than an error toast.
  */
-async function present(result) {
+async function runInTerminal(command) {
+  if (!command.cwd) return { ok: false, error: 'That thread has no folder on record to resume in' }
+  const cwd = await resolveFolder(command.cwd)
+  if (!cwd) return { ok: false, error: 'The folder that thread ran in is not on this machine any more' }
+  // A folder that exists but cannot be entered fails inside every terminal alike, and the
+  // terminal gets the blame; say what is actually wrong instead.
+  const enterable = await fsp.access(cwd, fsp.constants.X_OK).then(() => true, () => false)
+  if (!enterable) return { ok: false, error: 'The folder that thread ran in cannot be entered' }
+  const opened = await openInTerminal(command.argv, cwd)
+  return opened.ok ? { ok: true, via: 'terminal' } : opened
+}
+
+/**
+ * Show a harness's answer to "open this" — `{ ok, url, command }` — the way the page asked for
+ * it, and say truthfully whether anything happened.
+ *
+ * A page asking for a terminal never gets the desktop app instead, even when the CLI is missing:
+ * an app window appearing after choosing a terminal reads as the setting being ignored, where an
+ * error toast reads as something to fix. Windows is refused outright, since nothing here knows
+ * how to drive a terminal there yet.
+ *
+ * Otherwise macOS and Windows hand the URL to the opener: a scheme the harness's app registers is
+ * always answered there, so nothing is probed. Linux is the platform where the URL may have
+ * nowhere to go — the desktop app is optional and often absent, and `xdg-open` on a scheme nobody
+ * claims exits quietly, which used to reach the page as "Opened". So there the scheme is checked
+ * first; failing that, the harness's own CLI runs in a terminal, from the `command` the adapter
+ * offered alongside the URL; failing that, the page is told so.
+ */
+export async function present(result, via = 'app') {
   // Only the reason reaches the page: a failure may still carry the adapter's command.
   if (!result || !result.ok) return { ok: false, error: result?.error || 'Nothing to open' }
+
+  if (via === 'terminal') {
+    if (process.platform === 'win32') {
+      return { ok: false, error: 'Opening threads in a terminal is not supported on Windows yet' }
+    }
+    if (!result.command) {
+      return {
+        ok: false,
+        error:
+          'That harness’s CLI was not found on this machine — install it, or set “Open threads in” back to the desktop app',
+      }
+    }
+    return runInTerminal(result.command)
+  }
 
   if (process.platform !== 'linux') {
     if (!result.url) return { ok: false, error: 'That harness has no deep link to open on this platform' }
@@ -205,16 +238,7 @@ async function present(result) {
     launch(result.url)
     return { ok: true, url: result.url }
   }
-  if (result.command) {
-    if (!result.command.cwd) return { ok: false, error: 'That thread has no folder on record to resume in' }
-    const cwd = await resolveFolder(result.command.cwd)
-    if (!cwd) return { ok: false, error: 'The folder that thread ran in is not on this machine any more' }
-    // A folder that exists but cannot be entered fails inside every terminal alike, and the
-    // terminal gets the blame; say what is actually wrong instead.
-    const enterable = await fsp.access(cwd, fsp.constants.X_OK).then(() => true, () => false)
-    if (!enterable) return { ok: false, error: 'The folder that thread ran in cannot be entered' }
-    return openInTerminal(result.command.argv, cwd)
-  }
+  if (result.command) return runInTerminal(result.command)
   const scheme = schemeOf(result.url)
   return {
     ok: false,
@@ -223,6 +247,8 @@ async function present(result) {
       : 'Nothing on this machine can open that',
   }
 }
+
+const viaOf = (body) => (body?.via === 'terminal' ? 'terminal' : 'app')
 
 /**
  * Mark the threads the colony has retired.
@@ -407,21 +433,22 @@ export async function apiMiddleware(req, res, next) {
     }
 
     if (url.pathname === '/api/open' && req.method === 'POST') {
-      const { harness, ref } = await readJsonBody(req)
-      const shown = await present(await harnessOpenThread(harness, ref))
+      const body = await readJsonBody(req)
+      const shown = await present(await harnessOpenThread(body.harness, body.ref), viaOf(body))
       return send(res, shown.ok ? 200 : 400, shown)
     }
 
     if ((url.pathname === '/api/new-session' || url.pathname === '/api/reveal') && req.method === 'POST') {
-      const { folder, harness } = await readJsonBody(req)
-      const dir = await resolveFolder(folder)
+      const body = await readJsonBody(req)
+      const dir = await resolveFolder(body.folder)
       if (!dir) return send(res, 400, { ok: false, error: 'That folder is not on this machine any more' })
 
       if (url.pathname === '/api/reveal') {
         launch(dir)
         return send(res, 200, { ok: true })
       }
-      const shown = await present(await harnessNewSession(harness || (await defaultHarness()), dir))
+      const harness = body.harness || (await defaultHarness())
+      const shown = await present(await harnessNewSession(harness, dir), viaOf(body))
       return send(res, shown.ok ? 200 : 400, shown)
     }
 

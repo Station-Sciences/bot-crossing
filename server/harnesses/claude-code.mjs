@@ -624,12 +624,13 @@ async function scanThreads() {
 
 /**
  * Where the `claude` CLI is, for a machine that has it but no desktop app to answer the deep
- * link. PATH first, then the places its installers put it — never inside an application bundle.
- * Only Linux asks: on macOS and Windows the deep link is always answered, so the walk is wasted.
+ * link, or a page that would rather have a terminal. PATH first, then the places its installers
+ * put it — never inside an application bundle.
  */
 const CLI_DIRS = [
   path.join(HOME, '.local', 'bin'),
   path.join(HOME, '.claude', 'local'),
+  '/opt/homebrew/bin',
   '/usr/local/bin',
   '/usr/bin',
 ]
@@ -648,7 +649,7 @@ async function openThread(ref) {
   else if (isCliId(cliSessionId)) url = `claude://resume?session=${cliSessionId}`
 
   let command
-  if (process.platform === 'linux' && isCliId(cliSessionId)) {
+  if (isCliId(cliSessionId)) {
     const bin = await cliBinary()
     if (bin) command = { argv: [bin, '--resume', cliSessionId], cwd: typeof cwd === 'string' ? cwd : '' }
   }
@@ -664,11 +665,8 @@ async function openThread(ref) {
  */
 async function newSession(dir) {
   const url = `claude://code/new?${new URLSearchParams({ folder: dir })}`
-  let command
-  if (process.platform === 'linux') {
-    const bin = await cliBinary()
-    if (bin) command = { argv: [bin], cwd: dir }
-  }
+  const bin = await cliBinary()
+  const command = bin ? { argv: [bin], cwd: dir } : undefined
   return { ok: true, url, command }
 }
 

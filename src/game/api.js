@@ -98,15 +98,16 @@ export async function saveState(state) {
 }
 
 /**
- * Hand a thread back to whichever harness owns it — the desktop app comes forward on its own.
+ * Hand a thread back to whichever harness owns it — the desktop app comes forward on its own,
+ * or a terminal opens with its CLI, whichever `via` asks for.
  *
  * `ref` is opaque here on purpose: it is whatever that harness's adapter needs to find the
  * thread again, and the browser only ever passes it straight back. Nothing in the UI knows
  * what a Claude Code session id, or a Codex rollout id, actually looks like.
  */
-export const openThread = (thread) => post('/api/open', { harness: thread.harness, ref: thread.ref })
+export const openThread = (thread, via) => post('/api/open', { harness: thread.harness, ref: thread.ref, via })
 
 /** A brand new thread in a repo, via that harness's own new-session deep link. */
-export const newSession = (folder, harness) => post('/api/new-session', { folder, harness })
+export const newSession = (folder, harness, via) => post('/api/new-session', { folder, harness, via })
 
 export const revealFolder = (folder) => post('/api/reveal', { folder })
