@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { findExecutable } from './fsutil.mjs'
+import { openInTerminalWindows } from './win-terminal.mjs'
 
 /**
  * How each terminal wants "run this command in this directory". The command comes after the
@@ -152,6 +153,11 @@ function trySpawn(cmd, args, cwd) {
  * driven: `open -a` cannot hand them an argv without a shell string in between.
  */
 export async function openInTerminal(argv, cwd) {
+  // Windows shares none of the trivia below — no PATH walk over sixteen emulators, no display
+  // to check — so it is a different file entirely, reached through the same door. The caller
+  // asks for a terminal and does not learn which platform it is on.
+  if (process.platform === 'win32') return openInTerminalWindows(argv, cwd)
+
   const wellFormed = Array.isArray(argv) && argv.length > 0 && argv.every((a) => typeof a === 'string' && a)
   if (!wellFormed || !path.isAbsolute(argv[0]) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) {
     return { ok: false, error: 'Invalid launch command' }

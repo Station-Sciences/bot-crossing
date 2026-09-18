@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { schemeHasHandler, schemeOf } from './lib/xdg.mjs'
 import { openInTerminal } from './lib/terminal.mjs'
+import { focusWindowOfPid } from './lib/windows.mjs'
 import {
   defaultHarness,
   harnessStatus,
@@ -199,8 +200,7 @@ async function runInTerminal(command) {
  *
  * A page asking for a terminal never gets the desktop app instead, even when the CLI is missing:
  * an app window appearing after choosing a terminal reads as the setting being ignored, where an
- * error toast reads as something to fix. Windows is refused outright, since nothing here knows
- * how to drive a terminal there yet.
+ * error toast reads as something to fix.
  *
  * Otherwise macOS and Windows hand the URL to the opener: a scheme the harness's app registers is
  * always answered there, so nothing is probed. Linux is the platform where the URL may have
@@ -214,9 +214,6 @@ export async function present(result, via = 'app') {
   if (!result || !result.ok) return { ok: false, error: result?.error || 'Nothing to open' }
 
   if (via === 'terminal') {
-    if (process.platform === 'win32') {
-      return { ok: false, error: 'Opening threads in a terminal is not supported on Windows yet' }
-    }
     if (!result.command) {
       return {
         ok: false,
@@ -226,6 +223,14 @@ export async function present(result, via = 'app') {
     }
     return runInTerminal(result.command)
   }
+
+  // A `pid` names a live process whose thread already has a window on this machine — a session
+  // running in a terminal right now. Fronting that window is tried before the URL, because the
+  // URL for exactly these threads is `resume`, which imports the transcript into the desktop app
+  // as a second, untitled session: "open" would quietly fork the thread. Only when no window can
+  // be found — the terminal is on another desktop, the process is detached, the walk reached the
+  // desktop app itself — does the URL run as before.
+  if (result.pid && (await focusWindowOfPid(result.pid))) return { ok: true, focused: true }
 
   if (process.platform !== 'linux') {
     if (!result.url) return { ok: false, error: 'That harness has no deep link to open on this platform' }
