@@ -17,7 +17,7 @@ the app rewrote the record from memory the next time it touched the thread. Hold
 together took a re-assert on every scan, a `ps` sweep to guess whether the app had re-read the
 file, and a *pending* state for the gap between them.
 
-So archiving is the colony's own bookkeeping now. The astronaut walks back to the ship exactly
+So archiving is the colony's own bookkeeping now. The bot walks back to the ship exactly
 as before, and archiving in the harness's own UI still sends it home too, because the scan reads
 that flag. `setArchived` is not part of the adapter interface and adding one back is a bug.
 
