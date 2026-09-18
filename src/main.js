@@ -69,6 +69,7 @@ let selectedId = null
 let selectedProject = null
 let hoverId = null
 let statusCursor = 0
+let busiestCursor = 0
 let pendingSave = 0
 const hoverGround = new THREE.Vector3()
 
@@ -131,6 +132,53 @@ const actions = {
     }
     pool.sort((a, b) => a.id.localeCompare(b.id))
     const agent = pool[statusCursor++ % pool.length]
+    select(agent.id, { fly: true })
+  },
+
+  /**
+   * Cycle to the next crew member. In-project by default when a zone's sidebar is open —
+   * out-of-project (the whole colony) when there is no zone open, or when asked for
+   * explicitly (the shift-modified binding), so the same key can mean either without a
+   * separate pair of bindings to keep in sync.
+   */
+  focusAgent: ({ crossProject = false } = {}) => {
+    const scoped = !crossProject && selectedProject
+    const pool = colony.astronauts.agents.filter((a) => !scoped || a.thread?.project === selectedProject)
+    if (!pool.length) {
+      hud.hint(scoped ? `Nobody in ${selectedProject} right now` : 'No crew on the surface')
+      return
+    }
+    pool.sort((a, b) => a.id.localeCompare(b.id))
+    const from = pool.findIndex((a) => a.id === selectedId)
+    const agent = pool[(from + 1 + pool.length) % pool.length]
+    select(agent.id, { fly: true })
+  },
+
+  /** Step to the next repo, wrapping — the same order the legend lists them in. */
+  cycleProject: () => {
+    const order = colony.plotOrder
+    if (!order.length) {
+      hud.hint('No projects yet')
+      return
+    }
+    const from = order.findIndex((p) => p.id === selectedProject)
+    const plot = order[(from + 1) % order.length]
+    selectProject(plot.id, { fly: true })
+  },
+
+  /**
+   * Jump to whoever has been busiest lately, cycling through the ranking on repeat presses.
+   * "Busiest" is a proxy for now — most recently active thread — until real per-agent spend
+   * or call counts exist to rank by instead.
+   */
+  focusBusiest: () => {
+    const pool = colony.astronauts.agents
+    if (!pool.length) {
+      hud.hint('No crew on the surface')
+      return
+    }
+    const ranked = [...pool].sort((a, b) => (b.thread?.lastActivityAt || 0) - (a.thread?.lastActivityAt || 0))
+    const agent = ranked[busiestCursor++ % ranked.length]
     select(agent.id, { fly: true })
   },
 
@@ -571,6 +619,20 @@ window.addEventListener('keydown', (e) => {
     case 'M':
       settings.set('sound', !settings.get('sound'))
       hud.hint(settings.get('sound') ? 'Sound on' : 'Muted')
+      break
+    // Plain jumps within the open zone; shift jumps the whole colony — one binding, the
+    // modifier is what decides scope, so there is nothing else to keep in sync.
+    case 'j':
+    case 'J':
+      actions.focusAgent({ crossProject: e.shiftKey })
+      break
+    case 'k':
+    case 'K':
+      actions.cycleProject()
+      break
+    case 'b':
+    case 'B':
+      actions.focusBusiest()
       break
     case 'Tab':
       e.preventDefault()

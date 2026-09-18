@@ -1160,6 +1160,10 @@ const TEMPLATE = `
         <div class="k"><span>Change planet</span><kbd>Tab</kbd></div>
         <div class="k"><span>Time of day</span><kbd>L</kbd></div>
         <div class="k"><span>Mute</span><kbd>M</kbd></div>
+        <div class="k"><span>Next crew (zone)</span><kbd>J</kbd></div>
+        <div class="k"><span>Next crew (colony)</span><kbd>⇧J</kbd></div>
+        <div class="k"><span>Next repo</span><kbd>K</kbd></div>
+        <div class="k"><span>Busiest crew member</span><kbd>B</kbd></div>
         <div class="k"><span>Deselect</span><kbd>Esc</kbd></div>
         <div class="k"><span>This sheet</span><kbd>?</kbd></div>
       </div>
