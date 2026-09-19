@@ -33,11 +33,24 @@ test('asked for a terminal, present never opens the app instead', async () => {
   assert.match((await present({ ok: true, url: '', command: gone }, 'terminal')).error, /not on this machine/)
 })
 
-test('asked for a terminal on Windows, present says so rather than trying', async () => {
-  const command = { argv: ['/bin/true'], cwd: os.tmpdir() }
-  const shown = await withPlatform('win32', () => present({ ok: true, url: '', command }, 'terminal'))
-  assert.equal(shown.ok, false)
-  assert.match(shown.error, /Windows/)
+/**
+ * Windows used to be refused here, and this test used to assert the refusal. It has a terminal
+ * of its own now, so what is worth pinning is that `present` reaches it rather than falling
+ * back to the app's deep link — and that it reaches it with the argv still intact, which is the
+ * part a platform branch gets wrong.
+ *
+ * The command is deliberately malformed so the assertion lands on `openInTerminalWindows`'s own
+ * validation. A well-formed one would open a real console window on whoever runs the suite.
+ */
+test('asked for a terminal on Windows, present opens one rather than the app', async () => {
+  const command = { argv: ['claude'], cwd: os.tmpdir() }
+  const shown = await withPlatform('win32', () => present({ ok: true, url: 'claude://resume?session=x' }, 'terminal'))
+  assert.equal(shown.ok, false, 'no command at all is still not an excuse to open the app')
+  assert.match(shown.error, /CLI/)
+
+  const relative = await withPlatform('win32', () => present({ ok: true, url: '', command }, 'terminal'))
+  assert.equal(relative.ok, false)
+  assert.match(relative.error, /Invalid launch command/, 'the Windows opener refuses a relative argv[0]')
 })
 
 test("an adapter's own refusal passes through whatever the page asked for", async () => {
