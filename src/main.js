@@ -290,9 +290,17 @@ const actions = {
 
   // The card's bar is about the *thread*, not about how much of its building has risen —
   // those were the same number while construction was drawn by burying the structure.
+  //
+  // A task list is the real answer where a harness can see one: three of seven items done is
+  // progress, and transcript size is only ever a proxy for it. The proxy stays for everything
+  // else, and for a plan nothing has been ticked off yet: a bar sitting at zero on a thread
+  // that has clearly been working reads as broken rather than as honest.
   progressFor: (id) => {
     const thread = threads.find((t) => t.id === id)
-    return thread ? transcriptProgress(thread) : 0
+    if (!thread) return 0
+    const todos = thread.todos
+    if (todos?.total && todos.done) return todos.done / todos.total
+    return transcriptProgress(thread)
   },
 }
 

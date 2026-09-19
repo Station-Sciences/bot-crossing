@@ -19,6 +19,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { exists, findExecutable, jsonLines, listDirs, listFiles, num, readHead, readTail } from '../lib/fsutil.mjs'
+import { readDaemonJobs, readDaemonSessions, readTasks, readTodos, toolSummary } from './claude-code-work.mjs'
 
 const HOME = os.homedir()
 
@@ -107,6 +108,25 @@ const CLI_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude')
 const CLI_PROJECTS = path.join(CLI_HOME, 'projects')
 /** One file per live CLI process: {pid, sessionId, cwd, ...}. Stale files outlive their pid. */
 const CLI_LIVE = path.join(CLI_HOME, 'sessions')
+/** One directory per session with a task list, one file per item. */
+const CLI_TASKS = path.join(CLI_HOME, 'tasks')
+/** Sessions running headless: the supervisor's live book, and each job's own bookkeeping. */
+const CLI_ROSTER = path.join(CLI_HOME, 'daemon', 'roster.json')
+const CLI_JOBS = path.join(CLI_HOME, 'jobs')
+
+/**
+ * Where a background call writes its output: `<temp>/claude/<project>/<session>/tasks/`.
+ *
+ * `<project>` is the same encoded-cwd folder name the transcript already lives under, so the
+ * adapter reads it off the transcript's own path rather than re-deriving it. That matters: the
+ * encoding is undocumented, and a guess at it that is subtly wrong fails by finding nothing,
+ * which is indistinguishable from a session with no background work. Checked against every
+ * session on one machine with a task directory and a transcript: 42 of 42 agreed, and every
+ * folder that did not match turned out to have no transcript anywhere at all.
+ *
+ * Resolved at import like the two roots above, and for the same reason.
+ */
+const TASK_ROOT = path.join(os.tmpdir(), 'claude')
 
 const HEAD_BYTES = 192 * 1024
 
@@ -238,39 +258,161 @@ async function scanTranscripts() {
 /** How much of a transcript's end it takes to see whose turn it is. One record is plenty. */
 const TAIL_BYTES = 64 * 1024
 
+/** Nothing, for a transcript that could not be read. Shared so callers never test for null. */
+const NO_TURN = { waiting: false, activity: null, tasks: new Map() }
+
 /**
- * Whether a transcript ends with the turn handed back to you.
+ * Background calls this scan has already seen, by session. The one piece of state the adapter
+ * keeps across polls that is not a cache of something on disk.
  *
- * A live process is not the same thing as work in progress. The CLI holds its process open while
- * it sits at the prompt, so "the pid exists and the file moved recently" marks a thread that
- * finished four minutes ago and asked you a question as *working* — an astronaut hammering away
- * at a thread whose whole point is that it is waiting.
+ * It is here because the tail is a window and a background shell is not. A `npm run dev` started
+ * an hour ago is still running, and the tool result that named it scrolled off the end of the
+ * 64KB tail long ago; asking only the current tail would have the card show it for a few minutes
+ * and then quietly lose it while it was still going. Which is the worst of the three outcomes:
+ * worse than never showing it, because a card that drops something still running is a card you
+ * cannot read as complete.
  *
- * The transcript says which it is. A last assistant message that called a tool is mid-turn; one
- * that called nothing has handed the turn back and the reply is yours. `stop_reason` alone will
- * not do — it is `end_turn` on a main thread's last message and empty on some others — so what
- * the message *called* is the half worth testing.
+ * Widening the tail was the other option and only moves the window. What actually ends this is
+ * the task's own output file, which `readTasks` reads on every pass. So once a call has been
+ * seen, remembering the id and the command it was opened with costs nothing, and the file stays
+ * the thing that decides whether it is still going.
+ *
+ * Kept small by `keepTasks`, which prunes each session back to what `readTasks` just said was
+ * live. Nothing is remembered for a session whose thread has gone.
+ */
+const taskCache = new Map()
+
+function rememberTasks(sessionId, seen) {
+  const known = taskCache.get(sessionId)
+  if (!known) {
+    // No entry until there is something to put in it, so the hundred sessions that have never
+    // opened a background call do not each leave an empty map behind.
+    if (!sessionId || !seen.size) return seen
+    taskCache.set(sessionId, new Map(seen))
+    return taskCache.get(sessionId)
+  }
+  // The tail wins on a re-read: same id, and a fresher record of the same call.
+  for (const [id, call] of seen) known.set(id, call)
+  return known
+}
+
+function keepTasks(sessionId, live) {
+  if (!live.length) return void taskCache.delete(sessionId)
+  // `rememberTasks` only files an entry for a session that has actually opened something, so
+  // there may be nothing here to prune. Asked rather than assumed: the two have to agree about
+  // an empty session, and nothing but this line says so.
+  const known = taskCache.get(sessionId)
+  if (!known) return
+  const alive = new Set(live.map((t) => t.id))
+  for (const id of known.keys()) {
+    if (!alive.has(id)) known.delete(id)
+  }
+}
+
+/**
+ * Everything the end of a transcript knows, in one read.
+ *
+ * It used to answer one question, whose turn is it, and the read is the expensive part, so the
+ * other two now come out of the same pass rather than opening the file again for each:
+ *
+ * `waiting`, the turn is back with you.
+ *
+ *   A live process is not the same thing as work in progress. The CLI holds its process open
+ *   while it sits at the prompt, so "the pid exists and the file moved recently" marks a thread
+ *   that finished four minutes ago and asked you a question as *working* — a bot hammering away
+ *   at a thread whose whole point is that it is waiting.
+ *
+ *   The transcript says which it is. A last assistant message that called a tool is mid-turn;
+ *   one that called nothing has handed the turn back and the reply is yours. `stop_reason` alone
+ *   will not do — it is `end_turn` on a main thread's last message and empty on some others — so
+ *   what the message *called* is the half worth testing.
+ *
+ * `activity`, the last tool it reached for and what that call was about.
+ *
+ *   `running` is a boolean, and a colony of identical hammering bots is the same picture whether
+ *   a thread is compiling, reading a file or waiting on a network call. This is the line that
+ *   tells them apart, and it costs nothing extra: the block that answers `waiting` is the same
+ *   block that names the tool.
+ *
+ * `tasks`, the background shells and monitors this session opened, keyed by Claude Code's own
+ *   id for each, joined back to the call that opened it.
+ *
+ *   A background call returns an id (`b8jqv146x`) and then writes to a file named after it under
+ *   the temp root, and nothing in that directory says which tool opened which file or what for.
+ *   See `claude-code-work.mjs`. The transcript is where the two ends meet: the assistant's
+ *   `tool_use` block carries the command, the tool result that follows carries the id, and
+ *   `tool_use_id` ties them together.
+ *
+ *   Bash spells the id `backgroundTaskId` and Monitor spells it `taskId`; both mean the same
+ *   thing. `taskId` alone is not enough to go on, because the task-list tools use that key too
+ *   for an item id like `"1"`, hence the join on the originating tool rather than on the shape
+ *   of the result.
  *
  * Only threads that could plausibly be running pay for this, so it costs one small read each.
  */
-async function awaitingReply(file) {
+async function readTurn(file) {
   let records
   try {
     records = jsonLines(await readTail(file, TAIL_BYTES))
   } catch {
-    return false
+    return NO_TURN
   }
+
+  const calls = new Map() // tool_use id -> the call that opened it
+  const tasks = new Map() // background task id -> { id, kind, label, startedAt, timeoutMs }
+  let activity = null
+
+  for (const r of records) {
+    const at = Date.parse(r.timestamp) || 0
+    const content = r.message?.content
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block?.type === 'tool_use' && block.id) {
+          calls.set(block.id, { name: block.name || '', input: block.input })
+          if (r.type === 'assistant') activity = { tool: block.name || '', detail: toolSummary(block.name, block.input), at }
+        }
+      }
+    }
+
+    const result = r.toolUseResult
+    if (!result || typeof result !== 'object') continue
+    const from = Array.isArray(content) ? content.find((c) => c?.type === 'tool_result') : null
+    const call = from?.tool_use_id ? calls.get(from.tool_use_id) : null
+
+    // The originating tool decides what this is. Falling back to the shape of the result covers
+    // the call whose `tool_use` block has already scrolled off the front of the tail: a monitor
+    // is the only one of the two that declares a timeout.
+    const monitor = call ? call.name === 'Monitor' : typeof result.timeoutMs === 'number'
+    const id = result.backgroundTaskId || (monitor ? result.taskId : '')
+    if (typeof id !== 'string' || !id) continue
+
+    tasks.set(id, {
+      id,
+      kind: monitor ? 'monitor' : 'shell',
+      label: call ? toolSummary(call.name, call.input) : '',
+      startedAt: at,
+      timeoutMs: num(result.timeoutMs),
+    })
+  }
+
+  // Backwards for the turn, because the question is about the *last* thing in the file.
+  let waiting = false
   for (let i = records.length - 1; i >= 0; i--) {
     const r = records[i]
     // A user turn, a tool result or an attachment all mean the model speaks next — whatever the
     // process is doing, it is not waiting on anyone.
-    if (r.type === 'user') return false
+    if (r.type === 'user') break
     if (r.type !== 'assistant') continue
     const content = r.message?.content
     const calling = Array.isArray(content) && content.some((c) => c?.type === 'tool_use')
-    return !calling && r.message?.stop_reason !== 'tool_use'
+    waiting = !calling && r.message?.stop_reason !== 'tool_use'
+    break
   }
-  return false
+
+  // A thread that has handed the turn back is not in the middle of anything, whatever the last
+  // tool call in the file was. Reporting one would leave a finished thread captioned with the
+  // last thing it did, which reads exactly like work still in progress.
+  return { waiting, activity: waiting ? null : activity, tasks }
 }
 
 /** Transcript metadata is expensive to parse, so keep it until the file changes. */
@@ -359,14 +501,20 @@ async function scanSubagents(livePending) {
         const stat = await fsp.stat(file).catch(() => null)
         if (!stat || stat.mtimeMs < cutoff) continue
         // A subagent that has handed its answer back is finished however recently it wrote —
-        // the same question `awaitingReply` asks of a thread, put to the errand's own transcript.
+        // the same question `readTurn` asks of a thread, put to the errand's own transcript.
         seen.add(file)
-        if (await awaitingReply(file)) continue
+        const turn = await readTurn(file)
+        if (turn.waiting) continue
         const out = byParent.get(parent) || []
         out.push({
           id: path.basename(file, '.jsonl'),
           task: await subagentTask(file, stat.mtimeMs),
           lastActivityAt: stat.mtimeMs,
+          // An errand becomes a thread of its own on the map (see `src/game/errands.js`), so the
+          // line saying what it is doing travels with it exactly as a thread's does. Spread
+          // rather than assigned, so an errand between tool calls carries no key at all instead
+          // of a null the page has to know to ignore.
+          ...(turn.activity ? { activity: turn.activity } : {}),
         })
         byParent.set(parent, out)
       }
@@ -472,12 +620,17 @@ async function scanThreads() {
   // The subagent walk needs the live set, and waiting for it here would serialise scans the
   // README says must never block — so it is handed the promise and waits on it itself.
   const livePending = scanLiveSessions()
-  const [{ records: desktop, deleted }, transcripts, live, subagents] = await Promise.all([
-    scanDesktopSessions(),
-    scanTranscripts(),
-    livePending,
-    scanSubagents(livePending),
-  ])
+  const [{ records: desktop, deleted }, transcripts, live, subagents, daemonLive, daemonJobs, todoDirs] =
+    await Promise.all([
+      scanDesktopSessions(),
+      scanTranscripts(),
+      livePending,
+      scanSubagents(livePending),
+      readDaemonSessions(CLI_ROSTER),
+      readDaemonJobs(CLI_JOBS),
+      listDirs(CLI_TASKS),
+    ])
+  const todoSessions = new Set(todoDirs.map((d) => path.basename(d)))
   const byId = new Map()
   const add = (thread) => {
     const existing = byId.get(thread.id)
@@ -523,7 +676,7 @@ async function scanThreads() {
       // `lastFocusedAt` instead and every background write puts a `?` over half the colony.
       recordActivityAt: num(s.lastActivityAt) || num(s.lastFocusedAt) || num(s.createdAt) || 0,
       lastFocusedAt: num(s.lastFocusedAt),
-      hasLiveProcess: live.has(cliSessionId),
+      hasLiveProcess: live.has(cliSessionId) || daemonLive.has(cliSessionId),
       hasError: Boolean(s.error),
       starred: s.isStarred === true,
       routine: s.scheduledTaskId || '',
@@ -562,7 +715,7 @@ async function scanThreads() {
       createdAt: meta.startedAt || entry.mtime,
       lastActivityAt: entry.mtime,
       lastFocusedAt: 0,
-      hasLiveProcess: live.has(id),
+      hasLiveProcess: live.has(id) || daemonLive.has(id),
       hasError: false,
       starred: false,
       routine: '',
@@ -610,12 +763,54 @@ async function scanThreads() {
     const seenAt = thread.recordActivityAt ?? thread.lastActivityAt
     thread.unread = thread.desktopSessionIds.length > 0 && seenAt > thread.lastFocusedAt
     const fresh = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
-    const waiting =
-      thread.hasLiveProcess && fresh && thread.transcriptFile ? await awaitingReply(thread.transcriptFile) : false
-    thread.running = thread.hasLiveProcess && fresh && !waiting
+    // Only threads that could plausibly be doing something read their own tail, so the cost of
+    // everything below is bounded by how many are actually running rather than by how many
+    // transcripts are on the disk.
+    const turn = thread.hasLiveProcess && fresh && thread.transcriptFile ? await readTurn(thread.transcriptFile) : NO_TURN
+    thread.running = thread.hasLiveProcess && fresh && !turn.waiting
     // A thread that handed the turn back wants you, whether or not the desktop app has ever seen
     // it — the only way a terminal-only thread can ask for anything at all.
-    if (waiting) thread.unread = true
+    if (turn.waiting) thread.unread = true
+    if (turn.activity) thread.activity = turn.activity
+
+    if (thread.transcriptFile) {
+      const known = rememberTasks(thread.cliSessionId, turn.tasks)
+      if (known.size) {
+        const tasksDir = path.join(TASK_ROOT, path.basename(path.dirname(thread.transcriptFile)), thread.cliSessionId, 'tasks')
+        const tasks = await readTasks(tasksDir, known, now)
+        keepTasks(thread.cliSessionId, tasks)
+        if (tasks.length) thread.tasks = tasks
+      }
+    }
+
+    // Read for every thread that has one, running or not: a thread you stopped halfway through a
+    // seven-item plan is exactly the one whose progress is worth seeing.
+    //
+    // Which threads those are comes from one listing of the task root taken at the top of the
+    // scan, not from a readdir per thread. Most sessions never make a task list, so asking each
+    // of a hundred in turn is a hundred misses to find the ten that hit: measured over 100
+    // threads on one machine, that cost 43ms a scan against a 36ms baseline, and the listing
+    // brings it to 40ms.
+    if (todoSessions.has(thread.cliSessionId)) {
+      const todos = await readTodos(path.join(CLI_TASKS, thread.cliSessionId))
+      if (todos) thread.todos = todos
+    }
+
+    // A headless session has no window and no title anywhere else, so the job's own bookkeeping
+    // is the only thing that can name it or say what it is up to.
+    const job = daemonJobs.get(thread.cliSessionId)
+    if (job) {
+      thread.daemon = true
+      // Slotted into the precedence the rest of the file already keeps: custom, then ai, then
+      // the job's own name, then the first prompt. `titled` is the flag for the first two, so a
+      // thread you have named keeps your name for it and one that was falling back to its
+      // opening prompt gets something written to be read instead. A daemon job's name is
+      // auto-generated from the work, which is what makes it worth more than the prompt and
+      // less than a title somebody chose.
+      if (job.name && !thread.titled) thread.title = job.name
+      if (job.detail && !thread.activity) thread.activity = { tool: '', detail: job.detail, at: thread.lastActivityAt }
+    }
+
     const errands = subagents.get(thread.cliSessionId)
     if (errands) thread.subagents = errands
   }

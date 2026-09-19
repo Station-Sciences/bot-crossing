@@ -589,6 +589,34 @@ body {
   flex-wrap: wrap;
 }
 
+/**
+ * What the thread is doing right now. Empty for a harness that cannot see it, and `:empty`
+ * rather than a hidden attribute so the gap above it closes on its own.
+ */
+.thread-pop .doing {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.thread-pop .doing:empty {
+  display: none;
+}
+
+/* One line each, clipped. A command can be 400 characters and the card is 280 wide. */
+.thread-pop .doing .line {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-pop .doing b {
+  font-weight: 600;
+  color: var(--text);
+}
+
 .thread-pop .tag {
   display: inline-flex;
   align-items: center;

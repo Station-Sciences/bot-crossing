@@ -709,8 +709,18 @@ export class Hud {
     if (thread.worktree) bits.push(`<span class="tag">⑂ ${escapeHtml(thread.worktree)}</span>`)
     if (thread.gitBranch) bits.push(`<span class="tag">${escapeHtml(thread.gitBranch)}</span>`)
     if (thread.model) bits.push(`<span class="tag">${escapeHtml(shortModel(thread.model))}</span>`)
+    // Real progress where a harness can report it, rather than the transcript-size proxy the bar
+    // falls back to. A thread three items into a plan of seven says so.
+    if (thread.todos) bits.push(`<span class="tag">${thread.todos.done}/${thread.todos.total} done</span>`)
     bits.push(`<span>${ago(thread.lastActivityAt)}</span>`)
     meta.innerHTML = bits.join('')
+
+    // What it is doing *right now*, which `running` alone cannot say: a colony of identical
+    // hammering bots is the same picture whether a thread is compiling or reading a file.
+    // Below the tags rather than among them, because it is a sentence and they are labels.
+    this.$('.thread-pop .doing').innerHTML = doingLines(thread)
+      .map((l) => `<div class="line"><b>${escapeHtml(l.what)}</b>${l.detail ? ` ${escapeHtml(l.detail)}` : ''}</div>`)
+      .join('')
 
     const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
     this.$('.thread-pop .progress > i').style.width = `${pct}%`
@@ -1032,6 +1042,31 @@ function shortModel(model) {
   return String(model).replace(/^claude-/, '').replace(/-\d{8}$/, '')
 }
 
+/**
+ * The few lines that say what a thread is doing, from whatever its harness could see. Every
+ * field is optional and a harness that reports none of them gets no lines at all, which is what
+ * keeps this from becoming an empty block on most cards.
+ *
+ * Capped, and the cap is the point. A thread can have six shells and a monitor out at once, and
+ * a card that grows to fit them stops being a card: it covers the bot it is describing and
+ * pushes the buttons off the bottom of the window. The ones left out are counted rather than
+ * dropped silently, so the number on screen is never a lie about how much is running.
+ */
+const DOING_LINES = 3
+
+function doingLines(thread) {
+  const out = []
+  if (thread.activity?.detail) out.push({ what: thread.activity.tool || 'Working', detail: thread.activity.detail })
+  if (thread.todos?.active) out.push({ what: '▸', detail: thread.todos.active })
+  const tasks = thread.tasks || []
+  for (const task of tasks.slice(0, Math.max(0, DOING_LINES - out.length))) {
+    out.push({ what: task.kind === 'monitor' ? 'Watching' : 'Running', detail: task.label || task.tail })
+  }
+  const hidden = tasks.length - out.filter((l) => l.what === 'Watching' || l.what === 'Running').length
+  if (hidden > 0) out.push({ what: `+${hidden} more`, detail: '' })
+  return out
+}
+
 function clockLabel(t) {
   const total = t * 24 * 60
   const h = Math.floor(total / 60) % 24
@@ -1134,6 +1169,7 @@ const TEMPLATE = `
     <div class="info">
       <div class="title"></div>
       <div class="meta"></div>
+      <div class="doing"></div>
     </div>
     <button class="btn icon ghost" id="btn-follow" title="Follow selected bot" aria-label="Follow selected bot" aria-pressed="false">${ICON.locate}</button>
     <button class="btn icon ghost" id="btn-deselect" title="Deselect (Esc)">${ICON.close}</button>
