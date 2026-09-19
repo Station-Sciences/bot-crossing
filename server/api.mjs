@@ -395,7 +395,12 @@ export async function apiMiddleware(req, res, next) {
 
   try {
     if (url.pathname === '/api/threads' && req.method === 'GET') {
-      const threads = await reconcileArchived(await scanThreads())
+      // Archived threads are not sent. The page's first move with every thread is
+      // `!t.archived`, in all three places it reads the list, and nothing on it can show or
+      // restore one — the colony's own archive list lives in colony.json here, not in the
+      // payload. On a real store that is 219 of 266 threads, 80% of a 300 KB response every
+      // fifteen seconds, serialised here and parsed there to be thrown away on arrival.
+      const threads = (await reconcileArchived(await scanThreads())).filter((t) => !t.archived)
       // A harness that is present but cannot read its own store says so here, rather than
       // appearing healthy in the list while quietly contributing nothing.
       const warnings = (await harnessStatus()).filter((h) => h.detected && h.error).map((h) => h.error)
