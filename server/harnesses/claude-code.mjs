@@ -389,10 +389,46 @@ async function scanSubagents(livePending) {
 const DELETED_MARKER = /^deleted_(.+)$/
 const isRecord = (name) => name.startsWith('local_') && name.endsWith('.json')
 
+/**
+ * The fields of a desktop record the scan actually reads. A record is not small: the app
+ * writes its whole MCP connector configuration into each one (`remoteMcpServersConfig`, close
+ * to a megabyte on a machine with a dozen connectors), and on this machine the store came to
+ * 148 MB over 204 records — read and parsed in full on every 15-second poll, for perhaps
+ * 60 KB of fields anyone looks at. Half of every scan, and most of the process's memory.
+ * Keeping only these means the cache below holds kilobytes, not the store.
+ */
+function pickRecord(r) {
+  return {
+    sessionId: r.sessionId,
+    cliSessionId: r.cliSessionId,
+    cwd: r.cwd,
+    originCwd: r.originCwd,
+    title: r.title,
+    bridgeSessionIds: r.bridgeSessionIds,
+    model: r.model,
+    effort: r.effort,
+    createdAt: r.createdAt,
+    lastActivityAt: r.lastActivityAt,
+    lastFocusedAt: r.lastFocusedAt,
+    error: r.error,
+    isStarred: r.isStarred,
+    scheduledTaskId: r.scheduledTaskId,
+    prState: r.prState,
+    isArchived: r.isArchived,
+  }
+}
+
+/**
+ * Parsed records, keyed by file and pinned to the mtime they were read at — the same shape
+ * `metaCache` already gives transcripts. A steady-state poll is then 204 stats and no reads.
+ */
+const recordCache = new Map()
+
 /** Every thread the desktop app has a record for, and the ids of the ones it has deleted. */
 async function scanDesktopSessions() {
   const records = []
   const deleted = new Set()
+  const seen = new Set()
   for (const account of await listDirs(DESKTOP_SESSIONS)) {
     for (const org of await listDirs(account)) {
       for (const file of await listFiles(org, (n) => isRecord(n) || DELETED_MARKER.test(n))) {
@@ -402,14 +438,32 @@ async function scanDesktopSessions() {
           if (isCliId(marker[1])) deleted.add(marker[1])
           continue
         }
+        seen.add(file)
+        let stat
         try {
-          records.push(JSON.parse(await fsp.readFile(file, 'utf8')))
+          stat = await fsp.stat(file)
         } catch {
-          /* a session mid-write — skip this pass */
+          continue
+        }
+        const cached = recordCache.get(file)
+        if (cached && cached.mtime === stat.mtimeMs) {
+          records.push(cached.record)
+          continue
+        }
+        try {
+          const record = pickRecord(JSON.parse(await fsp.readFile(file, 'utf8')))
+          recordCache.set(file, { mtime: stat.mtimeMs, record })
+          records.push(record)
+        } catch {
+          // A session mid-write. The previous read is still the best account of this thread —
+          // without it the thread blinks off the map for a poll every time the app saves.
+          if (cached) records.push(cached.record)
         }
       }
     }
   }
+  // A record the app has since removed must not live on in here.
+  for (const file of recordCache.keys()) if (!seen.has(file)) recordCache.delete(file)
   return { records, deleted }
 }
 
