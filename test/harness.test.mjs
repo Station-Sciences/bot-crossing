@@ -232,8 +232,39 @@ async function fakeClaudeWithErrands(errandRecords) {
   return home
 }
 
-async function claudeWithErrands(home) {
+/**
+ * Point the adapter at a fake install for the duration of one test, and hand back the undo.
+ *
+ * HOME alone is not enough to move it, on any platform for the same reason and on Windows
+ * twice over:
+ *
+ *   - `os.homedir()` answers from USERPROFILE on Windows and ignores HOME, so the CLI half of
+ *     the scan stays aimed at the real `~/.claude`
+ *   - the desktop half never consults the home directory there at all — `desktopDataDir()`
+ *     reads LOCALAPPDATA/APPDATA, which no amount of HOME touches
+ *
+ * Left to those, the scan quietly succeeds against the machine's own install and reports its
+ * threads: a failure that reads like a broken scanner and is really a fake that was never in
+ * the picture. So use the two overrides the adapter documents for this, and the assertion below
+ * on how many threads came back keeps it honest.
+ */
+function useHome(home) {
+  const keys = ['HOME', 'USERPROFILE', 'CLAUDE_CONFIG_DIR', 'BOT_CROSSING_CLAUDE_DESKTOP']
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]))
   process.env.HOME = home
+  process.env.USERPROFILE = home
+  process.env.CLAUDE_CONFIG_DIR = path.join(home, '.claude')
+  // Never written, and deliberately absent: this test is about the CLI transcript alone.
+  process.env.BOT_CROSSING_CLAUDE_DESKTOP = path.join(home, 'desktop-sessions')
+  return () => {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
+
+async function claudeWithErrands(home) {
   const mod = await import(`../server/harnesses/claude-code.mjs?${home}`)
   return mod.default
 }
@@ -241,30 +272,32 @@ async function claudeWithErrands(home) {
 const midTurn = { type: 'assistant', message: { content: [{ type: 'tool_use' }], stop_reason: 'tool_use' } }
 
 test('a running subagent is reported with the brief it was given, however long that is', async () => {
-  const realHome = process.env.HOME
   // Longer than any head this could reasonably read at once: a brief that is truncated away
   // yields no task at all, because readHead drops the line it lands in the middle of.
   const brief = `repair the raster pipeline ${'x'.repeat(20 * 1024)}`
   const home = await fakeClaudeWithErrands([{ type: 'user', message: { content: brief } }, midTurn])
+  const restoreHome = useHome(home)
   const h = await claudeWithErrands(home)
   const [thread] = await h.scanThreads()
   assert.equal(thread.subagents?.length, 1)
   assert.equal(thread.subagents[0].id, 'agent-abc')
   assert.match(thread.subagents[0].task, /^repair the raster pipeline/)
-  process.env.HOME = realHome
+  restoreHome()
   await fsp.rm(home, { recursive: true, force: true })
 })
 
 test('a subagent that has handed its answer back is finished, however recently it wrote', async () => {
-  const realHome = process.env.HOME
   const home = await fakeClaudeWithErrands([
     { type: 'user', message: { content: 'summarise the diff' } },
     { type: 'assistant', message: { content: [{ type: 'text', text: 'here it is' }], stop_reason: 'end_turn' } },
   ])
+  const restoreHome = useHome(home)
   const h = await claudeWithErrands(home)
-  const [thread] = await h.scanThreads()
+  const threads = await h.scanThreads()
+  assert.equal(threads.length, 1, 'the fake home is the one being scanned, not the real one')
+  const [thread] = threads
   assert.equal(thread.subagents, undefined, 'a finished errand is not an astronaut on the map')
-  process.env.HOME = realHome
+  restoreHome()
   await fsp.rm(home, { recursive: true, force: true })
 })
 
