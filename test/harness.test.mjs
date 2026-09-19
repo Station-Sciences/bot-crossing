@@ -232,8 +232,18 @@ async function fakeClaudeWithErrands(errandRecords) {
   return home
 }
 
+/**
+ * Both overrides, the way `claudeWith` below does it, rather than `HOME` alone.
+ *
+ * `os.homedir()` on Windows reads `USERPROFILE` and ignores `HOME` entirely, so moving `HOME`
+ * isolated the fixture on macOS and Linux and isolated nothing on Windows: the adapter read the
+ * machine's own `~/.claude` *and* its real desktop session store, and `scanThreads()[0]` was
+ * whichever of a hundred real threads happened to sort first. That is why the errand tests
+ * failed on Windows and only there.
+ */
 async function claudeWithErrands(home) {
-  process.env.HOME = home
+  process.env.CLAUDE_CONFIG_DIR = path.join(home, '.claude')
+  process.env.BOT_CROSSING_CLAUDE_DESKTOP = path.join(home, 'no-desktop-app')
   const mod = await import(`../server/harnesses/claude-code.mjs?${home}`)
   return mod.default
 }
@@ -266,6 +276,275 @@ test('a subagent that has handed its answer back is finished, however recently i
   assert.equal(thread.subagents, undefined, 'a finished errand is not an astronaut on the map')
   process.env.HOME = realHome
   await fsp.rm(home, { recursive: true, force: true })
+})
+
+// ── what a live thread is actually doing ──────────────────────────────────────
+
+/**
+ * A Claude Code install with one live CLI session, plus whichever of the three stores that say
+ * what it is *doing* a test wants: the background-task output under the temp root, the session's
+ * task list, and the background daemon's roster.
+ *
+ * The pid is this process's own, which is the only pid a test can be sure is alive when the scan
+ * probes it. Everything lands under one temp root so a single `rm` cleans up.
+ */
+const LIVE_SESSION = '11111111-2222-4333-8444-666666666666'
+
+async function fakeClaudeAtWork({ transcript = [], tasks = {}, todos = [], daemon = false, live = true } = {}) {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-atwork-'))
+  const configDir = path.join(root, 'claude')
+  const project = path.join(configDir, 'projects', '-tmp-demo')
+  // The task directory hangs off the *same* encoded-cwd folder name the transcript lives under,
+  // which is the derivation the adapter relies on, so the fixture has to reproduce it exactly
+  // rather than put the outputs somewhere convenient.
+  const taskDir = path.join(root, 'tmp', 'claude', '-tmp-demo', LIVE_SESSION, 'tasks')
+  await fsp.mkdir(project, { recursive: true })
+  await fsp.mkdir(taskDir, { recursive: true })
+  await fsp.mkdir(path.join(configDir, 'sessions'), { recursive: true })
+  await fsp.writeFile(
+    path.join(project, `${LIVE_SESSION}.jsonl`),
+    transcript.map((r) => JSON.stringify(r)).join('\n') + '\n'
+  )
+  if (live) {
+    await fsp.writeFile(
+      path.join(configDir, 'sessions', `${process.pid}.json`),
+      JSON.stringify({ pid: process.pid, sessionId: LIVE_SESSION, cwd: '/tmp/demo' })
+    )
+  }
+  for (const [id, body] of Object.entries(tasks)) await fsp.writeFile(path.join(taskDir, `${id}.output`), body)
+  if (todos.length) {
+    const dir = path.join(configDir, 'tasks', LIVE_SESSION)
+    await fsp.mkdir(dir, { recursive: true })
+    for (const item of todos) await fsp.writeFile(path.join(dir, `${item.id}.json`), JSON.stringify(item))
+  }
+  if (daemon) {
+    await fsp.mkdir(path.join(configDir, 'daemon'), { recursive: true })
+    await fsp.mkdir(path.join(configDir, 'jobs', 'short1'), { recursive: true })
+    await fsp.writeFile(
+      path.join(configDir, 'daemon', 'roster.json'),
+      JSON.stringify({ workers: { short1: { pid: process.pid, sessionId: LIVE_SESSION } } })
+    )
+    await fsp.writeFile(
+      path.join(configDir, 'jobs', 'short1', 'state.json'),
+      JSON.stringify({ sessionId: LIVE_SESSION, name: 'Connecting Colorado profile', state: 'working', detail: 'dashboard deployed' })
+    )
+  }
+  return { root, configDir, desktop: path.join(root, 'no-desktop-app'), tmp: path.join(root, 'tmp') }
+}
+
+const at = (ms) => new Date(ms).toISOString()
+
+/** An assistant turn that calls a tool, and the tool result that answers it. */
+const callsTool = (id, name, input, ms) => ({
+  type: 'assistant',
+  timestamp: at(ms),
+  message: { role: 'assistant', stop_reason: 'tool_use', content: [{ type: 'tool_use', id, name, input }] },
+})
+const answers = (id, result, ms) => ({
+  type: 'user',
+  timestamp: at(ms),
+  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] },
+  toolUseResult: result,
+})
+
+/**
+ * The two result shapes, copied from a real transcript rather than invented. Bash spells the id
+ * `backgroundTaskId`; Monitor spells it `taskId` and is the only one of the two that declares a
+ * deadline. The task-list tools also write `taskId`, for an item id like `"1"`, which is why the
+ * adapter decides from the originating tool and not from the key.
+ */
+const shellResult = (id) => ({ stdout: '', stderr: '', interrupted: false, isImage: false, backgroundTaskId: id })
+const monitorResult = (id, timeoutMs) => ({ taskId: id, timeoutMs, persistent: false })
+
+async function scanAtWork(fx) {
+  process.env.CLAUDE_CONFIG_DIR = fx.configDir
+  process.env.BOT_CROSSING_CLAUDE_DESKTOP = fx.desktop
+  // The temp root is read once, at import, so the override only has to survive the import, and
+  // restoring it straight after keeps every other fixture in this file building under the real one.
+  const mod = await withEnv({ TMPDIR: fx.tmp, TEMP: fx.tmp, TMP: fx.tmp }, () =>
+    import(`../server/harnesses/claude-code.mjs?${fx.configDir}`)
+  )
+  const threads = await mod.default.scanThreads()
+  return threads.find((t) => t.ref?.cliSessionId === LIVE_SESSION)
+}
+
+test('a running thread reports the tool it is on, and stops reporting one once the turn is back', async () => {
+  const now = Date.now()
+  const busy = await fakeClaudeAtWork({
+    transcript: [typed('build the thing'), callsTool('t1', 'Edit', { file_path: '/repo/src/engine.js' }, now)],
+  })
+  const working = await scanAtWork(busy)
+  assert.equal(working.running, true)
+  assert.deepEqual({ tool: working.activity.tool, detail: working.activity.detail }, { tool: 'Edit', detail: '/repo/src/engine.js' })
+  await fsp.rm(busy.root, { recursive: true, force: true })
+
+  // Same transcript with the turn handed back. The last tool call is still in the file, and
+  // reporting it would caption a finished thread with the last thing it did, which reads
+  // exactly like work still in progress.
+  const done = await fakeClaudeAtWork({
+    transcript: [
+      typed('build the thing'),
+      callsTool('t1', 'Edit', { file_path: '/repo/src/engine.js' }, now),
+      { type: 'assistant', timestamp: at(now), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'done' }] } },
+    ],
+  })
+  const finished = await scanAtWork(done)
+  assert.equal(finished.running, false)
+  assert.equal(finished.activity, undefined)
+  assert.equal(finished.unread, true, 'the turn coming back is the thread asking for you')
+  await fsp.rm(done.root, { recursive: true, force: true })
+})
+
+test('a background shell is reported with the command that opened it and its last line', async () => {
+  const now = Date.now()
+  const fx = await fakeClaudeAtWork({
+    transcript: [
+      typed('run the suite'),
+      callsTool('t1', 'Bash', { command: 'npm test -- --watch' }, now),
+      answers('t1', shellResult('babc12345'), now),
+      callsTool('t2', 'Read', { file_path: '/repo/README.md' }, now),
+    ],
+    tasks: { babc12345: 'compiling…\n124 passing\n\n' },
+  })
+  const t = await scanAtWork(fx)
+  assert.equal(t.tasks?.length, 1)
+  assert.deepEqual(
+    { id: t.tasks[0].id, kind: t.tasks[0].kind, label: t.tasks[0].label, tail: t.tasks[0].tail },
+    { id: 'babc12345', kind: 'shell', label: 'npm test -- --watch', tail: '124 passing' }
+  )
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test('a background shell that has printed its exit trailer is over, however recently it wrote', async () => {
+  const now = Date.now()
+  const fx = await fakeClaudeAtWork({
+    transcript: [typed('build it'), callsTool('t1', 'Bash', { command: 'make -j8' }, now), answers('t1', shellResult('bdone0000'), now)],
+    // Written this instant, so nothing but the trailer can say it has finished.
+    tasks: { bdone0000: 'linking…\n[exited with code 0]\n' },
+  })
+  assert.equal((await scanAtWork(fx)).tasks, undefined)
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test('a monitor is drawn until its declared timeout runs out, and not after', async () => {
+  const now = Date.now()
+  const armed = await fakeClaudeAtWork({
+    // A monitor holds nothing open and writes nothing when it stops, so the only thing on disk
+    // that says when it ends is the timeout it declared on the way in.
+    transcript: [
+      typed('watch the log'),
+      callsTool('m1', 'Monitor', { command: 'tail -f build.log', description: 'the build log', timeout_ms: 600000 }, now),
+      answers('m1', monitorResult('bmon00001', 600000), now),
+    ],
+    tasks: { bmon00001: 'waiting…\n' },
+  })
+  const watching = await scanAtWork(armed)
+  assert.equal(watching.tasks?.length, 1)
+  assert.deepEqual(
+    { kind: watching.tasks[0].kind, label: watching.tasks[0].label },
+    { kind: 'monitor', label: 'the build log' },
+    'the description is what a monitor is about; the command is plumbing'
+  )
+  await fsp.rm(armed.root, { recursive: true, force: true })
+
+  const expired = await fakeClaudeAtWork({
+    transcript: [
+      typed('watch the log'),
+      callsTool('m1', 'Monitor', { command: 'tail -f build.log', description: 'the build log', timeout_ms: 60000 }, now - 5 * 60 * 1000),
+      answers('m1', monitorResult('bmon00001', 60000), now - 5 * 60 * 1000),
+    ],
+    tasks: { bmon00001: 'waiting…\n' },
+  })
+  assert.equal((await scanAtWork(expired)).tasks, undefined, 'a watch whose deadline has passed is not still watching')
+  await fsp.rm(expired.root, { recursive: true, force: true })
+})
+
+test('a shell outlives the tail that named it, and goes when its own output says so', async () => {
+  const now = Date.now()
+  const fx = await fakeClaudeAtWork({
+    transcript: [typed('serve it'), callsTool('t1', 'Bash', { command: 'npm run dev' }, now), answers('t1', shellResult('blong0001'), now)],
+    tasks: { blong0001: 'listening on 5173\n' },
+  })
+  const h = await scanAtWork(fx)
+  assert.equal(h.tasks?.length, 1)
+
+  // The conversation moves on far enough that the result which named the shell scrolls out of
+  // the tail, genuinely out, so the padding here has to exceed the tail the adapter reads. The
+  // shell has not stopped, so neither should the card: losing it here is worse than never having
+  // shown it, because a card that drops live work cannot be read as complete.
+  const project = path.join(fx.configDir, 'projects', '-tmp-demo')
+  const filler = Array.from({ length: 120 }, (_, i) =>
+    JSON.stringify(callsTool(`pad${i}`, 'Read', { file_path: `/repo/${'x'.repeat(600)}/${i}.js` }, now))
+  ).join('\n')
+  await fsp.appendFile(path.join(project, `${LIVE_SESSION}.jsonl`), filler + '\n')
+  assert.ok((await fsp.stat(path.join(project, `${LIVE_SESSION}.jsonl`))).size > 64 * 1024)
+  const later = await scanAtWork(fx)
+  assert.equal(later.tasks?.length, 1, 'still running, and the tail no longer mentions it')
+  assert.equal(later.tasks[0].label, 'npm run dev', 'including what it was')
+
+  // What ends it is its own output, which is read on every pass whatever the tail says.
+  await fsp.appendFile(path.join(fx.tmp, 'claude', '-tmp-demo', LIVE_SESSION, 'tasks', 'blong0001.output'), '[exited with code 0]\n')
+  assert.equal((await scanAtWork(fx)).tasks, undefined)
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test("an item id from the task-list tools is not mistaken for a background task", async () => {
+  const now = Date.now()
+  const fx = await fakeClaudeAtWork({
+    // The same `taskId` key, meaning an entirely different thing: item "1" of the task list.
+    transcript: [
+      typed('plan it out'),
+      callsTool('t1', 'TaskUpdate', { taskId: '1', status: 'in_progress' }, now),
+      answers('t1', { success: true, taskId: '1', updatedFields: ['status'] }, now),
+      callsTool('t2', 'Read', { file_path: '/repo/README.md' }, now),
+    ],
+    tasks: { 1: 'not a background shell\n' },
+  })
+  assert.equal((await scanAtWork(fx)).tasks, undefined)
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test('the task list is reported as real progress, named by the item in flight', async () => {
+  const fx = await fakeClaudeAtWork({
+    transcript: [typed('ship the converter')],
+    live: false, // read for every thread, running or not: a stopped thread's progress is the point
+    todos: [
+      { id: '1', subject: 'Core conversion library', activeForm: 'Building the core conversion library', status: 'completed' },
+      { id: '2', subject: 'Worker executable', activeForm: 'Building the worker', status: 'completed' },
+      { id: '10', subject: 'Installer', activeForm: 'Packaging the installer', status: 'pending' },
+      { id: '3', subject: 'Shell extension', activeForm: 'Wiring the shell extension', status: 'in_progress' },
+    ],
+  })
+  const t = await scanAtWork(fx)
+  assert.deepEqual(t.todos, { total: 4, done: 2, active: 'Wiring the shell extension' })
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test('a session running under the background daemon is awake, named, and says what it is up to', async () => {
+  const fx = await fakeClaudeAtWork({
+    transcript: [typed('connect the profile')],
+    // No `sessions/` file at all: a daemon worker never writes one, which is exactly why every
+    // one of them used to be drawn asleep while it worked.
+    live: false,
+    daemon: true,
+  })
+  const t = await scanAtWork(fx)
+  assert.equal(t.running, true)
+  assert.equal(t.daemon, true)
+  assert.equal(t.title, 'Connecting Colorado profile', 'a headless session has no window to take a title from')
+  assert.equal(t.activity.detail, 'dashboard deployed')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test('none of it is invented when the stores are simply not there', async () => {
+  const fx = await fakeClaudeAtWork({ transcript: [typed('just a thread')] })
+  const t = await scanAtWork(fx)
+  assert.deepEqual(
+    { activity: t.activity, tasks: t.tasks, todos: t.todos, daemon: t.daemon },
+    { activity: undefined, tasks: undefined, todos: undefined, daemon: undefined },
+    'every one of these is optional, and absent is not empty'
+  )
+  await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
 // ── shared helpers ────────────────────────────────────────────────────────────

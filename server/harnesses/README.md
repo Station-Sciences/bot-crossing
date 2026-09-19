@@ -100,8 +100,30 @@ what earns a repo its own zone, and `lastActivityAt` is what sorts the whole map
 | `sizeBytes` | number | Transcript size. **This is how finished a building looks**, on a log scale |
 | `source` | string | Free-form, for your own bookkeeping (the Claude adapter uses `desktop` / `cli`) |
 | `canOpen` | boolean | Whether this thread can be opened. The UI greys the button out |
-| `subagents` | array | Optional. Errands this thread has out *right now*: `{ id, task, lastActivityAt }`. Drawn as small companions at the parent's building — no zone, no badge, not counted. Omit it and nothing changes |
+| `subagents` | array | Optional. Errands this thread has out *right now*: `{ id, task, lastActivityAt, activity? }`. Drawn as small companions at the parent's building — no zone, no badge, not counted. Omit it and nothing changes |
+| `activity` | object | Optional. What it is doing *this second*: `{ tool, detail, at }`, say `'Edit'` and `'src/engine.js'`. One line on the thread card |
+| `tasks` | array | Optional. Background work still in flight: `{ id, kind, label, tail, startedAt, expiresAt, lastOutputAt }`, `kind` being `'shell'` or `'monitor'` |
+| `todos` | object | Optional. The thread's own task list as progress: `{ total, done, active }`. Drives the card's bar in place of the `sizeBytes` proxy |
 | `ref` | object | **Opaque.** Whatever *you* need to find this thread again |
+
+### About `activity`, `tasks` and `todos`
+
+All three are optional and all three are about *now*. `running` says a thread is working; these
+say what at. A colony of identical hammering bots is the same picture whether a thread is
+compiling, editing a file or waiting on a network call.
+
+Report only what you can actually see. A finished background shell that is still listed reads
+as work in progress, which is worse than not reporting it at all: the thread card is the one
+place the colony is expected to be literally true. Absent is not the same as empty, so omit the
+field rather than handing back `[]` or `{ total: 0 }`.
+
+`activity.detail` and `tasks[].label` are single lines, already cut by the adapter. The card
+clips them anyway, but a 400-character command travelling through the API on every poll is a
+cost nothing recovers.
+
+`tasks` is capped on the card and the remainder is counted, so reporting eight is not a
+problem. Each one should still be something a person would recognise: the command for a
+shell, the description for a monitor.
 
 ### About `ref`
 
@@ -144,6 +166,15 @@ Verified on a real machine:
   `~/.claude/sessions/*.json`. `CLAUDE_CONFIG_DIR` (the CLI's own override for `~/.claude`) and
   `BOT_CROSSING_CLAUDE_DESKTOP` (the session store) point both roots elsewhere, which is how
   `test/harness.test.mjs` fakes an install. Implemented in `claude-code.mjs`.
+
+  What a session is *doing* is in three more places, all read by `claude-code-work.mjs`:
+  background shells and monitors write to `<temp>/claude/<encoded-cwd>/<sessionId>/tasks/<id>.output`,
+  where `<encoded-cwd>` is the same folder name the transcript sits under; the session's own task
+  list is one file per item in `~/.claude/tasks/<sessionId>/<n>.json`, with `blocks`/`blockedBy`
+  edges between them; and sessions running headless are in `~/.claude/jobs/<short>/state.json`
+  with the supervisor's live roster at `~/.claude/daemon/roster.json`. That last pair matters
+  beyond the detail: a daemon worker writes no `~/.claude/sessions` file, so without the roster
+  every headless session is drawn asleep while it works.
 - **Codex CLI** — transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-<iso>-<uuid>.jsonl`,
   with records shaped `{ timestamp, type, payload }`, and what looks like an index at
   `~/.codex/session_index.jsonl`. Not implemented yet.
