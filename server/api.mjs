@@ -118,7 +118,9 @@ async function writeState(next) {
   await fsp.mkdir(DATA_DIR, { recursive: true })
   const tmp = `${STATE_FILE}.${process.pid}.${++tmpSeq}.tmp`
   try {
-    await fsp.writeFile(tmp, JSON.stringify(state, null, 2))
+    // colony.json names the repos you work in and where they are: the owner's business, not
+    // every account on the machine's. A fresh file per write, so the mode always applies.
+    await fsp.writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 })
     await fsp.rename(tmp, STATE_FILE)
   } catch (err) {
     await fsp.rm(tmp, { force: true }).catch(() => {})
@@ -308,6 +310,7 @@ function send(res, status, body) {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-store',
     'Content-Length': Buffer.byteLength(payload),
+    'X-Content-Type-Options': 'nosniff',
   })
   res.end(payload)
 }
