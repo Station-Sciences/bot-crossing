@@ -819,6 +819,20 @@ A name on `PATH` or an absolute path, and it has to be one whose flags are known
 On macOS only a named terminal works; point it at a real binary rather than an `.app`.
 Windows is not supported yet.
 
+### Directories that are not projects
+
+`BOT_CROSSING_IGNORE_DIRS` names directories a session can run in without earning a zone —
+comma-separated, absolute, matched exactly:
+
+```bash
+BOT_CROSSING_IGNORE_DIRS="$HOME,$HOME/Desktop" npm start
+```
+
+The colony already skips the scratch directories a harness makes for itself, and deliberately
+does not skip your home directory: for most people a session started in `~` is real work in a real
+place. If on your machine it is only ever where `claude login` gets run, this is how you say so.
+Exact match on purpose — naming `~` does not take `~/some-repo` off the map with it.
+
 What it touches on disk, in full:
 
 | | |
