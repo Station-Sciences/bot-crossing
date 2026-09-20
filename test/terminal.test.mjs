@@ -10,7 +10,7 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { openInTerminal } from '../server/lib/terminal.mjs'
+import { openInTerminal, shellQuote, shellLine } from '../server/lib/terminal.mjs'
 import { withEnv, withPlatform, fakeExecutable } from './support/env.mjs'
 
 const ARGV = ['/bin/true', 'x']
@@ -85,5 +85,71 @@ test('a missing DISPLAY is a refusal on Linux and nothing at all on macOS', posi
     assert.match(onLinux.error, /graphical display/)
     const onMac = await withPlatform('darwin', () => withEnv(headless, () => openInTerminal(ARGV, dir)))
     assert.equal(onMac.ok, true)
+  })
+})
+
+// ── macOS: Terminal.app and iTerm, through osascript ──────────────────────────
+
+test('every argv element is single-quoted, and the quoting survives every metacharacter', () => {
+  const nasty = `it's $HOME \`x\` "q" \\ ; & | > < * ? ( ) { } ~ ! #`
+  assert.equal(shellQuote(nasty), `'it'\\''s $HOME \`x\` "q" \\ ; & | > < * ? ( ) { } ~ ! #'`)
+  assert.equal(shellLine('/Users/a b/repo', ['/usr/local/bin/node', 'bin/queue.mjs']), "cd '/Users/a b/repo' && '/usr/local/bin/node' 'bin/queue.mjs'")
+})
+
+test('on macOS with nothing driven installed, Terminal.app is opened through osascript with one quoted line', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    const osascript = await fakeExecutable(dir, 'osascript')
+    const env = { ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: 'terminal' }
+    const result = await withPlatform('darwin', () => withEnv(env, () => openInTerminal(['/bin/true', "it's", 'x'], dir)))
+    assert.equal(result.ok, true, result.error)
+    const argv = await osascript.argv()
+    assert.equal(argv[0], '-e')
+    assert.equal(argv[1], 'tell application "Terminal"')
+    const script = argv.filter((_, i) => i % 2 === 1).join('\n')
+    // The shell line is 'it'\''s'; inside an AppleScript string its backslash is doubled.
+    assert.match(script, /do script "cd '.*' && '\/bin\/true' 'it'\\\\''s' 'x'"/, 'the shell line, as an AppleScript string')
+    assert.match(script, /end tell$/)
+  })
+})
+
+test('iTerm is chosen by name and typed into a new window', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    const osascript = await fakeExecutable(dir, 'osascript')
+    const env = { ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: 'iTerm' }
+    const result = await withPlatform('darwin', () => withEnv(env, () => openInTerminal(ARGV, dir)))
+    assert.equal(result.ok, true, result.error)
+    const script = (await osascript.argv()).filter((_, i) => i % 2 === 1).join('\n')
+    assert.match(script, /^tell application "iTerm"/)
+    assert.match(script, /create window with default profile/)
+    assert.match(script, /write text "cd '/)
+  })
+})
+
+test('a driven terminal still wins over Terminal.app on macOS, and Linux never reaches osascript', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    const osascript = await fakeExecutable(dir, 'osascript')
+    const kitty = await fakeExecutable(dir, 'kitty')
+    const env = { ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: kitty.file }
+    const onMac = await withPlatform('darwin', () => withEnv(env, () => openInTerminal(ARGV, dir)))
+    assert.equal(onMac.ok, true)
+    assert.equal(await kitty.called(), true)
+    assert.equal(await osascript.called(), false)
+
+  })
+  await withTmp(async (dir) => {
+    const osascript = await fakeExecutable(dir, 'osascript')
+    const onLinux = await withPlatform('linux', () => withEnv({ ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: 'terminal' }, () => openInTerminal(ARGV, dir)))
+    assert.equal(onLinux.ok, false)
+    assert.equal(await osascript.called(), false)
+  })
+})
+
+test('a line break in the command is refused rather than typed', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    const osascript = await fakeExecutable(dir, 'osascript')
+    const env = { ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: 'terminal' }
+    const result = await withPlatform('darwin', () => withEnv(env, () => openInTerminal(['/bin/true', 'a\nb'], dir)))
+    assert.equal(result.ok, false)
+    assert.equal(await osascript.called(), false)
   })
 })

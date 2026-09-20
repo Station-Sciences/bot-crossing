@@ -41,6 +41,111 @@ const TERMINALS = {
   st: (_dir, cmd) => ['-e', ...cmd],
 }
 
+/**
+ * macOS's own terminals. Terminal.app and iTerm take no argv — `open -a` hands them nothing —
+ * so they are driven through AppleScript, which types one line into a fresh window's login
+ * shell. That line is built from argv by single-quoting every element: the one POSIX quoting
+ * that survives every metacharacter, and one fish reads the same way (`'\''` closes, escapes,
+ * reopens). Nothing in a path, a session id or a title is ever read as shell. The window stays
+ * open on the command's output and a prompt — for a queue that prints and exits, the point.
+ *
+ * A named `terminal` or `iterm` is trusted; otherwise iTerm when it is installed, else
+ * Terminal.app, which every Mac has. `osascript` is looked up on PATH like any other
+ * launcher, so a test can stand one in and a machine with no PATH to it simply moves on.
+ */
+const MAC_APPS = {
+  terminal: {
+    bundle: '/System/Applications/Utilities/Terminal.app',
+    script: (line) => ['tell application "Terminal"', '  activate', `  do script ${appleString(line)}`, 'end tell'],
+  },
+  iterm: {
+    bundle: '/Applications/iTerm.app',
+    script: (line) => [
+      'tell application "iTerm"',
+      '  activate',
+      '  set w to (create window with default profile)',
+      `  tell current session of w to write text ${appleString(line)}`,
+      'end tell',
+    ],
+  },
+}
+const MAC_APP_NAMES = { terminal: 'terminal', 'terminal.app': 'terminal', iterm: 'iterm', iterm2: 'iterm', 'iterm.app': 'iterm' }
+
+/** One argv element, safe inside any POSIX shell — and fish. */
+export const shellQuote = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`
+
+/** The line the new window's shell will run. */
+export const shellLine = (cwd, argv) => `cd ${shellQuote(cwd)} && ${argv.map(shellQuote).join(' ')}`
+
+/** An AppleScript string literal: backslash and double quote are its only escapes. */
+const appleString = (s) => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+
+/** How long to wait for osascript: a first run can sit on a macOS permission prompt. */
+const OSASCRIPT_WAIT_MS = 10000
+
+async function openWithMacApp(names, cwd, argv) {
+  const osascript = await findExecutable('osascript')
+  if (!osascript) return null
+  // A line break cannot be typed as one line; nothing legitimate carries one.
+  if ([cwd, ...argv].some((s) => /[\r\n]/.test(s))) return { ok: false, error: 'Invalid launch command' }
+
+  let key = null
+  for (const name of names) {
+    const hit = MAC_APP_NAMES[path.basename(name).toLowerCase()]
+    if (hit) {
+      key = hit
+      break
+    }
+  }
+  if (!key) {
+    for (const candidate of ['iterm', 'terminal']) {
+      if (await fsp.access(MAC_APPS[candidate].bundle).then(() => true, () => false)) {
+        key = candidate
+        break
+      }
+    }
+  }
+  if (!key) return null
+
+  const lines = MAC_APPS[key].script(shellLine(cwd, argv))
+  const args = lines.flatMap((l) => ['-e', l])
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn(osascript, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+    } catch (err) {
+      resolve({ ok: false, error: err?.message || String(err) })
+      return
+    }
+    let stderr = ''
+    child.stderr.on('data', (d) => (stderr += d))
+    let settled = false
+    const done = (r) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(r)
+    }
+    child.on('error', (err) => done({ ok: false, error: err?.message || String(err) }))
+    child.on('exit', (code) => {
+      if (code === 0) return done({ ok: true })
+      // -1743 is macOS refusing the Apple event: the one-time Automation permission was declined.
+      const refused = /-1743|not authorized|Not authorized/i.test(stderr)
+      done({
+        ok: false,
+        error: refused
+          ? `macOS is not letting Bot Crossing control ${key === 'iterm' ? 'iTerm' : 'Terminal'} — allow it under System Settings → Privacy & Security → Automation`
+          : `${key === 'iterm' ? 'iTerm' : 'Terminal'} could not be opened (${stderr.trim().split('\n').pop() || `osascript exited ${code}`})`,
+      })
+    })
+    // Still running after this long means a permission prompt is up and the window follows it.
+    const timer = setTimeout(() => {
+      child.unref()
+      done({ ok: true })
+    }, OSASCRIPT_WAIT_MS)
+  })
+}
+
 const GENERAL_ORDER = [
   'gnome-terminal', 'konsole', 'xfce4-terminal', 'mate-terminal', 'kitty', 'alacritty', 'ghostty',
   'wezterm', 'foot', 'terminator', 'ptyxis', 'kgx', 'xterm', 'uxterm', 'urxvt', 'rxvt', 'st',
@@ -149,8 +254,9 @@ function trySpawn(cmd, args, cwd) {
  * opens a window on the wrong command — worse than moving on to a terminal we do know.
  *
  * On macOS the desktop walk finds nothing, so only a named terminal works there — kitty,
- * alacritty, ghostty and wezterm take the same flags on both. Terminal.app and iTerm are not
- * driven: `open -a` cannot hand them an argv without a shell string in between.
+ * alacritty, ghostty and wezterm take the same flags on both. Terminal.app and iTerm take no
+ * argv at all, so on macOS they come last, driven through AppleScript from a line every
+ * element of which is single-quoted — see MAC_APPS.
  */
 export async function openInTerminal(argv, cwd) {
   // Windows shares none of the trivia below — no PATH walk over sixteen emulators, no display
@@ -202,6 +308,10 @@ export async function openInTerminal(argv, cwd) {
 
   if (ranOut) {
     return { ok: false, error: 'Gave up waiting for a terminal to open — is the display responding?' }
+  }
+  if (process.platform === 'darwin') {
+    const mac = await openWithMacApp(names, cwd, argv)
+    if (mac) return mac
   }
   return {
     ok: false,
