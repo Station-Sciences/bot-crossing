@@ -8,6 +8,7 @@ import { bendPoint, withCurve } from '../core/curve.js'
 import { Props, CHECK_LEN, CHECK_EVERY, pickProp } from './props.js'
 import { projectHitPoint, bodyHitDistance } from './picking.js'
 import { helmetGeometry, visorGeometry, screenGeometry } from './model.js'
+import { isErrandId } from '../game/errands.js'
 
 /**
  * Every astronaut in the colony, batched into a fixed set of instanced draw calls.
@@ -545,7 +546,10 @@ export class Astronauts {
     const onScan = capped ? new Set(entries.map((e) => e.id)) : seen
     for (const agent of [...this.agents]) {
       if (seen.has(agent.id) || agent.state === 'leaving') continue
-      if (onScan.has(agent.id)) this._drop(agent)
+      // A subagent never walked in from the ship, so it does not walk back to it: an errand
+      // that has ended simply blinks out where it stood, beside its parent's building, rather
+      // than trekking a marching hammer back across the whole colony to the airlock.
+      if (onScan.has(agent.id) || isErrandId(agent.id)) this._drop(agent)
       else this._sendHome(agent)
     }
     return this.agents.length
