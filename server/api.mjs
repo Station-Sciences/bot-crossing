@@ -233,7 +233,13 @@ export async function present(result, via = 'app') {
   if (result.pid && (await focusWindowOfPid(result.pid))) return { ok: true, focused: true }
 
   if (process.platform !== 'linux') {
-    if (!result.url) return { ok: false, error: 'That harness has no deep link to open on this platform' }
+    // A harness with no app at all — a queue that lives in a CLI — offers a command and no URL,
+    // on every platform. That is the Linux fallback below, reached the same way: the terminal,
+    // or the truth about why not.
+    if (!result.url) {
+      if (result.command) return runInTerminal(result.command)
+      return { ok: false, error: 'That harness has no deep link to open on this platform' }
+    }
     launch(result.url)
     // A note is the adapter saying it opened *something* — the repo rather than the thread.
     return { ok: true, url: result.url, note: result.note }

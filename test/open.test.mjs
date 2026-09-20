@@ -40,6 +40,20 @@ test('asked for a terminal on Windows, present says so rather than trying', asyn
   assert.match(shown.error, /Windows/)
 })
 
+test('a harness with no app — a command and no URL — runs in a terminal on macOS too', posixOnly, async () => {
+  await withFakes(async ({ kitty }) => {
+    const command = { argv: ['/bin/true', 'review'], cwd: os.tmpdir() }
+    const shown = await withPlatform('darwin', () => present({ ok: true, url: '', command }, 'app'))
+    assert.equal(shown.ok, true, shown.error)
+    assert.equal(shown.via, 'terminal')
+    assert.ok(await kitty.called(), 'the terminal was the door, not the OS opener')
+  })
+  // And with nothing to run, the truth rather than a silent no-op.
+  const bare = await withPlatform('darwin', () => present({ ok: true, url: '' }, 'app'))
+  assert.equal(bare.ok, false)
+  assert.match(bare.error, /no deep link/)
+})
+
 test("an adapter's own refusal passes through whatever the page asked for", async () => {
   assert.equal((await present({ ok: false, error: 'nope' }, 'terminal')).error, 'nope')
   assert.equal((await present({ ok: false, error: 'nope' }, 'app')).error, 'nope')
