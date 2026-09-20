@@ -92,10 +92,44 @@ export async function scanThreads() {
       }
     })
   )
-  const threads = disambiguateProjects(lists.flat())
+  // Ignored directories go first: a thread in one must not make a real project's name look
+  // ambiguous and rename its plot on the way out.
+  const threads = disambiguateProjects(dropIgnoredDirs(lists.flat(), ignoredDirs()))
   threads.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   return threads
 }
+
+/**
+ * Directories the user has said are not projects, whatever harness ran there:
+ * `BOT_CROSSING_IGNORE_DIRS=/Users/me` — comma-separated, absolute, matched exactly.
+ *
+ * Scratch directories a harness makes are filtered by the harness that makes them, and the
+ * home directory is deliberately not among them (see HARNESS_SCRATCH in claude-code.mjs): for
+ * most people a session started in `~` is real work in a real place, and hiding real threads
+ * is worse than a dull zone. On a machine where `~` is only ever where `claude login` gets
+ * run, though, it draws a zone named after the user with "login" and two untitled threads in
+ * it, reading as a repo that does not exist. The user knows which directories on their
+ * machine are not projects; this lets them say so, the way BOT_CROSSING_DISABLE_HARNESSES
+ * lets them say which harnesses are theirs.
+ *
+ * Exact match, on purpose: naming `~` must not take `~/some-repo` off the map with it.
+ */
+export function ignoredDirs(env = process.env) {
+  return new Set(
+    (env.BOT_CROSSING_IGNORE_DIRS || '')
+      .split(',')
+      .map(trimDir)
+      .filter(Boolean)
+  )
+}
+
+export function dropIgnoredDirs(threads, dirs) {
+  if (!dirs?.size) return threads
+  return threads.filter((t) => !dirs.has(trimDir(t.projectPath || '')))
+}
+
+/** One spelling per directory: no surrounding space, no trailing separator. */
+const trimDir = (s) => String(s).trim().replace(/[\\/]+$/, '')
 
 /** What the HUD shows in the harness list: who is installed, and what they can do. */
 export async function harnessStatus() {

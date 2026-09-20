@@ -9,7 +9,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { disambiguateProjects } from '../server/scan.mjs'
+import { disambiguateProjects, ignoredDirs, dropIgnoredDirs } from '../server/scan.mjs'
 
 const thread = (id, project, projectPath) => ({ id, project, projectPath })
 const names = (threads) => disambiguateProjects(threads).map((t) => t.project)
@@ -83,4 +83,39 @@ test('posix paths are untouched by any of it', () => {
     ]),
     ['1/foo', '2/foo']
   )
+})
+
+// ── directories the user says are not projects ───────────────────────────────
+
+test('a directory the user named in BOT_CROSSING_IGNORE_DIRS is not a project, exactly that one', () => {
+  const dirs = ignoredDirs({ BOT_CROSSING_IGNORE_DIRS: ' /Users/me/ , /Users/me/Desktop' })
+  const out = dropIgnoredDirs(
+    [
+      { id: 'a', project: 'me', projectPath: '/Users/me' },
+      { id: 'b', project: 'me', projectPath: '/Users/me/' },
+      { id: 'c', project: 'app', projectPath: '/Users/me/app' },
+      { id: 'd', project: 'Desktop', projectPath: '/Users/me/Desktop' },
+      { id: 'e', project: 'unknown', projectPath: '' },
+    ],
+    dirs
+  )
+  assert.deepEqual(out.map((t) => t.id), ['c', 'e'])
+})
+
+test('with nothing named, nothing is dropped — the default is upstream\'s', () => {
+  const threads = [{ id: 'a', project: 'me', projectPath: '/Users/me' }]
+  assert.deepEqual(dropIgnoredDirs(threads, ignoredDirs({})), threads)
+  assert.equal(ignoredDirs({ BOT_CROSSING_IGNORE_DIRS: ' , ' }).size, 0)
+})
+
+test('an ignored directory is dropped before disambiguation, so it cannot rename a real plot', () => {
+  const threads = [
+    { id: 'a', project: 'foo', projectPath: '/Users/me/foo' },
+    { id: 'b', project: 'foo', projectPath: '/scratch/foo' },
+  ]
+  const dirs = ignoredDirs({ BOT_CROSSING_IGNORE_DIRS: '/scratch/foo' })
+  const out = disambiguateProjects(dropIgnoredDirs(threads, dirs))
+  assert.deepEqual(out.map((t) => [t.id, t.project]), [['a', 'foo']])
+  const wrongOrder = dropIgnoredDirs(disambiguateProjects(threads), dirs)
+  assert.notEqual(wrongOrder[0].project, 'foo')
 })
