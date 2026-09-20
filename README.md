@@ -816,7 +816,7 @@ BOT_CROSSING_TERMINAL=kitty npm start
 ```
 
 A name on `PATH` or an absolute path, and it has to be one whose flags are known — gnome-terminal, konsole, kitty, alacritty, ghostty, wezterm, foot, xterm and their relatives — since one that is not is skipped rather than guessed at.
-On macOS only a named terminal works; point it at a real binary rather than an `.app`.
+On macOS, with none of those installed, the Mac's own Terminal is used (iTerm first when it is installed), driven through AppleScript with every argument quoted; `BOT_CROSSING_TERMINAL=terminal` or `=iterm` picks one outright. The first time, macOS asks whether the server may control Terminal — that is the OS's one-time Automation permission, and the window follows the click.
 Windows is not supported yet.
 
 What it touches on disk, in full:
