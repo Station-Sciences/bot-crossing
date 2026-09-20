@@ -141,6 +141,21 @@ const SUBAGENT_HEAD_BYTES = 64 * 1024
 const ID = (raw) => `claude-code:${raw}`
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * A title from a prompt, for a thread the desktop app never named: its first line that says
+ * anything, and no more of it than every other harness keeps. The fallback used to hand back
+ * the whole prompt — a headless orchestrator run opens with three kilobytes of instructions, and six
+ * of those were a third of every poll's payload, laid out as a title.
+ */
+const TITLE_MAX = 120
+export function titleFromPrompt(prompt) {
+  const line = String(prompt || '')
+    .split('\n')
+    .map((s) => s.trim())
+    .find(Boolean)
+  return line ? line.slice(0, TITLE_MAX) : 'Untitled thread'
+}
 const DESKTOP_ID = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // The type check matters wherever an id came back from the page: `RegExp.test` stringifies, so a
 // one-element array holding a valid id would pass the pattern and then travel on as an array.
@@ -501,7 +516,7 @@ async function scanThreads() {
       desktopSessionIds: s.sessionId ? [s.sessionId] : [],
       titled: Boolean(s.title),
       bridgeSessionId: (s.bridgeSessionIds && s.bridgeSessionIds[0]) || '',
-      title: s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || meta?.firstPrompt || 'Untitled thread',
+      title: s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || titleFromPrompt(meta?.firstPrompt),
       preview: meta?.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,
@@ -550,7 +565,7 @@ async function scanThreads() {
       desktopSessionIds: [],
       titled: Boolean(meta.customTitle || meta.aiTitle),
       bridgeSessionId: '',
-      title: meta.customTitle || meta.aiTitle || meta.summary || meta.firstPrompt || 'Untitled thread',
+      title: meta.customTitle || meta.aiTitle || meta.summary || titleFromPrompt(meta.firstPrompt),
       preview: meta.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,

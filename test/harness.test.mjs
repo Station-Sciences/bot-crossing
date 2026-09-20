@@ -15,7 +15,7 @@ import opencode from '../server/harnesses/opencode.mjs'
 
 import { HARNESSES } from '../server/harnesses/index.mjs'
 import codex from '../server/harnesses/codex.mjs'
-import claudeCode from '../server/harnesses/claude-code.mjs'
+import claudeCode, { titleFromPrompt } from '../server/harnesses/claude-code.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
 import { schemeOf } from '../server/lib/xdg.mjs'
 import { withEnv, withPlatform, fakeExecutable } from './support/env.mjs'
@@ -835,4 +835,16 @@ test('kilocode refuses untrusted refs and opens the repo folder in VS Code', asy
     delete process.env.KILO_DB
     await fsp.rm(home, { recursive: true, force: true })
   }
+})
+
+// ── a title is a line ─────────────────────────────────────────────────────────
+
+test('a thread the desktop never named takes the first line of its prompt, and no more than 120 of it', () => {
+  assert.equal(titleFromPrompt('Fix the login bug\n\nIt fails when…'), 'Fix the login bug')
+  assert.equal(titleFromPrompt('\n\n  second line is the first that says anything\nthird'), 'second line is the first that says anything')
+  const long = 'The block above is live local git activity, read just now. ' + 'x'.repeat(4000)
+  assert.equal(titleFromPrompt(long).length, 120)
+  assert.equal(titleFromPrompt(''), 'Untitled thread')
+  assert.equal(titleFromPrompt(undefined), 'Untitled thread')
+  assert.equal(titleFromPrompt('   \n  '), 'Untitled thread')
 })
