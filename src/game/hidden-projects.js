@@ -24,11 +24,33 @@ export function unhideProject(hidden, name) {
   return hidden.filter((n) => n !== id)
 }
 
+/**
+ * How long after a thread's last activity its repo keeps its ground.
+ *
+ * A `.jsonl` never leaves disk, so left alone the colony grows a zone for every repo you have
+ * ever run a session in and never shrinks. "Active today" is the line: a repo earns a plot only
+ * while something in it has a live process, or stirred in the last day. Everything older is still
+ * on disk, still archivable, still there the moment it moves again — it just stops owning ground.
+ */
+export const ACTIVE_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/** True while a thread's repo should hold ground: a live process, or activity inside the window. */
+export function isActiveToday(thread, now = Date.now()) {
+  if (thread.hasLiveProcess === true) return true
+  return now - (thread.lastActivityAt || thread.createdAt || 0) < ACTIVE_WINDOW_MS
+}
+
 /** The threads the colony should actually draw. */
-export function liveThreadsForColony(threads, archivedIds, hiddenProjects) {
+export function liveThreadsForColony(threads, archivedIds, hiddenProjects, now = Date.now()) {
   const archived = archivedIds instanceof Set ? archivedIds : new Set(archivedIds)
   const hidden = hiddenProjects instanceof Set ? hiddenProjects : new Set(hiddenProjects)
-  return threads.filter((t) => !t.archived && !archived.has(t.id) && !hidden.has(t.project || 'unknown'))
+  return threads.filter(
+    (t) =>
+      !t.archived &&
+      !archived.has(t.id) &&
+      !hidden.has(t.project || 'unknown') &&
+      isActiveToday(t, now)
+  )
 }
 
 /**
