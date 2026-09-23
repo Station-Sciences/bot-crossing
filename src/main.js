@@ -17,6 +17,7 @@ import { shorelinePoints } from './world/planet.js'
 import { shipPosition } from './world/plots.js'
 import {
   fetchThreads,
+  fetchHarnesses,
   fetchState,
   saveState,
   openThread,
@@ -24,6 +25,7 @@ import {
   revealFolder,
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
+import { toggleSelection } from './game/scan-selection.js'
 import { withErrands } from './game/errands.js'
 
 /**
@@ -61,8 +63,23 @@ engine.setPlanetGrade(PLANETS[settings.get('planet')]?.grade)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
+let state = {
+  archived: [],
+  archivedAt: {},
+  opened: [],
+  plots: {},
+  seen: {},
+  hiddenProjects: [],
+  viewedAt: {},
+  repositorySettings: null,
+}
 let threads = []
+/** Every repo path the scanner saw last poll — includes paths filtered out of the map. */
+/** Every repo path the last scan saw, including ones the map filter is currently hiding. */
+let scanRepoPaths = []
+let scanRepoCounts = {}
+let scanHarnessCounts = {}
+let harnesses = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
 /** The zone layout as last written to the colony file, so an unchanged map is not re-saved. */
@@ -235,15 +252,43 @@ const actions = {
   copyProjectPath: async () => {
     const folder = selectedProject && pathForProject(selectedProject)
     if (!folder) return
+    await actions.copyText(folder)
+  },
+
+  copyText: async (text) => {
+    if (!text) return
     try {
-      await navigator.clipboard.writeText(folder)
+      await navigator.clipboard.writeText(text)
       hud.toast('Path copied')
     } catch {
       // The async clipboard needs a permission this page does not always have — inside an
       // embedded preview, say. The old selection-based copy has no such gate.
-      const copied = copyFallback(folder)
+      const copied = copyFallback(text)
       hud.toast(copied ? 'Path copied' : 'Could not reach the clipboard', copied ? '' : 'err')
     }
+  },
+
+  onSettingsOpen: async () => {
+    try {
+      const res = await fetchHarnesses()
+      harnesses = res.harnesses || []
+    } catch {
+      harnesses = []
+    }
+    hud.syncScanSettings(scanPanelData())
+  },
+
+  toggleHarness: (harnessId, enabled) => {
+    const disabled = new Set(state.repositorySettings?.disabledHarnesses || [])
+    if (enabled) disabled.delete(harnessId)
+    else disabled.add(harnessId)
+    setRepositorySettings({ disabledHarnesses: disabled.size ? [...disabled].sort() : undefined })
+  },
+
+  toggleScanPath: (targetPath, checked) => {
+    const excluded = state.repositorySettings?.excludedPaths || []
+    const next = toggleSelection(targetPath, checked, scanRepoPaths, excluded)
+    setRepositorySettings({ excludedPaths: next.length ? next : undefined })
   },
 
   openThread: async () => {
@@ -996,12 +1041,90 @@ function chimeForNewWaiting(list, archivedSet, hiddenSet) {
   for (const id of waiting) waitingBefore.add(id)
 }
 
+/**
+ * Patch the scan settings, dropping keys set to `undefined`.
+ *
+ * The whole object goes back to `null` once nothing is configured, because "no key" is what
+ * both the server and the merge read as *nothing switched off* — leaving an empty list behind
+ * would be a second spelling of the default for them to disagree about.
+ */
+async function setRepositorySettings(patch) {
+  const next = { ...(state.repositorySettings || {}), ...patch }
+  for (const [k, v] of Object.entries(next)) if (v === undefined) delete next[k]
+  state.repositorySettings = Object.keys(next).length ? next : null
+
+  // The tick redraws now; the colony catches up on its own — see `scheduleRefresh`.
+  hud.syncScanSettings(scanSelectionData())
+
+  // The scanner filters by what is *in the colony file*, so the file has to be written before
+  // there is any point asking it again. The ordinary 500ms save debounce loses that race
+  // outright: the refresh goes out first, comes back describing the settings as they were, and
+  // nothing else is scheduled — so the panel sits on stale counts until the next fifteen-second
+  // poll wanders past. Which looks exactly like a switch that takes fifteen seconds to work.
+  await flushSave()
+  scheduleRefresh(0)
+}
+
 let polling = false
+let pollQueued = false
+let refreshTimer = 0
+
+/**
+ * Refresh the colony soon, rather than during the click.
+ *
+ * Ticking a box is a cheap bit of DOM, but the map it implies is not: `applyThreads` re-lays
+ * the zones and rebuilds every building and astronaut that changed, and switching a harness
+ * with forty threads off means tearing all of them down. Run inline, that lands in the same
+ * frame as the click and reads as the control being slow, when the control has in fact already
+ * responded.
+ *
+ * The delay also coalesces a run of clicks — unticking six folders in a row is one rebuild at
+ * the end, not six — and it is short enough to feel like the same gesture.
+ */
+function scheduleRefresh(delay = 220) {
+  clearTimeout(refreshTimer)
+  refreshTimer = setTimeout(poll, delay)
+}
+
+/** Resolves once the browser has actually painted, rather than merely been asked to. */
+const nextPaint = () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))
+
+/** What the Repos tab draws, minus the harness list — that comes from its own endpoint. */
+function scanSelectionData() {
+  return {
+    disabledHarnesses: state.repositorySettings?.disabledHarnesses || [],
+    excludedPaths: state.repositorySettings?.excludedPaths || [],
+    repoPaths: scanRepoPaths,
+    repoCounts: scanRepoCounts,
+    harnessCounts: scanHarnessCounts,
+  }
+}
+
+function scanPanelData() {
+  return { harnesses, ...scanSelectionData() }
+}
+
 async function poll() {
-  if (polling) return
+  // A toggle that lands mid-poll would otherwise be dropped, and the map would sit there
+  // disagreeing with the ticks until the next scheduled scan fifteen seconds later.
+  if (polling) {
+    pollQueued = true
+    return
+  }
   polling = true
   try {
     const res = await fetchThreads()
+    scanRepoPaths = res.repoPaths || []
+    scanRepoCounts = res.repoCounts || {}
+    scanHarnessCounts = res.harnessCounts || {}
+
+    // The panel is a few dozen rows and the map is several hundred meshes, so the panel is
+    // drawn first and given a frame to actually reach the screen. Without the yield both
+    // happen in one task and the browser paints neither until the slow one is finished, which
+    // is the whole reason the new numbers appeared to arrive late.
+    hud.syncScanSettings(scanSelectionData())
+    if (hud.reposTabOpen()) await nextPaint()
+
     applyThreads(res.threads || [])
     hud.removeBoot()
   } catch (err) {
@@ -1009,21 +1132,33 @@ async function poll() {
     hud.removeBoot()
   } finally {
     polling = false
+    if (pollQueued) {
+      pollQueued = false
+      scheduleRefresh(0)
+    }
+  }
+}
+
+async function writeColony() {
+  try {
+    // Adopt whatever comes back: unchanged when the save was clean, and the merged colony when
+    // another tab had written since this one loaded. Dropping it would leave this page
+    // asserting a picture the file has already moved past, and the next save would fight.
+    state = await saveState(state)
+  } catch {
+    /* the colony still runs; only the archive list is at risk, and it retries next time */
   }
 }
 
 function queueSave() {
   clearTimeout(pendingSave)
-  pendingSave = setTimeout(async () => {
-    try {
-      // Adopt whatever comes back: unchanged when the save was clean, and the merged colony when
-      // another tab had written since this one loaded. Dropping it would leave this page
-      // asserting a picture the file has already moved past, and the next save would fight.
-      state = await saveState(state)
-    } catch {
-      /* the colony still runs; only the archive list is at risk, and it retries next time */
-    }
-  }, 500)
+  pendingSave = setTimeout(writeColony, 500)
+}
+
+/** Write now and wait for it, for the callers whose next step depends on the file. */
+function flushSave() {
+  clearTimeout(pendingSave)
+  return writeColony()
 }
 
 async function boot() {
