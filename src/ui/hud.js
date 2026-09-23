@@ -4,6 +4,7 @@ import { TIMES, systemTimeOfDay } from '../world/sky.js'
 import { STATUS_LABEL } from '../game/colony.js'
 import { FACE, FRAME_COLS, FRAME_ROWS } from '../agents/faces.js'
 import { PLOT_PALETTE, hashString } from '../world/plots.js'
+import { buildDisplayTree, reposUnder, selectionState } from '../game/scan-selection.js'
 
 /**
  * The whole HUD, in plain DOM.
@@ -40,6 +41,7 @@ const ICON = {
   archive: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18v3H3z"/><path d="M5 9v10h14V9"/><path d="M10 13h4"/></svg>`,
   close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
   back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>`,
+  caret: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>`,
   plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.7a8 8 0 0 1-8.5 8 9.3 9.3 0 0 1-2.7-.4L4.5 21l1.4-4.1a7.9 7.9 0 0 1-2.4-5.7A8 8 0 0 1 12 3.6a8 8 0 0 1 8.5 8.1z"/><path d="M12 8.6v5.4M9.3 11.3h5.4"/></svg>`,
   folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.4A1.4 1.4 0 0 1 4.4 6h4.2l2 2.5h7A1.4 1.4 0 0 1 19 9.9v7.7a1.4 1.4 0 0 1-1.4 1.4H4.4A1.4 1.4 0 0 1 3 17.6z"/></svg>`,
   copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>`,
@@ -47,6 +49,20 @@ const ICON = {
   orbit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><ellipse cx="12" cy="12" rx="10.2" ry="4.6" transform="rotate(-24 12 12)"/><circle cx="21" cy="8.2" r="1.5" fill="currentColor" stroke="none"/></svg>`,
   sound: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18 6.5a8 8 0 0 1 0 11"/></svg>`,
   soundOff: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>`,
+}
+
+/** Kept in step with the row transitions in `styles.css`. */
+const LOC_ANIM_MS = 400
+
+/** Also the key list `syncScanSettings` patches against, so a new field must be added here. */
+const SCAN_DEFAULTS = {
+  harnesses: [],
+  disabledHarnesses: [],
+  harnessCounts: {},
+  repoPaths: [],
+  repoCounts: {},
+  /** Repositories switched off, by exact path. Empty is "everything is on the map". */
+  excludedPaths: [],
 }
 
 const STAT_DEFS = [
@@ -64,6 +80,11 @@ export class Hud {
     this.visible = true
     this._last = {}
     this.hiddenOpen = false
+    this._scanSignature = ''
+    this._scanExpanded = new Set()
+    this._scanSeeded = false
+    /** Location rows on screen, keyed by path, so a repaint can reuse rather than rebuild. */
+    this._locRows = new Map()
 
     this.el = document.createElement('div')
     this.el.className = 'hud'
@@ -105,11 +126,64 @@ export class Hud {
 
   _buildSettings() {
     const body = this.$('.settings .body')
+    body.replaceChildren()
     const s = this.settings
     this.controls = []
+    this.settingsTab = 'rendering'
+
+    const sheet = document.createElement('div')
+    sheet.className = 'settings-sheet'
+
+    const tabs = document.createElement('div')
+    tabs.className = 'settings-tabs'
+    tabs.setAttribute('role', 'tablist')
+    for (const def of [
+      { id: 'rendering', label: 'Rendering' },
+      // "Repo" is upstream's word for a zone throughout the sidebar and the help sheet. It is
+      // the looser word — plenty of these folders are not repositories — but one vocabulary
+      // that is slightly wrong beats two that are each right somewhere.
+      { id: 'repos', label: 'Repos' },
+    ]) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'settings-tab'
+      b.id = `settings-tab-${def.id}`
+      b.textContent = def.label
+      b.setAttribute('role', 'tab')
+      b.setAttribute('aria-selected', 'false')
+      b.setAttribute('aria-controls', `settings-pane-${def.id}`)
+      b.addEventListener('click', () => this._setSettingsTab(def.id))
+      tabs.appendChild(b)
+    }
+    sheet.appendChild(tabs)
+
+    const sheetBody = document.createElement('div')
+    sheetBody.className = 'settings-sheet-body'
+
+    const rendering = document.createElement('div')
+    rendering.className = 'settings-pane'
+    rendering.id = 'settings-pane-rendering'
+    rendering.setAttribute('role', 'tabpanel')
+    rendering.setAttribute('aria-labelledby', 'settings-tab-rendering')
+    sheetBody.appendChild(rendering)
+
+    const repos = document.createElement('div')
+    repos.className = 'settings-pane'
+    repos.id = 'settings-pane-repos'
+    repos.setAttribute('role', 'tabpanel')
+    repos.setAttribute('aria-labelledby', 'settings-tab-repos')
+    repos.hidden = true
+    sheetBody.appendChild(repos)
+
+    sheet.appendChild(sheetBody)
+    body.appendChild(sheet)
+
+    this.settingsPanes = { rendering, repos }
+    this._buildReposSettings(repos)
+    this._setSettingsTab('rendering', { focus: false })
 
     // Quality presets.
-    body.appendChild(
+    rendering.appendChild(
       group(
         'Quality preset',
         chips(
@@ -181,7 +255,7 @@ export class Hud {
       this._slider('Max bots', 'maxAgents', 10, 200, 10, (v) => String(v)),
       this._toggle('Stars', 'stars')
     )
-    body.appendChild(perf)
+    rendering.appendChild(perf)
 
     // World.
     const world = group('Planet')
@@ -201,7 +275,7 @@ export class Hud {
       this.controls.push({ el: b, sync: () => b.setAttribute('aria-pressed', String(this.settings.get('planet') === id)) })
     }
     world.appendChild(planets)
-    body.appendChild(world)
+    rendering.appendChild(world)
 
     // Lighting.
     const light = group('Lighting')
@@ -239,7 +313,7 @@ export class Hud {
       this._slider('Exposure', 'exposure', 0.4, 2, 0.05, (v) => v.toFixed(2)),
       this._slider('Bloom', 'bloomStrength', 0, 1.6, 0.02, (v) => v.toFixed(2))
     )
-    body.appendChild(light)
+    rendering.appendChild(light)
 
     // View.
     const view = group('View')
@@ -273,7 +347,7 @@ export class Hud {
       this._toggle('Reduced motion', 'reducedMotion', 'Calms the bobbing and the camera easing.'),
       this._toggle('Show FPS', 'showFps')
     )
-    body.appendChild(view)
+    rendering.appendChild(view)
 
     // Look.
     const look = group('Look')
@@ -306,7 +380,7 @@ export class Hud {
         ['full', 'Full'],
       ])
     )
-    body.appendChild(look)
+    rendering.appendChild(look)
 
     // Sound.
     const sound = group('Sound')
@@ -320,7 +394,321 @@ export class Hud {
       this._slider('Ambience', 'ambienceVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`, 'Beds and the sounds of the world.'),
       this._slider('Effects', 'effectsVolume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}%`, 'Hammering, drones, splashes, the chime when somebody needs you.')
     )
-    body.appendChild(sound)
+    rendering.appendChild(sound)
+  }
+
+  _setSettingsTab(id, { focus = true } = {}) {
+    if (!this.settingsPanes) return
+    this.settingsTab = id
+    for (const [paneId, pane] of Object.entries(this.settingsPanes)) {
+      const on = paneId === id
+      pane.hidden = !on
+      const tab = this.$(`#settings-tab-${paneId}`)
+      tab?.setAttribute('aria-selected', String(on))
+    }
+    if (id === 'repos') {
+      this._scanSignature = ''
+      this.actions.onSettingsOpen?.()
+    }
+    if (focus) this.$(`#settings-tab-${id}`)?.focus({ preventScroll: true })
+  }
+
+  _buildReposSettings(body) {
+    const intro = document.createElement('p')
+    intro.className = 'scan-intro'
+    intro.textContent = 'Choose which repos to show on the map.'
+    body.appendChild(intro)
+
+    const harnessWrap = document.createElement('div')
+    harnessWrap.className = 'scan-harnesses'
+    body.appendChild(group('Harnesses', harnessWrap))
+    this.scanHarnessesEl = harnessWrap
+
+    const locWrap = document.createElement('div')
+    locWrap.className = 'loc-tree'
+    locWrap.setAttribute('role', 'tree')
+    locWrap.setAttribute('aria-label', 'Locations to scan')
+    body.appendChild(group('Locations', locWrap))
+    this.scanLocationsEl = locWrap
+  }
+
+  settingsOpen() {
+    return !this.$('.settings').classList.contains('closed')
+  }
+
+  reposTabOpen() {
+    return this.settingsOpen() && this.settingsTab === 'repos'
+  }
+
+  /**
+   * A patch, not a snapshot: the harness list comes from `/api/harnesses` and everything else
+   * from the poll, so whichever arrives second must not blank out what the first one brought.
+   */
+  syncScanSettings(partial = {}) {
+    if (!this.scanHarnessesEl) return
+    const prev = this._lastScanData || SCAN_DEFAULTS
+    this._lastScanData = { ...prev }
+    for (const key of Object.keys(SCAN_DEFAULTS)) {
+      if (partial[key] !== undefined) this._lastScanData[key] = partial[key]
+    }
+    if (!this.reposTabOpen()) return
+    this._paintScanSettings()
+  }
+
+  _paintScanSettings() {
+    const data = this._lastScanData || SCAN_DEFAULTS
+    const { harnesses, disabledHarnesses, harnessCounts, repoPaths, repoCounts, excludedPaths } = data
+    const disabled = new Set(disabledHarnesses)
+    const signature = [
+      harnesses.map((h) => `${h.id}:${h.detected}:${h.error}`).join('~'),
+      [...disabled].sort().join('|'),
+      JSON.stringify(harnessCounts),
+      repoPaths.join('|'),
+      JSON.stringify(repoCounts),
+      excludedPaths.join('|'),
+      [...this._scanExpanded].sort().join('|'),
+    ].join('§')
+    if (signature === this._scanSignature) return
+    this._scanSignature = signature
+
+    this._paintHarnesses(harnesses, disabled, harnessCounts)
+    this._paintLocations(repoPaths, excludedPaths, repoCounts)
+  }
+
+  _paintHarnesses(harnesses, disabled, harnessCounts) {
+    this.scanHarnessesEl.innerHTML = ''
+    for (const h of harnesses) {
+      // A harness that is not installed is off, and not yours to switch on: there is nothing
+      // behind the switch to read. Left as a live control it reads as on and contributing,
+      // which is the one thing this list exists to tell you the truth about.
+      const enabled = h.detected && !disabled.has(h.id)
+      const count = harnessCounts[h.id] || 0
+      let hint = ''
+      if (!h.detected) hint = 'Not installed on this machine'
+      else if (h.error) hint = h.error
+      else if (count) hint = `${count} thread${count === 1 ? '' : 's'}`
+      else hint = 'No threads yet'
+
+      const row = this._row(h.name, hint)
+      row.classList.add('scan-harness-row')
+      if (!h.detected) row.classList.add('muted')
+
+      const toggle = document.createElement('button')
+      toggle.type = 'button'
+      toggle.className = 'toggle'
+      toggle.setAttribute('role', 'switch')
+      toggle.setAttribute('aria-checked', String(enabled))
+      if (h.detected) {
+        toggle.setAttribute('aria-label', `${enabled ? 'Disable' : 'Enable'} ${h.name}`)
+        toggle.addEventListener('click', () => this.actions.toggleHarness?.(h.id, !enabled))
+      } else {
+        toggle.disabled = true
+        toggle.setAttribute('aria-label', `${h.name} is not installed`)
+        toggle.title = 'Nothing to read — this harness is not installed'
+      }
+      row.appendChild(toggle)
+      this.scanHarnessesEl.appendChild(row)
+    }
+  }
+
+  /**
+   * Reconcile the tree against what is already on screen, keyed by path.
+   *
+   * Rebuilding the list wholesale was the reason switching a harness on looked violent: every
+   * surviving row was a brand new element in the same place as the old one, so the whole panel
+   * blinked and there was no way to tell what had actually arrived. Matching on path means a
+   * row that did not change is not touched at all, and the handful that did are the only things
+   * that move — which is what leaves room for the arrival and departure to be worth animating.
+   */
+  _paintLocations(repoPaths, excluded, repoCounts) {
+    const wrap = this.scanLocationsEl
+
+    if (!repoPaths.length) {
+      this._locRows.clear()
+      wrap.replaceChildren()
+      const empty = document.createElement('p')
+      empty.className = 'scan-note'
+      empty.textContent = 'Nothing found yet. Folders appear here once a harness reports a thread in one.'
+      wrap.appendChild(empty)
+      return
+    }
+    wrap.querySelector('.scan-note')?.remove()
+
+    const tree = buildDisplayTree(repoPaths)
+    // Roots open on first sight, so the panel opens on something rather than on a row of
+    // closed twisties — everything below stays folded, which is what keeps it short.
+    if (!this._scanSeeded) {
+      for (const node of tree) this._scanExpanded.add(node.path)
+      this._scanSeeded = true
+    }
+
+    const rows = []
+    const flatten = (node, depth) => {
+      rows.push({ node, depth })
+      if (node.children.length && this._scanExpanded.has(node.path)) {
+        for (const child of node.children) flatten(child, depth + 1)
+      }
+    }
+    for (const node of tree) flatten(node, 0)
+
+    const wanted = new Set()
+    const ordered = []
+    const arriving = []
+    for (const { node, depth } of rows) {
+      wanted.add(node.path)
+      let entry = this._locRows.get(node.path)
+      if (!entry) {
+        entry = this._createLocationRow(node.path)
+        this._locRows.set(node.path, entry)
+        arriving.push(entry.el)
+      }
+      this._updateLocationRow(entry, node, depth, repoPaths, excluded, repoCounts)
+      ordered.push(entry.el)
+    }
+
+    // Departing rows stay put while they collapse, so `ref` steps over them rather than
+    // letting a surviving row be inserted in front of one that is still on its way out.
+    let ref = wrap.firstElementChild
+    for (const el of ordered) {
+      while (ref && ref.dataset.leaving === '1') ref = ref.nextElementSibling
+      if (ref === el) {
+        ref = el.nextElementSibling
+        continue
+      }
+      wrap.insertBefore(el, ref)
+    }
+
+    // Only once they are in their final place, where their height can be measured.
+    for (const el of arriving) this._enterLocationRow(el)
+
+    for (const [path, entry] of [...this._locRows]) {
+      if (wanted.has(path)) continue
+      this._locRows.delete(path)
+      this._leaveLocationRow(entry.el)
+    }
+  }
+
+  _createLocationRow(path) {
+    const el = document.createElement('div')
+    el.className = 'loc-row'
+    el.setAttribute('role', 'treeitem')
+    el.setAttribute('aria-selected', 'false')
+
+    const twist = document.createElement('button')
+    twist.type = 'button'
+    twist.className = 'loc-twist'
+    twist.addEventListener('click', () => this._toggleLocationOpen(path))
+
+    const check = document.createElement('button')
+    check.type = 'button'
+    check.className = 'loc-check'
+    check.setAttribute('role', 'checkbox')
+
+    const name = document.createElement('span')
+    name.className = 'loc-name'
+    name.title = path
+    name.addEventListener('click', () => {
+      if (el.hasAttribute('aria-expanded')) this._toggleLocationOpen(path)
+    })
+
+    const count = document.createElement('span')
+    count.className = 'loc-count'
+
+    el.append(twist, check, name, count)
+    const entry = { el, twist, check, name, count, last: {} }
+    check.addEventListener('click', () => this.actions.toggleScanPath?.(path, entry.last.state !== 'checked'))
+    return entry
+  }
+
+  /** Every write is guarded, so an unchanged row costs no DOM work and cannot flicker. */
+  _updateLocationRow(entry, node, depth, repoPaths, excluded, repoCounts) {
+    const { el, twist, check, name, count, last } = entry
+    const hasChildren = node.children.length > 0
+    const expanded = hasChildren && this._scanExpanded.has(node.path)
+    const state = selectionState(node.path, repoPaths, excluded)
+    // The top row spells out where on disk this is; below it the folded segment names are
+    // enough, and the full path stays a hover away.
+    const label = depth === 0 ? shortPath(node.path, 34, { home: false }) : node.label
+    let threads = 0
+    for (const repo of reposUnder(node.path, repoPaths)) threads += repoCounts[repo] || 0
+
+    if (last.depth !== depth) {
+      el.style.setProperty('--depth', String(depth))
+      el.setAttribute('aria-level', String(depth + 1))
+    }
+    if (last.state !== state) {
+      el.classList.toggle('off', state === 'unchecked')
+      check.setAttribute('aria-checked', state === 'mixed' ? 'mixed' : String(state === 'checked'))
+      check.title =
+        state === 'mixed'
+          ? 'Some of this folder is on the map'
+          : state === 'checked'
+            ? 'On the map — click to leave it out'
+            : 'Left out — click to put it back on the map'
+    }
+    if (last.hasChildren !== hasChildren) {
+      twist.classList.toggle('leaf', !hasChildren)
+      twist.innerHTML = hasChildren ? ICON.caret : ''
+      twist.tabIndex = hasChildren ? 0 : -1
+      twist.setAttribute('aria-hidden', String(!hasChildren))
+      if (!hasChildren) el.removeAttribute('aria-expanded')
+    }
+    if (hasChildren && last.expanded !== expanded) {
+      el.setAttribute('aria-expanded', String(expanded))
+      twist.title = expanded ? 'Collapse' : 'Expand'
+    }
+    if (last.label !== label) {
+      name.textContent = label
+      check.setAttribute('aria-label', label)
+      if (hasChildren) twist.setAttribute('aria-label', `${expanded ? 'Collapse' : 'Expand'} ${label}`)
+    }
+    if (last.threads !== threads) {
+      count.textContent = threads ? String(threads) : ''
+      count.title = threads ? `${threads} thread${threads === 1 ? '' : 's'}` : ''
+    }
+
+    entry.last = { depth, state, hasChildren, expanded, label, threads }
+  }
+
+  /**
+   * Open the row's height as it fades in, rather than only fading.
+   *
+   * Fading alone still reads as a jolt, because the row claims its full height the instant it
+   * is inserted and everything below it jumps by that much while the fade has barely started.
+   * The space has to arrive at the same speed the row does.
+   */
+  _enterLocationRow(el) {
+    // Measured before it is closed up, which is the only moment its natural height is on show.
+    const height = el.offsetHeight || 26
+    el.classList.add('is-entering', 'is-animating')
+    el.style.height = '0px'
+    requestAnimationFrame(() => {
+      el.style.height = `${height}px`
+      el.classList.remove('is-entering')
+      window.setTimeout(() => {
+        // Back to auto, so a row that later needs two lines is not pinned to one.
+        el.style.height = ''
+        el.classList.remove('is-animating')
+      }, LOC_ANIM_MS)
+    })
+  }
+
+  /** Collapse in place rather than vanish, so the rows below slide up instead of jumping. */
+  _leaveLocationRow(el) {
+    el.dataset.leaving = '1'
+    el.style.height = `${el.offsetHeight}px`
+    el.classList.add('is-leaving')
+    requestAnimationFrame(() => {
+      el.style.height = '0px'
+    })
+    window.setTimeout(() => el.remove(), LOC_ANIM_MS + 40)
+  }
+
+  _toggleLocationOpen(path) {
+    if (this._scanExpanded.has(path)) this._scanExpanded.delete(path)
+    else this._scanExpanded.add(path)
+    this._scanSignature = ''
+    this._paintScanSettings()
   }
 
   _row(label, hint) {
@@ -918,8 +1306,10 @@ export class Hud {
     side.classList.toggle('covered', open)
     side.inert = open
     panel.inert = !open
-    if (open) this.$('#btn-close-settings').focus({ preventScroll: true })
-    else if (panel.contains(document.activeElement)) this.$('#btn-settings').focus({ preventScroll: true })
+    if (open) {
+      if (this.settingsTab === 'repos') this.actions.onSettingsOpen?.()
+      this.$('#btn-close-settings').focus({ preventScroll: true })
+    } else if (panel.contains(document.activeElement)) this.$('#btn-settings').focus({ preventScroll: true })
   }
 
   toggleHelp(force) {
@@ -1014,9 +1404,13 @@ function statusClass(status) {
  * A path that fits, trimmed from the *left* so the repo end survives — the deep end is the
  * part that identifies it. CSS can only ellipsise the tail, and `direction: rtl` mangles a
  * leading `~`, so the trim is done here and the whole path lives in the title attribute.
+ *
+ * `home: false` keeps the real path. Abbreviating to `~` is a kindness everywhere the deep end
+ * is the subject, but a row that *is* the home folder abbreviates to `~` and nothing else,
+ * which names no place at all.
  */
-function shortPath(dir, max = 30) {
-  const home = dir.replace(/^\/Users\/[^/]+/, '~')
+function shortPath(dir, max = 30, { home: useHome = true } = {}) {
+  const home = useHome ? dir.replace(/^\/Users\/[^/]+/, '~') : dir
   if (home.length <= max) return home
   const parts = home.split('/')
   let out = parts.pop() || ''

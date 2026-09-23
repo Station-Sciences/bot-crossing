@@ -13,6 +13,12 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
 } from './scan.mjs'
+import {
+  isThreadIncluded,
+  normalizeExclusions,
+  repoPathsFromThreads,
+  threadPath,
+} from './lib/scan-selection.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
@@ -59,8 +65,27 @@ const emptyState = () => ({
   hiddenProjects: [],
   viewedAt: {},
   settings: null,
+  repositorySettings: null,
   updatedAt: 0,
 })
+
+/**
+ * Which harnesses to read, and which projects to leave off the map.
+ *
+ * Both keys say what was switched *off*, so both are empty by default and the whole object
+ * collapses to `null` once nothing is — an unconfigured colony scans the machine exactly as it
+ * did before this setting existed, and a project that appears later is on the map without
+ * anybody having to add it anywhere.
+ */
+function readRepositorySettings(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const out = {}
+  const disabledHarnesses = [...new Set(asArray(raw.disabledHarnesses).map(String).filter(Boolean))].sort()
+  if (disabledHarnesses.length) out.disabledHarnesses = disabledHarnesses
+  const excludedPaths = normalizeExclusions(raw.excludedPaths)
+  if (excludedPaths.length) out.excludedPaths = excludedPaths
+  return Object.keys(out).length ? out : null
+}
 
 const asObject = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {})
 const asArray = (v) => (Array.isArray(v) ? v : [])
@@ -78,6 +103,7 @@ async function readState() {
       hiddenProjects: asArray(raw.hiddenProjects).map(String).filter(Boolean),
       viewedAt: asObject(raw.viewedAt),
       settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : null,
+      repositorySettings: readRepositorySettings(raw.repositorySettings),
       updatedAt: Number(raw.updatedAt) || 0,
     }
   } catch {
@@ -113,6 +139,7 @@ async function writeState(next) {
     hiddenProjects: asArray(next.hiddenProjects).map(String).filter(Boolean),
     viewedAt: asObject(next.viewedAt),
     settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
+    repositorySettings: readRepositorySettings(next.repositorySettings),
     updatedAt: Date.now(),
   }
   await fsp.mkdir(DATA_DIR, { recursive: true })
@@ -395,11 +422,45 @@ export async function apiMiddleware(req, res, next) {
 
   try {
     if (url.pathname === '/api/threads' && req.method === 'GET') {
-      const threads = await reconcileArchived(await scanThreads())
+      const state = await readState()
+      const all = await reconcileArchived(await scanThreads())
+      const disabledHarnesses = new Set(state.repositorySettings?.disabledHarnesses || [])
+      const excludedPaths = state.repositorySettings?.excludedPaths || []
+
+      // Harness counts come from the unfiltered scan, so a harness you switched off still says
+      // what you would get back by switching it on again.
+      const harnessCounts = {}
+      for (const thread of all) {
+        if (!thread.harness) continue
+        harnessCounts[thread.harness] = (harnessCounts[thread.harness] || 0) + 1
+      }
+
+      // The locations tree is drawn from what the *enabled* harnesses see: a folder you can
+      // only reach by re-enabling a harness has no business offering you a checkbox.
+      const fromEnabled = disabledHarnesses.size
+        ? all.filter((thread) => !disabledHarnesses.has(thread.harness))
+        : all
+      const repoPaths = repoPathsFromThreads(fromEnabled)
+      const repoCounts = {}
+      for (const thread of fromEnabled) {
+        const p = threadPath(thread)
+        if (p) repoCounts[p] = (repoCounts[p] || 0) + 1
+      }
+
+      const threads = excludedPaths.length
+        ? fromEnabled.filter((t) => isThreadIncluded(t, excludedPaths))
+        : fromEnabled
       // A harness that is present but cannot read its own store says so here, rather than
       // appearing healthy in the list while quietly contributing nothing.
       const warnings = (await harnessStatus()).filter((h) => h.detected && h.error).map((h) => h.error)
-      return send(res, 200, { threads, scannedAt: Date.now(), warnings })
+      return send(res, 200, {
+        threads,
+        repoPaths,
+        repoCounts,
+        harnessCounts,
+        scannedAt: Date.now(),
+        warnings,
+      })
     }
 
     if (url.pathname === '/api/harnesses' && req.method === 'GET') {
