@@ -1,5 +1,16 @@
 import fsp from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
+
+/** PATH alone is not enough: the Codex adapter also walks Homebrew and npm-global install dirs. */
+export async function withNoCodexCli(fn) {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
+  try {
+    return await withEnv({ PATH: dir, BOT_CROSSING_CODEX_EXTRA_DIRS: '' }, fn)
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+}
 
 export async function withEnv(overrides, fn) {
   const saved = {}

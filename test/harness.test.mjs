@@ -18,7 +18,7 @@ import codex from '../server/harnesses/codex.mjs'
 import claudeCode from '../server/harnesses/claude-code.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
 import { schemeOf } from '../server/lib/xdg.mjs'
-import { withEnv, withPlatform, fakeExecutable } from './support/env.mjs'
+import { withEnv, withNoCodexCli, withPlatform, fakeExecutable } from './support/env.mjs'
 
 // ── the contract ──────────────────────────────────────────────────────────────
 
@@ -103,13 +103,10 @@ test('codex offers `codex resume <id>` in the thread cwd alongside its deep link
 })
 
 test('codex with no CLI installed offers the deep link alone', posixOnly, async () => {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
-  try {
-    const opened = await withEnv({ PATH: dir }, () => codex.openThread({ sessionId: SESSION_ID }))
+  await withNoCodexCli(async () => {
+    const opened = await codex.openThread({ sessionId: SESSION_ID })
     assert.deepEqual(opened, { ok: true, url: `codex://threads/${SESSION_ID}`, command: undefined })
-  } finally {
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  })
 })
 
 // ── a Codex install, faked on disk ────────────────────────────────────────────

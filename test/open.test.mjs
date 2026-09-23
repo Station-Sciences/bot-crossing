@@ -14,7 +14,7 @@ import path from 'node:path'
 
 import { present } from '../server/api.mjs'
 import { withServer } from './support/with-server.mjs'
-import { withEnv, withPlatform, fakeExecutable } from './support/env.mjs'
+import { withEnv, withNoCodexCli, withPlatform, fakeExecutable } from './support/env.mjs'
 
 const posixOnly = { skip: process.platform === 'win32' }
 const UUID = '2df3987c-02d3-405e-b8f5-da30e3835213'
@@ -74,10 +74,9 @@ test('/api/open with via: terminal resumes the session in its own folder', posix
 })
 
 test('/api/open with via: terminal and no CLI is a 400 that names the CLI', posixOnly, async () => {
-  // Codex rather than Claude Code: this machine may well have a real `claude` in an install dir.
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
   try {
-    await withEnv({ PATH: dir }, () =>
+    await withNoCodexCli(() =>
       withServer(async ({ call }) => {
         const body = { harness: 'codex', ref: { sessionId: UUID, cwd: dir }, via: 'terminal' }
         const res = await post(call, '/api/open', body)

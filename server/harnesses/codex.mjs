@@ -319,7 +319,16 @@ const CLI_DIRS = [
   '/usr/local/bin',
   '/usr/bin',
 ]
-const cliBinary = () => findExecutable('codex', CLI_DIRS)
+
+/** Install dirs beyond PATH. Tests may set `BOT_CROSSING_CODEX_EXTRA_DIRS` to `''` to skip them. */
+function codexCliDirs() {
+  if (Object.prototype.hasOwnProperty.call(process.env, 'BOT_CROSSING_CODEX_EXTRA_DIRS')) {
+    return (process.env.BOT_CROSSING_CODEX_EXTRA_DIRS || '').split(path.delimiter).filter(Boolean)
+  }
+  return CLI_DIRS
+}
+
+const cliBinary = () => findExecutable('codex', codexCliDirs())
 
 /**
  * `codex://threads/<id>` is registered by the Codex desktop app; the OS opener does the rest.
