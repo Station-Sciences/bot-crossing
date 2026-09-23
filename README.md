@@ -246,10 +246,10 @@ from, so you can see what switching it back on would bring. What changes is that
 threads reach the map. A harness that is not installed shows its switch off and greyed out,
 since there is nothing behind it either way.
 
-What the colony stores is the repos you switched *off*, by exact path, which is what lets a repo
-that contains other repos behave sensibly — a dotfiles checkout at `~` is the common case, and
-treating it as a folder would take every other repo on the machine off the map with it. A repo
-discovered later is therefore on the map by default, even inside a folder you had unticked.
+What the colony stores is the repos you switched *off*, by exact path. That is what keeps a repo
+sitting inside another repo — a dotfiles checkout at `~` is the common case — from taking
+everything beneath it off the map too. A repo found later is therefore on by default, even
+inside a folder you had unticked.
 
 *Hide* and *dormant*, by contrast, only apply to repos that were already scanned — they do
 not stop the scanner.
