@@ -50,6 +50,75 @@ test('settings are not merged field-wise — the last tab to touch a slider wins
   assert.deepEqual(out.settings, { q: 3 })
 })
 
+test('disabled harnesses survive a conflicting save', () => {
+  const out = mergeState(
+    { repositorySettings: null },
+    { repositorySettings: { disabledHarnesses: ['codex'] } },
+    { repositorySettings: null }
+  )
+  assert.deepEqual(out.repositorySettings, { disabledHarnesses: ['codex'] })
+})
+
+test('two tabs disabling different harnesses both survive the merge', () => {
+  const out = mergeState(
+    { repositorySettings: null },
+    { repositorySettings: { disabledHarnesses: ['codex'] } },
+    { repositorySettings: { disabledHarnesses: ['cursor'] } }
+  )
+  assert.deepEqual(out.repositorySettings.disabledHarnesses.sort(), ['codex', 'cursor'])
+})
+
+test('two tabs switching off different projects both get their way', () => {
+  const out = mergeState(
+    { repositorySettings: null },
+    { repositorySettings: { excludedPaths: ['/a'] } },
+    { repositorySettings: { excludedPaths: ['/b'] } }
+  )
+  assert.deepEqual(out.repositorySettings.excludedPaths.sort(), ['/a', '/b'])
+})
+
+test('putting a project back on the map survives a conflicting save', () => {
+  const out = mergeState(
+    { repositorySettings: { excludedPaths: ['/a', '/b'] } },
+    { repositorySettings: { excludedPaths: ['/b'] } },
+    { repositorySettings: { excludedPaths: ['/a', '/b'] } }
+  )
+  assert.deepEqual(out.repositorySettings.excludedPaths, ['/b'])
+})
+
+test('disabling a harness and switching off a project do not overwrite each other', () => {
+  const out = mergeState(
+    { repositorySettings: null },
+    { repositorySettings: { disabledHarnesses: ['codex'] } },
+    { repositorySettings: { excludedPaths: ['/Users/me/work'] } }
+  )
+  assert.deepEqual(out.repositorySettings, {
+    disabledHarnesses: ['codex'],
+    excludedPaths: ['/Users/me/work'],
+  })
+})
+
+test('repositorySettings persist through the state API', async () => {
+  await withServer(async ({ call, put }) => {
+    const body = {
+      repositorySettings: { disabledHarnesses: ['hermes'], excludedPaths: ['/Users/me/work'] },
+    }
+    const saved = await (await put(body)).json()
+    assert.deepEqual(saved.repositorySettings.disabledHarnesses, ['hermes'])
+    assert.deepEqual(saved.repositorySettings.excludedPaths, ['/Users/me/work'])
+    const loaded = await (await call('/api/state')).json()
+    assert.deepEqual(loaded.repositorySettings.excludedPaths, ['/Users/me/work'])
+  })
+})
+
+test('an unconfigured colony stores no repository settings at all', async () => {
+  await withServer(async ({ call, put }) => {
+    await put({ repositorySettings: { disabledHarnesses: [], excludedPaths: [] } })
+    const loaded = await (await call('/api/state')).json()
+    assert.equal(loaded.repositorySettings, null)
+  })
+})
+
 // ── the API, against a real socket ────────────────────────────────────────────
 
 // ── the save gate ─────────────────────────────────────────────────────────────

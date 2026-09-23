@@ -101,6 +101,25 @@ refuses to load if any name lacks a procedural generator: the game is fully audi
 fresh clone, and real recordings are an override by name through `manifest.json` on the
 machine that owns them. Sounds under CC0 may be committed, with a line in `CREDITS.md`.
 
+## A repo left off the map is stored by exact path, never as a folder prefix
+
+`repositorySettings.excludedPaths` holds whole repo paths and is matched exactly. It is
+tempting to store folders instead, or to invert it and store the folders to *include*, and both
+are shorter to write. Both are also wrong on a real machine, because a repo can sit inside
+another repo — a dotfiles checkout at `~` is the ordinary way in, and it makes every other repo
+on the machine its descendant.
+
+Storing folders to include fails first: leaving one folder out means recording "keep everything
+else", everything else includes `~`, and `~` covers the folder just excluded — so it returns
+within the same click. Measured on the maintainer's machine, 65 of 66 rows could not be
+switched off. Prefix *exclusion* fails the mirror image of it: to leave `~` out while keeping
+`~/work` you must record `~`, which as a prefix takes `~/work` with it.
+
+Exact paths have neither failure, because no entry can speak for a path other than itself. A
+folder checkbox in the UI is then simply every repo beneath it, expanded at the moment of the
+click, and the stored set is small because it holds only what was switched off. A repo
+discovered later is on the map by default, which is the right default and falls out for free.
+
 ## Every hand-written shader calls `withCurve`
 
 The world curve is patched into three's own `project_vertex`, so built-in materials bend
