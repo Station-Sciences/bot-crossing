@@ -46,20 +46,14 @@ export function isUnderRoot(candidate, root) {
  * What is left out is stored as whole repository paths, matched exactly — never as a folder
  * prefix, and never as the inverse "here is what to include".
  *
- * Both of the tidier-looking models are wrong on real disks, for the same reason: a repository
- * can sit inside another repository. A dotfiles checkout at `~` is the usual way in, and one of
- * those makes every other project on the machine its descendant.
+ * Storing folders is tidier right up until a repository sits inside another one, which on a
+ * real machine they do — a dotfiles checkout at `~` is the common case. Any scheme where one
+ * entry stands for a whole subtree lets that outer repository speak for everything under it,
+ * and unchecking something inside it is undone on the spot by the entry still covering it.
+ * Both directions fail that way, the include list as surely as the prefix.
  *
- * Under an include-the-subtree model that is fatal. Leaving out `~/work` means storing "keep
- * everything else", everything else includes `~`, and `~` covers `~/work` — so the folder you
- * just unchecked comes straight back, silently. Prefix *exclusion* fails the mirror image of
- * it: to leave out `~` but keep `~/work` you must record `~` as excluded, which as a prefix
- * excludes `~/work` too.
- *
- * Exact paths have neither problem, because no entry can ever speak for a path other than
- * itself. A folder checkbox is then simply every repository under it, and the set stays small:
- * it holds what you switched off, so an unconfigured colony stores nothing and a new project
- * appearing later is on the map by default.
+ * Exact paths cannot, because no entry speaks for a path other than itself. A folder checkbox
+ * is then simply every repository under it, and the set only holds what was switched off.
  */
 export function normalizeExclusions(value) {
   if (!Array.isArray(value)) return []
