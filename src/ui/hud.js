@@ -4,6 +4,7 @@ import { TIMES, systemTimeOfDay } from '../world/sky.js'
 import { STATUS_LABEL } from '../game/colony.js'
 import { FACE, FRAME_COLS, FRAME_ROWS } from '../agents/faces.js'
 import { PLOT_PALETTE, hashString } from '../world/plots.js'
+import { chooseMainScreen, clearSavedScreen, savedScreen, supported as screenPickSupported, unavailableReason as screenPickUnavailable } from '../core/screen-placement.js'
 
 /**
  * The whole HUD, in plain DOM.
@@ -258,6 +259,45 @@ export class Hud {
         )
       )
     }
+    // Hermes opens its own web dashboard as a popup rather than a server-launched terminal —
+    // see openThread in main.js — so it is the one harness where "which monitor" is a browser
+    // question, answerable only by Chrome/Edge's Window Management API over a secure origin.
+    if (screenPickSupported()) {
+      view.append(
+        this._action(
+          'Hermes popups on',
+          'One-time permission prompt; remembered for next time. Only affects Hermes bots — other harnesses use their own app or a terminal.',
+          'Choose monitor…',
+          async () => {
+            try {
+              const bounds = await chooseMainScreen()
+              this.toast(`Hermes popups will open on: ${bounds.label}`, 'success')
+            } catch (err) {
+              this.toast(err.message || 'Could not read your monitor layout', 'err')
+            }
+          },
+          () => (savedScreen() ? savedScreen().label : 'Not set — opens on this window’s own screen')
+        )
+      )
+      // Always present rather than conditionally appended: the settings panel is built once at
+      // startup, so a row that only shows up "if a screen is already saved" would never appear
+      // after choosing one for the first time without a full page reload.
+      view.append(
+        this._action(
+          'Forget chosen monitor',
+          'Back to opening on whichever screen the Bot Crossing window itself is on.',
+          'Reset',
+          async () => {
+            const had = savedScreen()
+            clearSavedScreen()
+            this.toast(had ? 'Hermes popups will open on this window’s own screen again' : 'Nothing was saved')
+          },
+          () => ''
+        )
+      )
+    } else {
+      view.append(this._row('Hermes popups on', screenPickUnavailable() || 'Opens on this window’s own screen.'))
+    }
     view.append(
       this._toggle(
         'Hide dormant repos',
@@ -371,6 +411,37 @@ export class Hud {
         row.classList.toggle('overridden', this.settings.isOverridden(key))
       },
     })
+    return row
+  }
+
+  /**
+   * A button plus a status line the caller controls — for one-shot actions with a side effect
+   * that is not a settings value (asking the browser something, granting a permission), rather
+   * than a value this class would own and diff against a preset.
+   */
+  _action(label, hint, buttonText, onClick, describe) {
+    const row = this._row(label, hint)
+    const wrap = document.createElement('div')
+    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:4px'
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'btn'
+    btn.textContent = buttonText
+    const status = document.createElement('span')
+    status.className = 'hint'
+    status.style.cssText = 'text-align:right'
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      try {
+        await onClick()
+      } finally {
+        btn.disabled = false
+        status.textContent = describe()
+      }
+    })
+    wrap.append(btn, status)
+    row.appendChild(wrap)
+    this.controls.push({ el: row, sync: () => (status.textContent = describe()) })
     return row
   }
 

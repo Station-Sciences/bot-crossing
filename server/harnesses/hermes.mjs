@@ -16,6 +16,7 @@ import { DatabaseSync } from 'node:sqlite'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { findExecutable } from '../lib/fsutil.mjs'
 
 const HOME = os.homedir()
 
@@ -72,6 +73,43 @@ function pilotDBs() {
 
 const openRead = (file) => new DatabaseSync(file, { readOnly: true })
 
+const ACTIVE_WINDOW_MS = 30 * 60 * 1000
+
+/**
+ * The Hermes web dashboard's own port — `hermes dashboard` / the gateway's chat UI, wherever it
+ * is reached from. Bot Crossing's server has no idea which network interface or hostname the
+ * *browser* used to reach it, so it cannot build a working dashboard URL itself; it hands the
+ * port back in `ref` and the page builds `http://<same-host-you're-on>:<port>/chat?resume=…`,
+ * because the dashboard listens on every interface (`0.0.0.0:<port>`) right alongside it.
+ */
+const DASHBOARD_PORT = Number(process.env.HERMES_DASHBOARD_PORT) || 9119
+
+/**
+ * Hermes persists `ended_at = NULL` if a terminal/chat session ends without a
+ * lifecycle finalizer. Treat it as working only while its last real activity
+ * is fresh, mirroring every other Bot Crossing harness.
+ */
+export function isLiveSession(row, now = Date.now()) {
+  if (row.ended_at != null) return false
+  const activitySeconds = row.last_activity_at || row.started_at || 0
+  const activityAt = Number(activitySeconds) * 1000
+  return Number.isFinite(activityAt) && activityAt > 0 && now - activityAt >= 0 && now - activityAt < ACTIVE_WINDOW_MS
+}
+
+/**
+ * A session whose last real turn was the assistant handing control back — whether the process
+ * is still open on stdin or the terminal was closed/exited right after asking. A closed CLI
+ * process (`ended_at` set via `cli_close`/`tui_close`) that never got a reply is exactly the
+ * "waiting on you" case Bot Crossing must surface: the human still owes the agent an answer,
+ * and `--resume` is how they give it. Only a session that was reaped as an orphan, or one whose
+ * last turn was the human's own message (nothing to answer), is excluded.
+ */
+export function isWaitingSession(row) {
+  if (row.latest_message_role !== 'assistant') return false
+  if (row.end_reason === 'startup_orphan_reap' || row.end_reason === 'ws_orphan_reap') return false
+  return true
+}
+
 function toThread(row, pilot) {
   const root = row.git_repo_root || row.cwd || ''
   // Sessions run from the agent home (or with no cwd) are all the same
@@ -100,16 +138,14 @@ function toThread(row, pilot) {
     createdAt,
     lastActivityAt,
     lastFocusedAt: 0,
-    running: row.ended_at == null,
-    unread: Boolean(
-      row.last_activity_at && row.last_read_at && row.last_activity_at > row.last_read_at
-    ),
+    running: isLiveSession(row) && !isWaitingSession(row),
+    unread: isWaitingSession(row),
     hasError: false,
     archived: row.archived === 1,
     sizeBytes: tokens > 0 ? tokens * 4 : (row.message_count || 0) * 500,
     source: row.source || '',
-    canOpen: false,
-    ref: { sessionId: row.id, pilot },
+    canOpen: true,
+    ref: { sessionId: row.id, pilot, cwd: row.cwd || HOME, dashboardPort: DASHBOARD_PORT },
   }
 }
 
@@ -124,9 +160,12 @@ async function detect() {
 
 const THREAD_SQL = `
       SELECT s.id, s.title, s.model, s.source, s.cwd, s.git_branch, s.git_repo_root,
-             s.started_at, s.ended_at, s.message_count,
+             s.started_at, s.ended_at, s.end_reason, s.message_count,
              s.input_tokens, s.output_tokens, s.archived,
              s.last_activity_at, s.last_read_at,
+             (SELECT m.role FROM messages m
+               WHERE m.session_id = s.id AND m.active = 1
+               ORDER BY m.id DESC LIMIT 1) AS latest_message_role,
              (SELECT substr(m.content, 1, 280) FROM messages m
                WHERE m.session_id = s.id AND m.role = 'user' AND m.active = 1
                ORDER BY m.id ASC LIMIT 1) AS first_user
@@ -155,8 +194,61 @@ async function scanThreads() {
   return out
 }
 
-function openThread() {
-  return { ok: false, error: 'Hermes sessions live in the terminal and chat apps — there is no link to open.' }
+/**
+ * Places `npm i -g`, `curl | sh` installers, and a user-local pip/pipx put the `hermes`
+ * binary that a server started from a login-less systemd unit or launcher would not see on
+ * its own thin PATH — mirrors the same widening every other CLI-launching harness here does.
+ */
+const CLI_DIRS = [
+  path.join(HOME, '.local', 'bin'),
+  path.join(HOME, '.npm-global', 'bin'),
+  '/opt/homebrew/bin',
+  '/usr/local/bin',
+  '/usr/bin',
+]
+const cliBinary = () => findExecutable('hermes', CLI_DIRS)
+
+/** Re-reads one session's liveness straight from disk — never trust the scan's last poll for
+ *  a decision as consequential as spawning a second process onto the same conversation. */
+function currentlyLive(sessionId, pilot) {
+  const db = pilotDBs().find((d) => d.pilot === pilot)
+  if (!db) return false
+  let handle
+  try {
+    handle = openRead(db.file)
+    const row = handle
+      .prepare(
+        `SELECT ended_at, end_reason, last_activity_at, started_at,
+                (SELECT role FROM messages WHERE session_id = ? AND active = 1 ORDER BY id DESC LIMIT 1) AS latest_message_role
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId, sessionId)
+    if (!row) return false
+    return isLiveSession(row) && !isWaitingSession(row)
+  } catch {
+    return false
+  } finally {
+    handle?.close()
+  }
+}
+
+async function openThread(ref) {
+  const { sessionId, pilot, cwd } = ref || {}
+  if (typeof sessionId !== 'string' || !/^\d{8}_\d{6}_[0-9a-f]+$/.test(sessionId)) {
+    return { ok: false, error: 'That Hermes session id is not valid' }
+  }
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) {
+    return { ok: false, error: 'That Hermes session has no usable working folder to resume in' }
+  }
+  if (currentlyLive(sessionId, pilot || 'main')) {
+    return {
+      ok: false,
+      error: 'This Hermes session is running right now — resuming it here would fork the conversation.',
+    }
+  }
+  const bin = await cliBinary()
+  if (!bin) return { ok: false, error: 'No `hermes` CLI found on PATH to resume this session' }
+  return { ok: true, command: { argv: [bin, '--tui', '--resume', sessionId], cwd } }
 }
 
 function newSession() {
