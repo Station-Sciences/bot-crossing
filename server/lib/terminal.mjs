@@ -134,6 +134,49 @@ function trySpawn(cmd, args, cwd) {
 }
 
 /**
+ * How long `wezterm cli spawn` gets. With no GUI running it fails at once, so this only bounds a
+ * GUI that is slow to answer — a cold start after hours idle has taken over 1.5 s, and giving up
+ * then opened a second WezTerm (and could still leave the late tab behind as well).
+ */
+const WEZTERM_TAB_MS = 10000
+
+/**
+ * A new tab in the WezTerm window last used, when WezTerm is running. Waits for the exit rather
+ * than trusting `trySpawn`'s timing, since `cli spawn` returns as soon as the tab exists and a
+ * slow refusal must not be read as success. `WEZTERM_PANE` is dropped so the tab follows focus
+ * rather than the pane the server happened to be started from, which may be long gone.
+ */
+function weztermTab(bin, cwd, argv) {
+  return new Promise((resolve) => {
+    const env = { ...process.env }
+    delete env.WEZTERM_PANE
+    let child
+    try {
+      child = spawn(bin, ['cli', '--no-auto-start', 'spawn', '--cwd', cwd, '--', ...argv], { cwd, env, stdio: 'ignore' })
+    } catch {
+      resolve(false)
+      return
+    }
+    const timer = setTimeout(() => {
+      child.kill()
+      resolve(false)
+    }, WEZTERM_TAB_MS)
+    child.on('error', () => {
+      clearTimeout(timer)
+      resolve(false)
+    })
+    child.on('exit', (code) => {
+      clearTimeout(timer)
+      // The tab is already the focused one in its window; bring the app in front of the browser.
+      if (code === 0 && process.platform === 'darwin') {
+        spawn('open', ['-b', 'com.github.wez.wezterm'], { stdio: 'ignore', detached: true }).on('error', () => {}).unref()
+      }
+      resolve(code === 0)
+    })
+  })
+}
+
+/**
  * Run `argv` in a new terminal window with `cwd` as its working directory.
  *
  * The caller has already resolved both: `argv[0]` is an absolute executable and `cwd` an
@@ -194,6 +237,10 @@ export async function openInTerminal(argv, cwd) {
     if (base === 'x-terminal-emulator') args = ['-e', ...argv]
     else if (TERMINALS[base]) args = TERMINALS[base](cwd, argv)
     else continue
+
+    // `wezterm start --new-tab` only finds the running GUI some of the time and otherwise opens
+    // a second one; the mux socket `cli spawn` talks to is always there while the GUI is.
+    if (base === 'wezterm' && (await weztermTab(resolved, cwd, argv))) return { ok: true }
 
     const result = await trySpawn(resolved, args, cwd)
     if (result.ok) return { ok: true }
