@@ -286,6 +286,17 @@ const actions = {
     colony.ship.ping()
   },
 
+  unarchiveThread: (id) => {
+    if (!state.archived.includes(id)) return
+    state.archived = state.archived.filter((archivedId) => archivedId !== id)
+    const archivedAt = { ...state.archivedAt }
+    delete archivedAt[id]
+    state.archivedAt = archivedAt
+    queueSave()
+    applyThreads(threads)
+    hud.toast('Unarchived — back on the map')
+  },
+
   uiVisibility: (visible) => colony.setUiVisible(visible),
 
   // The card's bar is about the *thread*, not about how much of its building has risen —
@@ -405,9 +416,18 @@ function pathForProject(name) {
   return best
 }
 
+function archivedCatalog() {
+  const archived = new Set(state.archived || [])
+  return threads
+    .filter((thread) => archived.has(thread.id))
+    .map((thread) => ({ id: thread.id, title: thread.title, project: thread.project || 'unknown' }))
+    .sort((a, b) => a.project.localeCompare(b.project) || a.title.localeCompare(b.title))
+}
+
 /** Push the open zone's current contents at the sidebar. Closes it if the zone is gone. */
 function syncProject() {
   const hidden = hiddenCatalog(state.hiddenProjects || [], threads)
+  const archived = archivedCatalog()
   // Folded-away repos are listed alongside the ones you hid by hand. Same principle: nothing
   // leaves the map without somewhere on screen saying where it went.
   const folded = hiddenCatalog([...(colony.dormantProjects || [])], threads)
@@ -415,7 +435,7 @@ function syncProject() {
   if (!plot) {
     selectedProject = null
     hud.setProject(null)
-    hud.setLegend(legendProjects, null, hidden, folded)
+    hud.setLegend(legendProjects, null, hidden, folded, archived)
     return
   }
   const now = Date.now()
@@ -444,7 +464,7 @@ function syncProject() {
   })
   // The legend is the same selection seen from the bottom of the screen: keep it in step
   // here rather than only on the next poll.
-  hud.setLegend(legendProjects, selectedProject, hidden, folded)
+  hud.setLegend(legendProjects, selectedProject, hidden, folded, archived)
 }
 
 // ── pointer ───────────────────────────────────────────────────────────────────────────

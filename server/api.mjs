@@ -183,6 +183,13 @@ async function resolveFolder(folder) {
  * "No conversation found" and closes is worse than an error toast.
  */
 async function runInTerminal(command) {
+  // Remote commands (e.g. ssh into another host) do not need a local folder — the cwd is on the
+  // remote machine and the ssh binary itself can run from anywhere.
+  if (command.remote) {
+    const cwd = os.homedir()
+    const opened = await openInTerminal(command.argv, cwd)
+    return opened.ok ? { ok: true, via: 'terminal' } : opened
+  }
   if (!command.cwd) return { ok: false, error: 'That thread has no folder on record to resume in' }
   const cwd = await resolveFolder(command.cwd)
   if (!cwd) return { ok: false, error: 'The folder that thread ran in is not on this machine any more' }
@@ -233,10 +240,14 @@ export async function present(result, via = 'app') {
   if (result.pid && (await focusWindowOfPid(result.pid))) return { ok: true, focused: true }
 
   if (process.platform !== 'linux') {
-    if (!result.url) return { ok: false, error: 'That harness has no deep link to open on this platform' }
-    launch(result.url)
-    // A note is the adapter saying it opened *something* — the repo rather than the thread.
-    return { ok: true, url: result.url, note: result.note }
+    if (result.url) {
+      launch(result.url)
+      // A note is the adapter saying it opened *something* — the repo rather than the thread.
+      return { ok: true, url: result.url, note: result.note }
+    }
+    // No URL but a command — a remote thread that can only be reached via a terminal.
+    if (result.command) return runInTerminal(result.command)
+    return { ok: false, error: 'That harness has no deep link to open on this platform' }
   }
 
   if (result.url && (await schemeHasHandler(result.url))) {

@@ -33,6 +33,7 @@
   ],
   "scripts": {
     "dev": "npm run assets --silent && vite",
+    "dev:remote": "npm run assets --silent && CODEX_SSH_HOST=user-node-3 vite",
     "build": "npm run assets --silent && vite build",
     "start": "vite build && node server/serve.mjs",
     "serve": "node server/serve.mjs",
