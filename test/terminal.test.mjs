@@ -63,6 +63,46 @@ test('a named terminal the table does not know is skipped, not guessed at', posi
   })
 })
 
+test('kaku is driven with wezterm flags', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    const kaku = await fakeExecutable(dir, 'kaku')
+    const env = { ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: kaku.file }
+    const result = await withEnv(env, () => openInTerminal(ARGV, dir))
+    assert.equal(result.ok, true)
+    assert.deepEqual(await kaku.argv(), ['start', '--cwd', dir, '--', ...ARGV])
+  })
+})
+
+/**
+ * The message a wezterm fork, or any other terminal not in the table, used to end on. Being
+ * skipped is correct — guessing its flags would open a window on the wrong command — but the
+ * generic line advises setting the very variable that was already set, and never mentions the
+ * emulator sitting on PATH.
+ */
+test('a terminal asked for by name and skipped is named in the error', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    const tilix = await fakeExecutable(dir, 'tilix')
+    const env = { ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: tilix.file }
+    const result = await withEnv(env, () => openInTerminal(ARGV, dir))
+    assert.equal(result.ok, false)
+    assert.equal(await tilix.called(), false, 'still not guessed at')
+    assert.match(result.error, /tilix/)
+    assert.match(result.error, /flags are not known/)
+    assert.doesNotMatch(result.error, /set BOT_CROSSING_TERMINAL/, 'it is already set')
+  })
+})
+
+test('a terminal nobody asked for is passed over quietly', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    // On PATH, unknown to the table, and not named by either variable: the generic message is
+    // right here, because there is nothing the person did that needs explaining back to them.
+    await fakeExecutable(dir, 'tilix')
+    const result = await withEnv(nothingInstalled(dir), () => openInTerminal(ARGV, dir))
+    assert.equal(result.ok, false)
+    assert.match(result.error, /BOT_CROSSING_TERMINAL/)
+  })
+})
+
 test('with no terminal anywhere, the error says which variable to set', posixOnly, async () => {
   await withTmp(async (dir) => {
     const result = await withEnv(nothingInstalled(dir), () => openInTerminal(ARGV, dir))
