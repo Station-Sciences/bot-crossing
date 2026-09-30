@@ -815,7 +815,7 @@ that a machine on a VPN or a mesh network is reachable by everything else on it 
 BOT_CROSSING_TERMINAL=kitty npm start
 ```
 
-A name on `PATH` or an absolute path, and it has to be one whose flags are known — gnome-terminal, konsole, kitty, alacritty, ghostty, wezterm, foot, xterm and their relatives — since one that is not is skipped rather than guessed at.
+A name on `PATH` or an absolute path, and it has to be one whose flags are known — gnome-terminal, konsole, kitty, alacritty, ghostty, wezterm, kaku, foot, xterm and their relatives — since one that is not is skipped rather than guessed at. Name one it does not know and it says so, and names it, rather than reporting that nothing was found.
 On macOS only a named terminal works; point it at a real binary rather than an `.app`.
 Windows is not supported yet.
 
