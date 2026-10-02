@@ -719,6 +719,34 @@ test("the desktop app's scratch sessions share one plot instead of one each", as
   await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
+// ── Cursor's encoded folder names ─────────────────────────────────────────────
+
+/**
+ * Cursor turns every run of anything but a letter or digit into one dash, so `C:\` is `c-` and
+ * `data_pipeline_v2` is `data-pipeline-v2`. Only the folders on disk can say which dash
+ * was which.
+ */
+test('Cursor folder names decode against the disk, underscores and drive letters included', async () => {
+  const { decodeFolder } = await import('../server/harnesses/cursor.mjs')
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cursor-decode-'))
+  try {
+    await fsp.mkdir(path.join(root, 'Users', 'me', 'projects', 'data_pipeline_v2'), { recursive: true })
+    await fsp.mkdir(path.join(root, 'Users', 'me', 'emra-app-builder'), { recursive: true })
+    const at = (...parts) => path.join(root, ...parts)
+
+    const windows = { windows: true, root }
+    assert.equal(await decodeFolder('c-Users-me-projects-data-pipeline-v2', windows), at('Users', 'me', 'projects', 'data_pipeline_v2'))
+    assert.equal(await decodeFolder('C-users-ME-emra-app-builder', windows), at('Users', 'me', 'emra-app-builder'), 'case is folded on Windows')
+
+    const posix = { windows: false, root }
+    assert.equal(await decodeFolder('Users-me-emra-app-builder', posix), at('Users', 'me', 'emra-app-builder'))
+    // Gone from disk: the deepest folder that still exists, and the rest as one dashed name.
+    assert.equal(await decodeFolder('Users-me-old-site-2025', posix), at('Users', 'me', 'old-site-2025'))
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
 // ── finding a CLI on Windows ──────────────────────────────────────────────────
 
 test('on Windows a bare name finds the .cmd npm installs, never the shell script beside it', async () => {
