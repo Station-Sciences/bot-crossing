@@ -263,8 +263,10 @@ names that actually collide change, because the name is also the key your saved 
 stored under and disambiguating everything would move every plot on the map. A repo that has
 moved or gone since the last scan fails at the server rather than handing `open` a dead path.
 
-The Claude desktop app's scratch sessions each live in a folder of their own, and share one plot
-called **Scratch**.
+A linked git worktree stands on its repository's plot whichever harness made it: the checkout's
+own `.git` file names the repository, so a Codex worktree under `~/.codex/worktrees` lands on the
+same ground as the repo instead of a second plot beside it. The Claude desktop app's scratch
+sessions each live in a folder of their own, and share one plot called **Scratch**.
 
 Name plates are hit-tested in screen space rather than raycast: they are billboarded in the
 vertex shader, so a raycast would test the quad where it was authored rather than where it
