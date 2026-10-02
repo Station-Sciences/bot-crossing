@@ -232,16 +232,23 @@ async function fakeClaudeWithErrands(errandRecords) {
   return home
 }
 
+/**
+ * Both stores are named outright rather than reached through `HOME`: Windows finds the home
+ * directory through `USERPROFILE` and the desktop app through `APPDATA`, so moving `HOME` alone
+ * left this scanning the real machine's threads there. The paths are read once, at import.
+ */
 async function claudeWithErrands(home) {
-  process.env.HOME = home
-  const mod = await import(`../server/harnesses/claude-code.mjs?${home}`)
-  return mod.default
+  const env = {
+    HOME: home,
+    CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+    BOT_CROSSING_CLAUDE_DESKTOP: path.join(home, 'no-desktop-app'),
+  }
+  return withEnv(env, async () => (await import(`../server/harnesses/claude-code.mjs?${home}`)).default)
 }
 
 const midTurn = { type: 'assistant', message: { content: [{ type: 'tool_use' }], stop_reason: 'tool_use' } }
 
 test('a running subagent is reported with the brief it was given, however long that is', async () => {
-  const realHome = process.env.HOME
   // Longer than any head this could reasonably read at once: a brief that is truncated away
   // yields no task at all, because readHead drops the line it lands in the middle of.
   const brief = `repair the raster pipeline ${'x'.repeat(20 * 1024)}`
@@ -251,12 +258,10 @@ test('a running subagent is reported with the brief it was given, however long t
   assert.equal(thread.subagents?.length, 1)
   assert.equal(thread.subagents[0].id, 'agent-abc')
   assert.match(thread.subagents[0].task, /^repair the raster pipeline/)
-  process.env.HOME = realHome
   await fsp.rm(home, { recursive: true, force: true })
 })
 
 test('a subagent that has handed its answer back is finished, however recently it wrote', async () => {
-  const realHome = process.env.HOME
   const home = await fakeClaudeWithErrands([
     { type: 'user', message: { content: 'summarise the diff' } },
     { type: 'assistant', message: { content: [{ type: 'text', text: 'here it is' }], stop_reason: 'end_turn' } },
@@ -264,7 +269,6 @@ test('a subagent that has handed its answer back is finished, however recently i
   const h = await claudeWithErrands(home)
   const [thread] = await h.scanThreads()
   assert.equal(thread.subagents, undefined, 'a finished errand is not an astronaut on the map')
-  process.env.HOME = realHome
   await fsp.rm(home, { recursive: true, force: true })
 })
 

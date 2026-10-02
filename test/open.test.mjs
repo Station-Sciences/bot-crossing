@@ -33,11 +33,23 @@ test('asked for a terminal, present never opens the app instead', async () => {
   assert.match((await present({ ok: true, url: '', command: gone }, 'terminal')).error, /not on this machine/)
 })
 
-test('asked for a terminal on Windows, present says so rather than trying', async () => {
-  const command = { argv: ['/bin/true'], cwd: os.tmpdir() }
-  const shown = await withPlatform('win32', () => present({ ok: true, url: '', command }, 'terminal'))
-  assert.equal(shown.ok, false)
-  assert.match(shown.error, /Windows/)
+/**
+ * PATH points at an empty folder, so neither Windows Terminal nor `cmd.exe` can be found and
+ * nothing is started. With the machine's own PATH this used to open a real `cmd.exe` window on
+ * every Windows test run, sitting on "'/bin/true' is not recognized".
+ */
+test('asked for a terminal on Windows with none to be found, present names what to install', async () => {
+  const empty = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nopath-'))
+  try {
+    const command = { argv: ['/bin/true'], cwd: os.tmpdir() }
+    const shown = await withEnv({ PATH: empty }, () =>
+      withPlatform('win32', () => present({ ok: true, url: '', command }, 'terminal'))
+    )
+    assert.equal(shown.ok, false)
+    assert.match(shown.error, /Windows Terminal/)
+  } finally {
+    await fsp.rm(empty, { recursive: true, force: true })
+  }
 })
 
 test("an adapter's own refusal passes through whatever the page asked for", async () => {
