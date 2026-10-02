@@ -682,6 +682,32 @@ test('a record the app still holds outranks a leftover deletion marker', async (
   await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
+test('every desktop profile is read, not only the first folder that has records', async () => {
+  // A leftover `Claude` with one record beside the profile in use. Reading only the first had the
+  // colony miss nearly every titled thread on the machine this was found on.
+  const fx = await fakeClaude({ transcript: [typed('ship the profile fix')] })
+  const config = path.join(fx.root, 'xdg')
+  const record = (sessionId, extra) => ({ sessionId, cwd: '/tmp/demo', createdAt: 1, lastActivityAt: 2, ...extra })
+  const stores = {
+    Claude: record('local_11111111-1111-4111-8111-111111111111', { title: 'From the old install' }),
+    'Claude-work': record('local_22222222-2222-4222-8222-222222222222', { title: 'From the profile', cliSessionId: SESSION_ID }),
+    'Claude Notes': null,
+  }
+  for (const [name, r] of Object.entries(stores)) {
+    const org = path.join(config, name, ...(r ? ['claude-code-sessions', 'account', 'org'] : []))
+    await fsp.mkdir(org, { recursive: true })
+    if (r) await fsp.writeFile(path.join(org, `${r.sessionId}.json`), JSON.stringify(r))
+  }
+  const env = { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: fx.configDir, BOT_CROSSING_CLAUDE_DESKTOP: undefined }
+  const h = await withEnv(env, () =>
+    withPlatform('linux', async () => (await import(`../server/harnesses/claude-code.mjs?profiles-${fx.root}`)).default)
+  )
+  assert.equal(h.paths.DESKTOP_STORES.length, 2, 'only folders holding a session store count')
+  const titles = (await h.scanThreads()).map((t) => t.title).sort()
+  assert.deepEqual(titles, ['From the old install', 'From the profile'])
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
 /**
  * Kilo Code's store keeps whatever path the machine gave it, so the fixture uses one that is
  * absolute *here* rather than a Windows path pinned in place. The adapter refuses a cwd that is

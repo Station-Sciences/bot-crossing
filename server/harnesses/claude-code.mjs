@@ -23,72 +23,77 @@ import { exists, findExecutable, jsonLines, listDirs, listFiles, num, readHead, 
 const HOME = os.homedir()
 
 /**
- * Where the Claude desktop app keeps its data: Electron's `userData` for an app named
- * "Claude", which lands somewhere different on each OS.
- */
-function desktopDataDir() {
-  switch (process.platform) {
-    case 'win32':
-      return windowsDataDir()
-    case 'linux':
-      return path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'Claude')
-    default:
-      return macDataDir()
-  }
-}
-
-/**
- * macOS has two answers as well, because the app ships under two Electron app names: the
- * classic `Claude`, and `Claude-3p`, which is what a current install writes to. Both can be
- * present at once — an older install leaves an empty `Claude` behind, and an empty directory
- * is indistinguishable from the app never having been installed. Hard-coding `Claude` there
- * means every desktop thread is missed, and the colony falls back to drawing the CLI
- * transcript alone: no title, no model, and `Open` resorts to `claude://resume`, which
- * imports rather than navigates.
+ * Where Electron puts `userData` on each OS. The Claude desktop app's own folder is one level
+ * below, named after the app — see `desktopStores` for why that name is not a constant.
  *
- * So pick whichever one actually holds session records, the same rule windowsDataDir uses
- * below — and, like it, resolved once at import, so installing the app under the colony
- * wants a restart to be noticed.
- */
-function macDataDir() {
-  const support = path.join(HOME, 'Library', 'Application Support')
-  const candidates = [path.join(support, 'Claude-3p'), path.join(support, 'Claude')]
-  return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || candidates[1]
-}
-
-/**
- * Windows has two answers, because the app ships two ways.
- *
- * The classic installer writes to `%APPDATA%\Claude`, which is what Electron's `userData` means
- * everywhere else. Installed from the Microsoft Store the app is an MSIX package, and MSIX
- * *redirects* what a packaged app believes is `%APPDATA%` into its own private
- * `…\Packages\<family>\LocalCache\Roaming`. The app is installed, running and writing session
- * records — and `%APPDATA%\Claude` does not exist at all.
+ * On Windows there are two answers, because the app ships two ways. The classic installer writes
+ * to `%APPDATA%`, which is what Electron's `userData` means everywhere else. Installed from the
+ * Microsoft Store the app is an MSIX package, and MSIX *redirects* what a packaged app believes is
+ * `%APPDATA%` into its own private `…\Packages\<family>\LocalCache\Roaming`. The app is installed,
+ * running and writing session records — and `%APPDATA%\Claude` does not exist at all.
  *
  * The package folder is globbed rather than named: its suffix is a hash of the publisher, and
  * hard-coding that buys a constant which is right until it is not, and then wrong in a way that
  * looks exactly like the app having been uninstalled.
+ */
+function userDataRoots() {
+  switch (process.platform) {
+    case 'win32': {
+      const roots = [process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming')]
+      const packages = path.join(process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'), 'Packages')
+      for (const name of dirNames(packages)) {
+        if (name.startsWith('Claude_')) roots.push(path.join(packages, name, 'LocalCache', 'Roaming'))
+      }
+      return roots
+    }
+    case 'linux':
+      return [process.env.XDG_CONFIG_HOME || path.join(HOME, '.config')]
+    default:
+      return [path.join(HOME, 'Library', 'Application Support')]
+  }
+}
+
+function dirNames(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Every session store the desktop app has written, as a list.
+ *
+ * The app's folder is not always called `Claude`. macOS ships it as `Claude-3p` too, and a second
+ * desktop profile gets a folder of its own, `Claude-<profile>`, beside the first. Two can be live
+ * at once, and an older install leaves a `Claude` behind that still holds a handful of records and
+ * its deletion markers. Picking the first folder that had records meant reading that leftover and
+ * missing the one in use: on one Windows machine that was 4 records of 103, so nearly every thread
+ * lost its title and `Open` fell back to `claude://resume`, which imports a copy of the thread
+ * rather than navigating to it.
+ *
+ * So every `Claude*` folder holding a `claude-code-sessions` store is read, and the scan merges
+ * them the way it already merges two records for one transcript.
  *
  * Resolved once, at import. Installing the app while the colony is running therefore wants a
- * restart to be noticed — a knowing trade, since the alternative is globbing `Packages` on every
- * scan to catch something that happens once.
+ * restart to be noticed — a knowing trade, since the alternative is globbing these folders on
+ * every scan to catch something that happens once. When nothing is found, the classic path stands
+ * in so every caller still works against a real path, which `detect()` reads as "no app".
  */
-function windowsDataDir() {
-  const roaming = path.join(process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming'), 'Claude')
-  const local = process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local')
-  const candidates = [roaming]
-  try {
-    for (const entry of readdirSync(path.join(local, 'Packages'), { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name.startsWith('Claude_')) {
-        candidates.push(path.join(local, 'Packages', entry.name, 'LocalCache', 'Roaming', 'Claude'))
-      }
+function desktopStores() {
+  if (process.env.BOT_CROSSING_CLAUDE_DESKTOP) return [process.env.BOT_CROSSING_CLAUDE_DESKTOP]
+  const roots = userDataRoots()
+  const found = []
+  for (const root of roots) {
+    for (const name of dirNames(root)) {
+      if (!/^Claude(?:$|[-_ ])/.test(name)) continue
+      const store = path.join(root, name, 'claude-code-sessions')
+      if (existsSync(store)) found.push(store)
     }
-  } catch {
-    /* no Packages directory — this machine has no Store apps at all */
   }
-  // Whichever actually holds the records. Falling back to the unpackaged path keeps every
-  // caller working against a real path when neither exists, which `detect()` reads as "no app".
-  return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || roaming
+  return found.length ? found : [path.join(roots[0], 'Claude', 'claude-code-sessions')]
 }
 
 /**
@@ -98,9 +103,8 @@ function windowsDataDir() {
  * `BOT_CROSSING_CLAUDE_DESKTOP` names the session store itself, the sibling of Cursor's
  * `BOT_CROSSING_CURSOR_PROJECTS`.
  */
-/** Where the Claude desktop app keeps one JSON record per thread. */
-const DESKTOP_SESSIONS =
-  process.env.BOT_CROSSING_CLAUDE_DESKTOP || path.join(desktopDataDir(), 'claude-code-sessions')
+/** Where the Claude desktop app keeps one JSON record per thread — one store per app profile. */
+const DESKTOP_STORES = desktopStores()
 /** The CLI's home: `~/.claude`, unless the CLI itself has been told otherwise. */
 const CLI_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude')
 /** Where the CLI keeps the raw transcript: ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl */
@@ -393,7 +397,8 @@ const isRecord = (name) => name.startsWith('local_') && name.endsWith('.json')
 async function scanDesktopSessions() {
   const records = []
   const deleted = new Set()
-  for (const account of await listDirs(DESKTOP_SESSIONS)) {
+  const accounts = (await Promise.all(DESKTOP_STORES.map((store) => listDirs(store)))).flat()
+  for (const account of accounts) {
     for (const org of await listDirs(account)) {
       for (const file of await listFiles(org, (n) => isRecord(n) || DELETED_MARKER.test(n))) {
         const marker = DELETED_MARKER.exec(path.basename(file))
@@ -707,9 +712,9 @@ export default {
   id: 'claude-code',
   name: 'Claude Code',
   /** Only claim this machine if one of the two stores is actually there. */
-  detect: async () => (await exists(DESKTOP_SESSIONS)) || (await exists(CLI_PROJECTS)),
+  detect: async () => (await Promise.all(DESKTOP_STORES.map(exists))).some(Boolean) || (await exists(CLI_PROJECTS)),
   scanThreads,
   openThread,
   newSession,
-  paths: { DESKTOP_SESSIONS, CLI_PROJECTS, CLI_LIVE },
+  paths: { DESKTOP_STORES, CLI_PROJECTS, CLI_LIVE },
 }
