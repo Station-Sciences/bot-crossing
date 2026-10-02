@@ -590,6 +590,24 @@ test('Antigravity opens through antigravity:// scheme and handles invalid refs',
   await fsp.rm(home, { recursive: true, force: true })
 })
 
+test('an Antigravity session with no folder in its transcript takes the one its prompt history names', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'tidy up' }])
+  const repo = path.join(home, 'work', 'site')
+  const lines = [
+    // An older line with no conversation id says nothing about any session.
+    { display: 'hello', timestamp: 1, workspace: path.join(home, 'elsewhere') },
+    { display: 'tidy up', timestamp: 2, workspace: repo, conversationId: SESSION_ID },
+    { display: 'and the footer', timestamp: 3, workspace: path.join(home, 'later'), conversationId: SESSION_ID },
+  ]
+  await fsp.writeFile(path.join(home, 'history.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.projectPath, repo, 'the folder the conversation started in')
+  assert.equal(t.project, 'site')
+  assert.equal(t.ref.cwd, repo, 'resuming from a terminal happens there too')
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
 // ── Claude Code, faked on disk ────────────────────────────────────────────────
 
 /**
