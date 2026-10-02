@@ -708,6 +708,17 @@ test('every desktop profile is read, not only the first folder that has records'
   await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
+test("the desktop app's scratch sessions share one plot instead of one each", async () => {
+  const scratch = (name) => path.join('/x', 'Claude', 'scratch-workspaces', 'acct', 'org', name)
+  const fx = await fakeClaude({ transcript: [{ ...typed('a quick question'), cwd: scratch('scratch-2026-09-22-a1b2c3') }] })
+  const h = await claudeWith(fx)
+  const [t] = await h.scanThreads()
+  assert.equal(t.project, 'Scratch')
+  assert.equal(t.projectPath, path.join('/x', 'Claude', 'scratch-workspaces'))
+  assert.equal(t.worktree, 'scratch-2026-09-22-a1b2c3')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
 /**
  * Kilo Code's store keeps whatever path the machine gave it, so the fixture uses one that is
  * absolute *here* rather than a Windows path pinned in place. The adapter refuses a cwd that is

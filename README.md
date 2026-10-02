@@ -263,6 +263,9 @@ names that actually collide change, because the name is also the key your saved 
 stored under and disambiguating everything would move every plot on the map. A repo that has
 moved or gone since the last scan fails at the server rather than handing `open` a dead path.
 
+The Claude desktop app's scratch sessions each live in a folder of their own, and share one plot
+called **Scratch**.
+
 Name plates are hit-tested in screen space rather than raycast: they are billboarded in the
 vertex shader, so a raycast would test the quad where it was authored rather than where it
 ended up. That test deliberately ignores whether the plate is currently faded in — pointing

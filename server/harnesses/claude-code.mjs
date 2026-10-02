@@ -205,7 +205,18 @@ function splitWorktree(cwd) {
   return { root: cwd.slice(0, m.index), worktree: m[1] }
 }
 
+/**
+ * The desktop app's throwaway sessions each get a fresh folder of their own,
+ * `<userData>/scratch-workspaces/<account>/<org>/scratch-2026-09-22-a1b2c3`. Read as projects,
+ * every one of them claimed a hex zone for a single bot — twenty-one zones on one machine — so
+ * they share one plot, the way a repo's worktrees share its plot, and the folder rides along as
+ * the worktree tag.
+ */
+const SCRATCH = /^(.*[\\/]scratch-workspaces)[\\/](?:[^\\/]+[\\/]){2}(scratch-[^\\/]+)[\\/]?$/
+
 function projectOf(cwd, originCwd) {
+  const scratch = SCRATCH.exec(originCwd || cwd || '')
+  if (scratch) return { projectPath: scratch[1], project: 'Scratch', worktree: scratch[2] }
   const { root, worktree } = splitWorktree(cwd || '')
   const projectPath = originCwd || root || cwd || ''
   return { projectPath, project: path.basename(projectPath) || projectPath || 'unknown', worktree }
