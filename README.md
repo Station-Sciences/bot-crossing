@@ -820,7 +820,7 @@ BOT_CROSSING_TERMINAL=kitty npm start
 
 A name on `PATH` or an absolute path, and it has to be one whose flags are known — gnome-terminal, konsole, kitty, alacritty, ghostty, wezterm, foot, xterm and their relatives — since one that is not is skipped rather than guessed at.
 On macOS only a named terminal works; point it at a real binary rather than an `.app`.
-Windows is not supported yet.
+On Windows the variable is not read: a thread opens in Windows Terminal when it is installed, and in `cmd.exe` otherwise.
 
 What it touches on disk, in full:
 

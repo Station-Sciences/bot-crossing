@@ -719,6 +719,24 @@ test("the desktop app's scratch sessions share one plot instead of one each", as
   await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
+// ── finding a CLI on Windows ──────────────────────────────────────────────────
+
+test('on Windows a bare name finds the .cmd npm installs, never the shell script beside it', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pathext-'))
+  try {
+    // What `npm i -g` leaves: an extensionless script for Git Bash, and the one Windows can run.
+    await fsp.writeFile(path.join(dir, 'claude'), '#!/bin/sh\n', { mode: 0o755 })
+    await fsp.writeFile(path.join(dir, 'claude.cmd'), '@echo off\r\n', { mode: 0o755 })
+    const found = await withEnv({ PATH: dir }, () => withPlatform('win32', () => findExecutable('claude')))
+    assert.equal(found, path.join(dir, 'claude.cmd'))
+    // A name that already carries its extension is taken as written.
+    const named = await withEnv({ PATH: dir }, () => withPlatform('win32', () => findExecutable('claude.cmd')))
+    assert.equal(named, path.join(dir, 'claude.cmd'))
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
 /**
  * Kilo Code's store keeps whatever path the machine gave it, so the fixture uses one that is
  * absolute *here* rather than a Windows path pinned in place. The adapter refuses a cwd that is
