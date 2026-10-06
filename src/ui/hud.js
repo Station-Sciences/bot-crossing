@@ -64,6 +64,7 @@ export class Hud {
     this.visible = true
     this._last = {}
     this.hiddenOpen = false
+    this.archivedOpen = false
 
     this.el = document.createElement('div')
     this.el.className = 'hud'
@@ -463,6 +464,7 @@ export class Hud {
     on('#btn-copy-path', 'click', () => this.actions.copyProjectPath?.())
     on('#btn-hide-project', 'click', () => this.actions.hideProject?.())
     on('#btn-hidden-toggle', 'click', () => this.toggleHiddenList())
+    on('#btn-archived-toggle', 'click', () => this.toggleArchivedList())
     on('#btn-locate', 'click', () => this.actions.focusProject?.(this.project?.name))
     on('#btn-close-project', 'click', () => this.actions.closeProject?.())
     on('.help', 'click', (e) => {
@@ -505,12 +507,13 @@ export class Hud {
    * it is a list now because the sidebar is where all the chrome lives, and because a list
    * can carry a count and an alarm without running out of room at eleven repos.
    */
-  setLegend(projects, activeName = null, hidden = [], folded = []) {
+  setLegend(projects, activeName = null, hidden = [], folded = [], archived = []) {
     const signature =
       projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
       `~${activeName}~` +
       hidden.map((p) => `${p.name}:${p.count}`).join('|') +
-      `~${folded.length}`
+      `~${folded.length}~` +
+      archived.map((t) => `${t.id}:${t.title}:${t.project}`).join('|')
     if (this._last.legend === signature) return
     this._last.legend = signature
 
@@ -575,9 +578,30 @@ export class Hud {
       hiddenWrap.appendChild(row)
     }
 
+    const archivedBlock = this.$('.archived-block')
+    archivedBlock.hidden = archived.length === 0
+    const archivedWrap = this.$('.archived-threads')
+    archivedWrap.innerHTML = ''
+    for (const thread of archived) {
+      const row = document.createElement('div')
+      row.className = 'repo hidden-repo archived-thread'
+      row.innerHTML =
+        `<span class="n" title="${escapeHtml(thread.title)}">${escapeHtml(thread.title)}</span>` +
+        `<span class="count">${escapeHtml(thread.project)}</span>`
+      const restore = document.createElement('button')
+      restore.type = 'button'
+      restore.className = 'btn ghost show-repo'
+      restore.title = `Unarchive ${thread.title}`
+      restore.textContent = 'Unarchive'
+      restore.addEventListener('click', () => this.actions.unarchiveThread?.(thread.id))
+      row.appendChild(restore)
+      archivedWrap.appendChild(row)
+    }
+
     const total = hidden.length + folded.length
     this.$('#btn-hidden-toggle .label').textContent = `${total} off the map`
     this._syncHiddenList()
+    this._syncArchivedList()
   }
 
   toggleHiddenList() {
@@ -588,6 +612,17 @@ export class Hud {
   _syncHiddenList() {
     this.$('#btn-hidden-toggle').setAttribute('aria-expanded', String(this.hiddenOpen))
     this.$('.hidden-projects').hidden = !this.hiddenOpen
+  }
+
+  toggleArchivedList() {
+    this.archivedOpen = !this.archivedOpen
+    this._syncArchivedList()
+  }
+
+  _syncArchivedList() {
+    const button = this.$('#btn-archived-toggle')
+    button.setAttribute('aria-expanded', String(this.archivedOpen))
+    this.$('.archived-threads').hidden = !this.archivedOpen
   }
 
   /**
@@ -1084,6 +1119,12 @@ const TEMPLATE = `
           <span class="label">0 hidden</span>
         </button>
         <div class="hidden-projects" hidden></div>
+      </div>
+      <div class="archived-block" hidden>
+        <button type="button" class="hidden-toggle" id="btn-archived-toggle" aria-expanded="false">
+          <span class="label">Archived</span>
+        </button>
+        <div class="archived-threads" hidden></div>
       </div>
     </div>
 

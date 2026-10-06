@@ -60,6 +60,24 @@ test('codex opens through the registered scheme and prefixes its ids', async () 
   assert.equal(opened.url, `codex://threads/${id}`)
 })
 
+test('remote Codex opens over SSH only to the configured host', async () => {
+  await withEnv({ CODEX_SSH_HOST: 'example-host' }, async () => {
+    const { default: remote } = await import('../server/harnesses/codex.mjs?remote-open-test')
+    await withFakeCli('ssh', async (ssh) => {
+      const id = '019cc762-45a2-7112-89cd-cd345c17e834'
+      const opened = await remote.openThread({ sessionId: id, remoteHost: 'example-host' })
+      assert.equal(opened.url, '')
+      assert.deepEqual(opened.command.argv.slice(0, 3), [ssh, '-t', 'example-host'])
+      assert.match(opened.command.argv[3], /command -v codex/)
+      assert.ok(opened.command.argv[3].includes(`resume '${id}'`))
+      assert.ok(opened.command.argv[3].includes('.vscode-server/extensions/openai.chatgpt-*/bin/*/codex'))
+      assert.equal(opened.command.remote, true)
+      assert.equal(opened.command.cwd, '')
+      assert.equal((await remote.openThread({ sessionId: id, remoteHost: 'other-host' })).ok, false)
+    })
+  })
+})
+
 // ── the CLI alongside the deep link ───────────────────────────────────────────
 
 /**
@@ -102,11 +120,16 @@ test('codex offers `codex resume <id>` in the thread cwd alongside its deep link
   })
 })
 
-test('codex with no CLI installed offers the deep link alone', posixOnly, async () => {
+test('codex with no CLI installed offers the deep link and the VS Code extension', posixOnly, async () => {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
   try {
     const opened = await withEnv({ PATH: dir }, () => codex.openThread({ sessionId: SESSION_ID }))
-    assert.deepEqual(opened, { ok: true, url: `codex://threads/${SESSION_ID}`, command: undefined })
+    assert.deepEqual(opened, {
+      ok: true,
+      url: `codex://threads/${SESSION_ID}`,
+      command: undefined,
+      editor: { uri: `vscode://openai.chatgpt/local/${SESSION_ID}`, folder: '' },
+    })
   } finally {
     await fsp.rm(dir, { recursive: true, force: true })
   }

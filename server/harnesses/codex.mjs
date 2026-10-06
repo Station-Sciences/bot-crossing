@@ -24,12 +24,16 @@
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { exists, findExecutable, jsonLines, listDirs, listFiles, num, readHead, readTail } from '../lib/fsutil.mjs'
 
 const HOME = os.homedir()
 const CODEX_HOME = process.env.CODEX_HOME || path.join(HOME, '.codex')
 const SESSIONS_DIR = path.join(CODEX_HOME, 'sessions')
 const SESSION_INDEX = path.join(CODEX_HOME, 'session_index.jsonl')
+const CODEX_SSH_HOST = process.env.CODEX_SSH_HOST || ''
+const execFileAsync = promisify(execFile)
 
 const HEAD_BYTES = 128 * 1024
 const TAIL_BYTES = 64 * 1024
@@ -253,8 +257,109 @@ function projectOf(cwd) {
   return { projectPath: dir, project: dir ? path.basename(dir) : 'unknown' }
 }
 
+const REMOTE_QUERY = `
+import glob, json, os
+from datetime import datetime
+
+def text(content):
+  if isinstance(content, str):
+    return content
+  if not isinstance(content, list):
+    return ''
+  return '\\n'.join(x if isinstance(x, str) else x.get('text', x.get('input_text', '')) for x in content if isinstance(x, str) or isinstance(x, dict))
+
+for filename in glob.glob(os.path.expanduser('~/.codex/sessions/*/*/*/rollout-*.jsonl')):
+  try:
+    with open(filename) as stream:
+      meta = json.loads(stream.readline()).get('payload', {})
+      session_id = meta.get('id')
+      if not session_id or meta.get('thread_source') not in (None, 'user'):
+        continue
+      stat = os.stat(filename)
+      created_at_ms = int(stat.st_mtime * 1000)
+      try:
+        created_at_ms = int(datetime.fromisoformat(meta.get('timestamp', '').replace('Z', '+00:00')).timestamp() * 1000)
+      except (ValueError, TypeError):
+        pass
+      prompt = ''
+      for line in stream:
+        record = json.loads(line)
+        payload = record.get('payload', {})
+        if record.get('type') == 'response_item' and payload.get('type') == 'message' and payload.get('role') == 'user':
+          prompt = text(payload.get('content', ''))
+          break
+      print(json.dumps({'id': session_id, 'cwd': meta.get('cwd', ''), 'title': prompt, 'preview': prompt, 'first_user_message': prompt, 'source': meta.get('source', 'cli'), 'thread_source': 'user', 'git_branch': meta.get('git', {}).get('branch', ''), 'model': '', 'reasoning_effort': '', 'archived': 0, 'created_at_ms': created_at_ms, 'updated_at_ms': int(stat.st_mtime * 1000), 'size_bytes': stat.st_size}, separators=(',', ':')))
+  except Exception:
+    continue
+`
+const REMOTE_QUERY_B64 = Buffer.from(REMOTE_QUERY).toString('base64')
+
+/** Optional Codex store on a Remote SSH host, selected with CODEX_SSH_HOST. */
+async function remoteRows() {
+  if (!CODEX_SSH_HOST) return []
+  try {
+    const { stdout } = await execFileAsync(
+      'ssh',
+      [
+        '-o',
+        'BatchMode=yes',
+        CODEX_SSH_HOST,
+        `python3 -c "import base64; exec(base64.b64decode('${REMOTE_QUERY_B64}'))"`,
+      ],
+      { maxBuffer: 8 * 1024 * 1024, timeout: 60_000 }
+    )
+    return stdout
+      .split('\n')
+      .map((line) => {
+        try {
+          return JSON.parse(line)
+        } catch {
+          return null
+        }
+      })
+      .filter((row) => row?.id && UUID.test(row.id))
+  } catch {
+    return []
+  }
+}
+
+function remoteThreads(rows) {
+  return rows.map((row) => {
+    const { projectPath, project } = projectOf(row.cwd)
+    const prompt = clean(row.preview || row.first_user_message)
+    const createdAt = num(row.created_at_ms)
+    const lastActivityAt = num(row.updated_at_ms) || createdAt
+    return {
+      id: ID(row.id),
+      title: clean(row.title) || prompt || 'Untitled thread',
+      preview: prompt.slice(0, 240),
+      project,
+      projectPath,
+      worktree: '',
+      cwd: row.cwd || '',
+      gitBranch: row.git_branch || '',
+      model: row.model || '',
+      effort: row.reasoning_effort || '',
+      createdAt,
+      lastActivityAt,
+      lastFocusedAt: 0,
+      unread: false,
+      running: false,
+      hasError: false,
+      starred: false,
+      routine: '',
+      prState: '',
+      archived: row.archived === 1 || row.archived === true,
+      sizeBytes: num(row.size_bytes),
+      source: row.source === 'vscode' ? 'vscode' : 'cli',
+      canOpen: true,
+      ref: { sessionId: row.id, cwd: row.cwd || '', remoteHost: CODEX_SSH_HOST },
+    }
+  })
+}
+
 async function scanThreads() {
-  const [rows, rollouts, index] = await Promise.all([databaseRows(), scanRollouts(), readIndex()])
+  const [rows, rollouts, index, remote] = await Promise.all([databaseRows(), scanRollouts(), readIndex(), remoteRows()])
   const ids = new Set([...rows.keys(), ...rollouts.keys()])
   const now = Date.now()
   const out = []
@@ -304,7 +409,7 @@ async function scanThreads() {
       ref: { sessionId: id, cwd },
     })
   }
-  return out
+  return [...out, ...remoteThreads(remote)]
 }
 
 /**
@@ -327,13 +432,35 @@ const cliBinary = () => findExecutable('codex', CLI_DIRS)
  * page that prefers a terminal. Nothing is run here — the server decides whether it is.
  */
 async function openThread(ref) {
-  const { sessionId: id, cwd } = ref || {}
+  const { sessionId: id, cwd, remoteHost } = ref || {}
   if (typeof id !== 'string' || !UUID.test(id)) {
     return { ok: false, error: 'No openable Codex session id on that thread' }
   }
+  if (remoteHost) {
+    if (!CODEX_SSH_HOST || remoteHost !== CODEX_SSH_HOST) {
+      return { ok: false, error: 'That remote host is not configured for this colony' }
+    }
+    const ssh = await findExecutable('ssh')
+    if (!ssh) return { ok: false, error: 'SSH was not found on this machine' }
+    const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'"
+    const remoteCommand = [
+      typeof cwd === 'string' && cwd ? `cd ${quote(cwd)} || exit` : '',
+      `if command -v codex >/dev/null 2>&1; then exec codex resume ${quote(id)}; fi`,
+      'for candidate in "$HOME"/.vscode-server/extensions/openai.chatgpt-*/bin/*/codex; do',
+      '  if [ -x "$candidate" ]; then codex_bin="$candidate"; fi',
+      'done',
+      `if [ -n "$codex_bin" ]; then exec "$codex_bin" resume ${quote(id)}; fi`,
+      'echo "Codex executable not found on this remote host" >&2; exit 127',
+    ].filter(Boolean).join('\n')
+    const command = { argv: [ssh, '-t', CODEX_SSH_HOST, remoteCommand], cwd: '', remote: true }
+    return { ok: true, url: '', command }
+  }
   const bin = await cliBinary()
   const command = bin ? { argv: [bin, 'resume', id], cwd: typeof cwd === 'string' ? cwd : '' } : undefined
-  return { ok: true, url: `codex://threads/${id}`, command }
+  // The VS Code extension (openai.chatgpt) routes a `vscode://` path straight into its panel,
+  // where `/local/<id>` is the thread.
+  const editor = { uri: `vscode://openai.chatgpt/local/${id}`, folder: typeof cwd === 'string' ? cwd : '' }
+  return { ok: true, url: `codex://threads/${id}`, command, editor }
 }
 
 async function newSession(dir) {
@@ -342,6 +469,7 @@ async function newSession(dir) {
     ok: true,
     url: `codex://threads/new?${new URLSearchParams({ path: dir })}`,
     command: bin ? { argv: [bin], cwd: dir } : undefined,
+    editor: { uri: 'vscode://openai.chatgpt/', folder: dir },
   }
 }
 

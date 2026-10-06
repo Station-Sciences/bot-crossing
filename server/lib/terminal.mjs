@@ -6,11 +6,28 @@
  * particular harness — an adapter never imports it. An adapter hands the server an argv; the
  * server decides whether a terminal is the right place for it.
  */
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { findExecutable } from './fsutil.mjs'
 import { openInTerminalWindows } from './win-terminal.mjs'
+
+const execFileAsync = promisify(execFile)
+const shellQuote = (value) => "'" + value.replaceAll("'", "'\\''") + "'"
+
+async function openMacTerminal(argv, cwd) {
+  const osascript = await findExecutable('osascript')
+  if (!osascript) return { ok: false, error: 'Terminal.app launcher not found — set BOT_CROSSING_TERMINAL to another terminal' }
+  const script = `cd ${shellQuote(cwd)} && ${argv.map(shellQuote).join(' ')}`
+  try {
+    await execFileAsync(osascript, ['-e', 'tell application "Terminal"', '-e', 'activate',
+      '-e', `do script ${JSON.stringify(script)}`, '-e', 'end tell'], { timeout: 10000 })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: `Could not open Terminal: ${err.message}` }
+  }
+}
 
 /**
  * How each terminal wants "run this command in this directory". The command comes after the
@@ -148,9 +165,8 @@ function trySpawn(cmd, args, cwd) {
  * rest of the line" to xterm and "one string, which I will split" to tilix, and guessing wrong
  * opens a window on the wrong command — worse than moving on to a terminal we do know.
  *
- * On macOS the desktop walk finds nothing, so only a named terminal works there — kitty,
- * alacritty, ghostty and wezterm take the same flags on both. Terminal.app and iTerm are not
- * driven: `open -a` cannot hand them an argv without a shell string in between.
+ * On macOS, Terminal.app handles the default launch with safely quoted shell arguments.
+ * An explicitly configured terminal still uses the emulator walk below.
  */
 export async function openInTerminal(argv, cwd) {
   // Windows shares none of the trivia below — no PATH walk over sixteen emulators, no display
@@ -161,6 +177,9 @@ export async function openInTerminal(argv, cwd) {
   const wellFormed = Array.isArray(argv) && argv.length > 0 && argv.every((a) => typeof a === 'string' && a)
   if (!wellFormed || !path.isAbsolute(argv[0]) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) {
     return { ok: false, error: 'Invalid launch command' }
+  }
+  if (process.platform === 'darwin' && !process.env.BOT_CROSSING_TERMINAL && !process.env.TERMINAL) {
+    return openMacTerminal(argv, cwd)
   }
   // A macOS session always has a window server; only Linux can be headless in a way worth naming.
   if (process.platform === 'linux' && !(await hasDisplay())) {

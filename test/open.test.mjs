@@ -98,3 +98,32 @@ test('/api/new-session with via: terminal starts the bare CLI in that folder', p
     })
   )
 })
+
+// ── no harness app: VS Code ───────────────────────────────────────────────────
+
+const macOnly = { skip: process.platform !== 'darwin' }
+
+test('on macOS, a deep link nothing answers falls back to VS Code with the thread', macOnly, async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-vscode-'))
+  try {
+    const code = await fakeExecutable(dir, 'code')
+    const editor = { uri: `vscode://anthropic.claude-code/open?session=${UUID}`, folder: dir }
+    const shown = await withEnv({ BOT_CROSSING_CODE: code.file }, () =>
+      present({ ok: true, url: `bot-crossing-nobody-${Date.now()}://x`, editor }, 'app')
+    )
+    assert.deepEqual(shown, { ok: true, via: 'vscode', note: undefined })
+    // The fake logs its last call: the extension link, sent after the folder was fronted.
+    assert.deepEqual(await code.argv(), ['--open-url', editor.uri])
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('on macOS, no app and no VS Code is an error rather than "Opened"', macOnly, async () => {
+  const editor = { uri: 'vscode://anthropic.claude-code/open', folder: os.tmpdir() }
+  const shown = await withEnv({ BOT_CROSSING_CODE: '/definitely/not/code' }, () =>
+    present({ ok: true, url: `bot-crossing-nobody-${Date.now()}://x`, editor }, 'app')
+  )
+  assert.equal(shown.ok, false)
+  assert.match(shown.error, /Nothing on this machine opens .*code/)
+})

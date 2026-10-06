@@ -220,7 +220,9 @@ function openThread(ref) {
 function newSession(dir) {
   const abs = String(dir || '').replace(/\\/g, '/')
   if (!abs.startsWith('/')) return { ok: false, error: 'That folder is not somewhere Cursor can open' }
-  return { ok: true, url: `cursor://file${abs.split('/').map(encodeURIComponent).join('/')}` }
+  // Cursor's threads live in Cursor alone, so VS Code can only offer the repo.
+  const editor = { folder: dir, note: 'Cursor is not installed — opened the repo in VS Code; its threads are only in Cursor.' }
+  return { ok: true, url: `cursor://file${abs.split('/').map(encodeURIComponent).join('/')}`, editor }
 }
 
 const detect = () => exists(PROJECTS)

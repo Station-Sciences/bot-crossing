@@ -173,7 +173,8 @@ const actions = {
       const harness = harnessForProject(name)
       const shown = await newSession(folder, harness, settings.get('openIn'))
       const label = harnessLabel(harness)
-      hud.toast(`New thread in ${name} — ${shown.via === 'terminal' ? `${label} in a terminal` : `opening ${label}`}`)
+      const where = shown.via === 'terminal' ? `${label} in a terminal` : shown.via === 'vscode' ? `${label} in VS Code` : `opening ${label}`
+      hud.toast(`New thread in ${name} — ${where}`)
       // It lands as an astronaut walking down the ramp, once it has a record to scan.
       setTimeout(poll, 6000)
     } catch (err) {
@@ -253,7 +254,9 @@ const actions = {
       const shown = await openThread(thread, settings.get('openIn'))
       colony.astronauts.celebrate(thread.id)
       const name = thread.harnessName || 'your harness'
-      hud.toast(shown.via === 'terminal' ? `Opened ${name} in a terminal` : `Opened in ${name}`)
+      if (shown.note) hud.toast(shown.note)
+      else if (shown.via === 'vscode') hud.toast(`Opened in ${name} in VS Code`)
+      else hud.toast(shown.via === 'terminal' ? `Opened ${name} in a terminal` : `Opened in ${name}`)
       // Opening is the thing that makes a thread no longer unread, so refresh shortly after.
       setTimeout(poll, 1800)
     } catch (err) {
@@ -284,6 +287,17 @@ const actions = {
         : 'Archived — heading home'
     )
     colony.ship.ping()
+  },
+
+  unarchiveThread: (id) => {
+    if (!state.archived.includes(id)) return
+    state.archived = state.archived.filter((archivedId) => archivedId !== id)
+    const archivedAt = { ...state.archivedAt }
+    delete archivedAt[id]
+    state.archivedAt = archivedAt
+    queueSave()
+    applyThreads(threads)
+    hud.toast('Unarchived — back on the map')
   },
 
   uiVisibility: (visible) => colony.setUiVisible(visible),
@@ -405,9 +419,18 @@ function pathForProject(name) {
   return best
 }
 
+function archivedCatalog() {
+  const archived = new Set(state.archived || [])
+  return threads
+    .filter((thread) => archived.has(thread.id))
+    .map((thread) => ({ id: thread.id, title: thread.title, project: thread.project || 'unknown' }))
+    .sort((a, b) => a.project.localeCompare(b.project) || a.title.localeCompare(b.title))
+}
+
 /** Push the open zone's current contents at the sidebar. Closes it if the zone is gone. */
 function syncProject() {
   const hidden = hiddenCatalog(state.hiddenProjects || [], threads)
+  const archived = archivedCatalog()
   // Folded-away repos are listed alongside the ones you hid by hand. Same principle: nothing
   // leaves the map without somewhere on screen saying where it went.
   const folded = hiddenCatalog([...(colony.dormantProjects || [])], threads)
@@ -415,7 +438,7 @@ function syncProject() {
   if (!plot) {
     selectedProject = null
     hud.setProject(null)
-    hud.setLegend(legendProjects, null, hidden, folded)
+    hud.setLegend(legendProjects, null, hidden, folded, archived)
     return
   }
   const now = Date.now()
@@ -444,7 +467,7 @@ function syncProject() {
   })
   // The legend is the same selection seen from the bottom of the screen: keep it in step
   // here rather than only on the next poll.
-  hud.setLegend(legendProjects, selectedProject, hidden, folded)
+  hud.setLegend(legendProjects, selectedProject, hidden, folded, archived)
 }
 
 // ── pointer ───────────────────────────────────────────────────────────────────────────
