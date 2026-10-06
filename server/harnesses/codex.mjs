@@ -259,6 +259,7 @@ function projectOf(cwd) {
 
 const REMOTE_QUERY = `
 import glob, json, os
+from datetime import datetime
 
 def text(content):
   if isinstance(content, str):
@@ -274,6 +275,12 @@ for filename in glob.glob(os.path.expanduser('~/.codex/sessions/*/*/*/rollout-*.
       session_id = meta.get('id')
       if not session_id or meta.get('thread_source') not in (None, 'user'):
         continue
+      stat = os.stat(filename)
+      created_at_ms = int(stat.st_mtime * 1000)
+      try:
+        created_at_ms = int(datetime.fromisoformat(meta.get('timestamp', '').replace('Z', '+00:00')).timestamp() * 1000)
+      except (ValueError, TypeError):
+        pass
       prompt = ''
       for line in stream:
         record = json.loads(line)
@@ -281,7 +288,7 @@ for filename in glob.glob(os.path.expanduser('~/.codex/sessions/*/*/*/rollout-*.
         if record.get('type') == 'response_item' and payload.get('type') == 'message' and payload.get('role') == 'user':
           prompt = text(payload.get('content', ''))
           break
-      print(json.dumps({'id': session_id, 'cwd': meta.get('cwd', ''), 'title': prompt, 'preview': prompt, 'first_user_message': prompt, 'source': meta.get('source', 'cli'), 'thread_source': 'user', 'git_branch': meta.get('git', {}).get('branch', ''), 'model': '', 'reasoning_effort': '', 'archived': 0, 'created_at_ms': 0, 'updated_at_ms': 0}, separators=(',', ':')))
+      print(json.dumps({'id': session_id, 'cwd': meta.get('cwd', ''), 'title': prompt, 'preview': prompt, 'first_user_message': prompt, 'source': meta.get('source', 'cli'), 'thread_source': 'user', 'git_branch': meta.get('git', {}).get('branch', ''), 'model': '', 'reasoning_effort': '', 'archived': 0, 'created_at_ms': created_at_ms, 'updated_at_ms': int(stat.st_mtime * 1000), 'size_bytes': stat.st_size}, separators=(',', ':')))
   except Exception:
     continue
 `
@@ -343,7 +350,7 @@ function remoteThreads(rows) {
       routine: '',
       prState: '',
       archived: row.archived === 1 || row.archived === true,
-      sizeBytes: 0,
+      sizeBytes: num(row.size_bytes),
       source: row.source === 'vscode' ? 'vscode' : 'cli',
       canOpen: true,
       ref: { sessionId: row.id, cwd: row.cwd || '', remoteHost: CODEX_SSH_HOST },
@@ -429,15 +436,31 @@ async function openThread(ref) {
   if (typeof id !== 'string' || !UUID.test(id)) {
     return { ok: false, error: 'No openable Codex session id on that thread' }
   }
-  
   if (remoteHost) {
-    const command = { argv: ['ssh', '-t', remoteHost, 'codex', 'resume', id], cwd: '', remote: true }
+    if (!CODEX_SSH_HOST || remoteHost !== CODEX_SSH_HOST) {
+      return { ok: false, error: 'That remote host is not configured for this colony' }
+    }
+    const ssh = await findExecutable('ssh')
+    if (!ssh) return { ok: false, error: 'SSH was not found on this machine' }
+    const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'"
+    const remoteCommand = [
+      typeof cwd === 'string' && cwd ? `cd ${quote(cwd)} || exit` : '',
+      `if command -v codex >/dev/null 2>&1; then exec codex resume ${quote(id)}; fi`,
+      'for candidate in "$HOME"/.vscode-server/extensions/openai.chatgpt-*/bin/*/codex; do',
+      '  if [ -x "$candidate" ]; then codex_bin="$candidate"; fi',
+      'done',
+      `if [ -n "$codex_bin" ]; then exec "$codex_bin" resume ${quote(id)}; fi`,
+      'echo "Codex executable not found on this remote host" >&2; exit 127',
+    ].filter(Boolean).join('\n')
+    const command = { argv: [ssh, '-t', CODEX_SSH_HOST, remoteCommand], cwd: '', remote: true }
     return { ok: true, url: '', command }
   }
-
   const bin = await cliBinary()
   const command = bin ? { argv: [bin, 'resume', id], cwd: typeof cwd === 'string' ? cwd : '' } : undefined
-  return { ok: true, url: `codex://threads/${id}`, command }
+  // The VS Code extension (openai.chatgpt) routes a `vscode://` path straight into its panel,
+  // where `/local/<id>` is the thread.
+  const editor = { uri: `vscode://openai.chatgpt/local/${id}`, folder: typeof cwd === 'string' ? cwd : '' }
+  return { ok: true, url: `codex://threads/${id}`, command, editor }
 }
 
 async function newSession(dir) {
@@ -446,6 +469,7 @@ async function newSession(dir) {
     ok: true,
     url: `codex://threads/new?${new URLSearchParams({ path: dir })}`,
     command: bin ? { argv: [bin], cwd: dir } : undefined,
+    editor: { uri: 'vscode://openai.chatgpt/', folder: dir },
   }
 }
 

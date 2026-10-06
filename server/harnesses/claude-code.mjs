@@ -687,8 +687,16 @@ async function openThread(ref) {
     if (bin) command = { argv: [bin, '--resume', cliSessionId], cwd: typeof cwd === 'string' ? cwd : '' }
   }
 
+  // The VS Code extension's own handler: `/open?session=` resumes that session in its panel.
+  const folder = typeof cwd === 'string' ? cwd : ''
+  const editor = isCliId(cliSessionId)
+    ? { uri: `vscode://anthropic.claude-code/open?${new URLSearchParams({ session: cliSessionId })}`, folder }
+    : folder
+      ? { folder, note: 'The Claude app is not installed — opened the repo in VS Code instead.' }
+      : undefined
+
   if (!url && !command) return { ok: false, error: 'No openable session id on that thread' }
-  return { ok: true, url, command, pid }
+  return { ok: true, url, command, pid, editor }
 }
 
 /**
@@ -700,7 +708,7 @@ async function newSession(dir) {
   const url = `claude://code/new?${new URLSearchParams({ folder: dir })}`
   const bin = await cliBinary()
   const command = bin ? { argv: [bin], cwd: dir } : undefined
-  return { ok: true, url, command }
+  return { ok: true, url, command, editor: { uri: 'vscode://anthropic.claude-code/open', folder: dir } }
 }
 
 export default {

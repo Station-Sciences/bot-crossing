@@ -71,6 +71,19 @@ test('with no terminal anywhere, the error says which variable to set', posixOnl
   })
 })
 
+test('macOS defaults to Terminal.app and quotes shell arguments', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    const osascript = await fakeExecutable(dir, 'osascript')
+    const args = ['/usr/bin/ssh', '-t', 'example-host', "a'b", '$(touch /tmp/should-not-exist)']
+    const result = await withPlatform('darwin', () => withEnv(nothingInstalled(dir), () => openInTerminal(args, dir)))
+    assert.equal(result.ok, true)
+    const scriptArgs = await osascript.argv()
+    assert.equal(scriptArgs[1], 'tell application "Terminal"')
+    assert.equal(scriptArgs[3], 'activate')
+    assert.equal(scriptArgs[5], `do script ${JSON.stringify(`cd '${dir}' && '/usr/bin/ssh' '-t' 'example-host' 'a'\\''b' '$(touch /tmp/should-not-exist)'`)}`)
+  })
+})
+
 test('a missing DISPLAY is a refusal on Linux and nothing at all on macOS', posixOnly, async () => {
   await withTmp(async (dir) => {
     const kitty = await fakeExecutable(dir, 'kitty')

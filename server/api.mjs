@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { schemeHasHandler, schemeOf } from './lib/xdg.mjs'
 import { openInTerminal } from './lib/terminal.mjs'
 import { focusWindowOfPid } from './lib/windows.mjs'
+import { openInVsCode } from './lib/vscode.mjs'
 import {
   defaultHarness,
   harnessStatus,
@@ -128,7 +129,6 @@ async function writeState(next) {
 }
 
 /**
-/**
  * Hand a `harness://…` deep link, or a folder, to whatever opens things on this OS. The
  * opener gets an argument list, never a shell string.
  *
@@ -161,6 +161,43 @@ function launch(target) {
   const child = spawn(cmd, [...args, target], { stdio: 'ignore', detached: true })
   child.on('error', () => {})
   child.unref()
+}
+
+/**
+ * `launch`, but waiting to hear whether it worked — macOS only, where `open(1)` exits non-zero
+ * at once when no app claims a URL's scheme (an app copied off its installer image and never
+ * installed leaves exactly that). Without the wait, that failure reached the page as "Opened".
+ * An opener still running after a few seconds is taken as having found its app.
+ */
+function launchChecked(target) {
+  if (process.platform !== 'darwin') {
+    launch(target)
+    return Promise.resolve(true)
+  }
+  return new Promise((resolve) => {
+    const child = spawn('open', [target], { stdio: 'ignore', detached: true })
+    const timer = setTimeout(() => resolve(true), 4000)
+    child.on('error', () => {
+      clearTimeout(timer)
+      resolve(false)
+    })
+    child.on('exit', (code) => {
+      clearTimeout(timer)
+      resolve(code === 0)
+    })
+    child.unref()
+  })
+}
+
+/**
+ * The adapter's VS Code hint, with its folder held to the same check as any folder the page
+ * names. A folder that has gone away still leaves the extension link worth trying.
+ */
+async function openEditor(editor) {
+  if (!editor) return { ok: false }
+  const folder = editor.folder ? await resolveFolder(editor.folder) : null
+  if (!editor.uri && !folder) return { ok: false }
+  return openInVsCode({ uri: editor.uri, folder })
 }
 
 /**
@@ -209,12 +246,13 @@ async function runInTerminal(command) {
  * an app window appearing after choosing a terminal reads as the setting being ignored, where an
  * error toast reads as something to fix.
  *
- * Otherwise macOS and Windows hand the URL to the opener: a scheme the harness's app registers is
- * always answered there, so nothing is probed. Linux is the platform where the URL may have
- * nowhere to go — the desktop app is optional and often absent, and `xdg-open` on a scheme nobody
- * claims exits quietly, which used to reach the page as "Opened". So there the scheme is checked
- * first; failing that, the harness's own CLI runs in a terminal, from the `command` the adapter
- * offered alongside the URL; failing that, the page is told so.
+ * Otherwise the URL goes to the opener — but only counts if something answered it. The desktop
+ * app is optional on every platform, and an opener given a scheme nobody claims fails quietly,
+ * which used to reach the page as "Opened". Linux asks `xdg-mime` first; macOS waits on `open(1)`'s
+ * exit status; Windows' ShellExecute says nothing either way and is trusted. Failing that, VS
+ * Code, from the `editor` hint the adapter offered — the harness's extension there can show the
+ * thread itself; failing that, the harness's own CLI runs in a terminal, from the `command`;
+ * failing that, the page is told so.
  */
 export async function present(result, via = 'app') {
   // Only the reason reaches the page: a failure may still carry the adapter's command.
@@ -239,29 +277,26 @@ export async function present(result, via = 'app') {
   // desktop app itself — does the URL run as before.
   if (result.pid && (await focusWindowOfPid(result.pid))) return { ok: true, focused: true }
 
-  if (process.platform !== 'linux') {
-    if (result.url) {
-      launch(result.url)
-      // A note is the adapter saying it opened *something* — the repo rather than the thread.
-      return { ok: true, url: result.url, note: result.note }
-    }
-    // No URL but a command — a remote thread that can only be reached via a terminal.
-    if (result.command) return runInTerminal(result.command)
-    return { ok: false, error: 'That harness has no deep link to open on this platform' }
+  let answered = false
+  if (result.url && process.platform === 'linux') {
+    answered = await schemeHasHandler(result.url)
+    if (answered) launch(result.url)
+  } else if (result.url) {
+    answered = await launchChecked(result.url)
   }
+  // A note is the adapter saying it opened *something* — the repo rather than the thread.
+  if (answered) return { ok: true, url: result.url, note: result.note }
 
-  if (result.url && (await schemeHasHandler(result.url))) {
-    launch(result.url)
-    return { ok: true, url: result.url }
-  }
+  // The harness's app is not here, so VS Code — where the harness's extension can show the
+  // thread itself — before a terminal running its CLI.
+  const edited = await openEditor(result.editor)
+  if (edited.ok) return { ...edited, note: result.editor.note }
+
+  // No URL but a command — a remote thread that can only be reached via a terminal.
   if (result.command) return runInTerminal(result.command)
   const scheme = schemeOf(result.url)
-  return {
-    ok: false,
-    error: scheme
-      ? `Nothing on this machine opens ${scheme}:// links, and there is no CLI command to run instead`
-      : 'Nothing on this machine can open that',
-  }
+  const nothing = scheme ? `Nothing on this machine opens ${scheme}:// links` : 'Nothing on this machine can open that'
+  return { ok: false, error: `${nothing}, ${edited.error ? `and ${edited.error}` : 'and there is no CLI command to run instead'}` }
 }
 
 const viaOf = (body) => (body?.via === 'terminal' ? 'terminal' : 'app')
