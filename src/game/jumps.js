@@ -12,6 +12,10 @@
 /** Everything the "needs you" key covers, most urgent first. */
 export const NEEDS_YOU = ['blocked', 'approval', 'waiting']
 
+/** What the busiest key covers: anyone stuck on you, plus anyone building. Idle, asleep and
+ *  shipped bots have nothing going on to jump to. */
+export const ACTIVE = [...NEEDS_YOU, 'working']
+
 /** The candidates one side of the open zone's boundary. */
 export function inScope(candidates, project, { outside = false } = {}) {
   if (!project) return candidates

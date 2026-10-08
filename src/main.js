@@ -25,7 +25,7 @@ import {
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 import { withErrands } from './game/errands.js'
-import { JumpRun, NEEDS_YOU, busiestOrder, crewOrder, inScope, needsYouOrder, nextInRing } from './game/jumps.js'
+import { ACTIVE, JumpRun, NEEDS_YOU, busiestOrder, crewOrder, inScope, needsYouOrder, nextInRing } from './game/jumps.js'
 
 /**
  * Boot and the outer game loop.
@@ -200,18 +200,20 @@ const actions = {
 
   /**
    * Jump to whoever has been busiest lately, walking down the ranking on repeat presses.
+   * Only active bots — building, or stuck on you — since an idle one has nothing to see.
    * Plain ranks the open zone; shift ranks everything outside it.
    */
   focusBusiest: ({ outside = false } = {}) => {
     const project = selectedProject
+    const qualifies = (c) => ACTIVE.includes(c.status)
     const id = jumpRun.next(
       `busiest:${outside}`,
       selectedId,
-      () => busiestOrder(inScope(jumpCandidates(), project, { outside })).map((c) => c.id),
-      (id) => isCandidate(id)
+      () => busiestOrder(inScope(jumpCandidates().filter(qualifies), project, { outside })).map((c) => c.id),
+      (id) => isCandidate(id, qualifies)
     )
     if (id) select(id, { fly: true })
-    else hud.hint(emptyScopeHint(project, outside))
+    else hud.hint(emptyScopeHint(project, outside, qualifies, 'is busy'))
   },
 
   focusProject: (name) => {
@@ -416,13 +418,16 @@ let lastPhrase = 0
 
 /** The crew as the jump keys see them — see game/jumps.js. */
 function jumpCandidates() {
-  return colony.astronauts.agents.map((a) => ({
+  return colony.astronauts.agents.filter(onTheMap).map((a) => ({
     id: a.id,
     status: a.status,
     project: a.thread?.project,
     lastActivityAt: a.thread?.lastActivityAt || 0,
   }))
 }
+
+/** Not one walking home after an archive — it is leaving the map, not on it. */
+const onTheMap = (agent) => agent.state !== 'leaving' && agent.state !== 'gone'
 
 function projectOrder() {
   return colony.plotOrder.map((p) => p.id)
@@ -431,7 +436,7 @@ function projectOrder() {
 /** Still on the surface, and (if asked) still in the state the jump was looking for. */
 function isCandidate(id, qualifies) {
   const agent = colony.agentFor(id)
-  if (!agent) return false
+  if (!agent || !onTheMap(agent)) return false
   return !qualifies || qualifies({ id, status: agent.status, project: agent.thread?.project })
 }
 

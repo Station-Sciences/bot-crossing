@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { JumpRun, busiestOrder, crewOrder, inScope, needsYouOrder, nextInRing } from '../src/game/jumps.js'
+import { ACTIVE, JumpRun, busiestOrder, crewOrder, inScope, needsYouOrder, nextInRing } from '../src/game/jumps.js'
 
 const crew = [
   { id: 'a1', project: 'alpha', status: 'working', lastActivityAt: 50 },
@@ -82,4 +82,9 @@ test('a run skips bots that left or stopped qualifying, and stays put when alone
   assert.equal(run.next('needs:false', 'z', rank, (id) => alive.has(id)), 'z')
   alive = new Set()
   assert.equal(run.next('needs:false', 'z', rank, (id) => alive.has(id)), null)
+})
+
+test('busiest only reaches bots with something going on', () => {
+  for (const s of ['blocked', 'approval', 'waiting', 'working']) assert.ok(ACTIVE.includes(s), s)
+  for (const s of ['idle', 'sleeping', 'celebrating', 'leaving']) assert.ok(!ACTIVE.includes(s), s)
 })

@@ -299,7 +299,7 @@ under **View → Return to isometric**.
 | `N` | Fly to the next bot waiting on you — errors first, then replies, longest-waiting first |
 | `J` | Next bot |
 | `K` | Next zone |
-| `B` | Busiest bot, then the next busiest on each press |
+| `B` | Busiest bot that is building or stuck on you, then the next busiest on each press. Idle and sleeping bots are skipped |
 | `Enter` / `A` | Open / archive the selected thread |
 | `V` | Mark the selected thread viewed, so it stops asking |
 | `C` | New conversation in the open zone's folder |
