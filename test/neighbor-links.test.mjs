@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  NEIGHBOR_CAP, addNeighbor, describeNeighbor, hydrateNeighbors, neighborThreadId,
+  NEIGHBOR_CAP, NEIGHBOR_THREAD_CAP, addNeighbor, capNeighborThreads, describeNeighbor, hydrateNeighbors, neighborThreadId,
   newShareKey, parseShareLink, removeNeighbor, shareLink,
 } from '../src/game/neighbors.js'
 
@@ -82,6 +82,29 @@ test("an away friend's bots are all asleep, and their errands are gone", () => {
   assert.equal(n.threads.length, 1)
   assert.equal(n.threads[0].running, false)
   assert.equal(n.threads[0].lastActivityAt, 0)
+})
+
+test('only the most telling of a friend\'s threads are kept, in their own order', () => {
+  const now = 10 * 24 * 3600 * 1000
+  const list = [
+    thread(1, { running: false, lastActivityAt: 0 }), // sleeping
+    thread(2, { running: false, lastActivityAt: now - 5000 }), // idle, recent
+    thread(3, { running: false, lastActivityAt: now - 9000 }), // idle, older
+    thread(4, { running: true }), // working
+    thread(5, { running: false, unread: true, lastActivityAt: now }), // waiting
+    thread(6, { hasError: true }), // blocked
+    thread(7, { running: false, prState: 'MERGED', lastActivityAt: now }), // celebrating
+  ]
+  const ids = (l) => l.map((t) => t.createdAt)
+  assert.deepEqual(ids(capNeighborThreads(list, 3, now)), [4, 5, 6])
+  assert.deepEqual(ids(capNeighborThreads(list, 5, now)), [2, 4, 5, 6, 7])
+  assert.equal(capNeighborThreads(list, 10, now), list)
+})
+
+test('a friend sharing hundreds of threads is drawn with at most the cap', () => {
+  const many = Array.from({ length: 300 }, (_, i) => thread(1, { id: `n:${String(i).padStart(16, '0')}` }))
+  const [n] = hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'online', lastSeenAt: 9, snapshot: { ...snapshot, threads: many } }])
+  assert.equal(n.threads.length, NEIGHBOR_THREAD_CAP)
 })
 
 test('a friend with nothing to draw is left out', () => {

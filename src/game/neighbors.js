@@ -4,6 +4,7 @@
  *
  * Pure and browser-free so it runs under bare node, like merge-state.js and errands.js.
  */
+import { statusFor } from './status.js'
 
 export const NEIGHBOR_CAP = 6
 const KEY_HEX = /^[0-9a-f]{32}$/
@@ -59,11 +60,35 @@ export function removeNeighbor(list, id) {
 export const neighborThreadId = (neighborId, sharedId) => `nb:${neighborId}:${sharedId}`
 
 /**
+ * A friend may share up to 500 threads and every one is a building of its own, so only this many
+ * are drawn per friend. Enough to read as their colony; not enough to cost ours its frame rate.
+ */
+export const NEIGHBOR_THREAD_CAP = 60
+const RANK = { blocked: 0, waiting: 1, working: 2, celebrating: 3, idle: 4, sleeping: 5 }
+
+/**
+ * The `max` threads most worth showing: whatever needs a hand first, then whatever is busy, then
+ * the most recently active. Returned in the friend's own order so their layout does not reshuffle.
+ */
+export function capNeighborThreads(threads, max, now = Date.now()) {
+  if (threads.length <= max) return threads
+  const kept = new Set(
+    threads
+      .map((t) => ({ t, rank: RANK[statusFor(t, now)] }))
+      .sort((a, b) => a.rank - b.rank || b.t.lastActivityAt - a.t.lastActivityAt)
+      .slice(0, max)
+      .map(({ t }) => t),
+  )
+  return threads.filter((t) => kept.has(t))
+}
+
+/**
  * Snapshot threads → colony threads. A friend who is not online right now keeps their buildings
  * but every bot sits down: nothing running, nothing waiting, last active at the epoch — which
  * `statusFor` reads as asleep. Their errands go, because an errand is by definition running.
+ * The cap ranks by what the friend last told us, so the same buildings stay up while they are away.
  */
-export function hydrateNeighbors(saved, results) {
+export function hydrateNeighbors(saved, results, now = Date.now()) {
   const byId = new Map((results || []).map((r) => [r.id, r]))
   const out = []
   for (const n of saved || []) {
@@ -80,8 +105,7 @@ export function hydrateNeighbors(saved, results) {
       status: r.status,
       lastSeenAt: r.lastSeenAt,
       projects: r.snapshot.projects,
-      threads: r.snapshot.threads
-        .filter((t) => online || !t.isErrand)
+      threads: capNeighborThreads(r.snapshot.threads.filter((t) => online || !t.isErrand), NEIGHBOR_THREAD_CAP, now)
         .map((t) => ({
           id: neighborThreadId(n.id, t.id),
           title: t.project,
