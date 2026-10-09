@@ -13,6 +13,8 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
 } from './scan.mjs'
+import { createShareService } from './share.mjs'
+import { buildSnapshot } from './share-snapshot.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
@@ -157,6 +159,60 @@ async function writeState(next) {
     throw err
   }
   return state
+}
+
+// ── sharing ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Where friends reach this colony. Read once, at import, like DATA_DIR. `0` is a real value —
+ * "any free port" — which is what the tests use, so it cannot be treated as unset.
+ */
+const SHARE_HOST = process.env.BOT_CROSSING_SHARE_HOST || '0.0.0.0'
+const SHARE_PORT_RAW = process.env.BOT_CROSSING_SHARE_PORT
+const SHARE_PORT = SHARE_PORT_RAW === undefined || SHARE_PORT_RAW === '' ? 5275 : Number(SHARE_PORT_RAW)
+
+/** What friends see on the sign if the sharer never typed a name. */
+function defaultName() {
+  try {
+    return os.userInfo().username || 'Neighbor'
+  } catch {
+    return 'Neighbor'
+  }
+}
+
+/** The address a friend on the same Wi-Fi would type. The browser has no way to learn it. */
+function lanAddress() {
+  for (const addrs of Object.values(os.networkInterfaces())) {
+    for (const a of addrs || []) {
+      if (a && a.family === 'IPv4' && !a.internal && a.address) return a.address
+    }
+  }
+  return ''
+}
+
+const sharing = createShareService({
+  host: SHARE_HOST,
+  port: SHARE_PORT,
+  getKey: async () => {
+    const s = (await readState()).sharing
+    return s.enabled ? s.key : ''
+  },
+  snapshot: async () =>
+    buildSnapshot({
+      threads: await reconcileArchived(await scanThreads()),
+      state: await readState(),
+      name: defaultName(),
+    }),
+})
+
+/** Open or close the share port to match the colony file. Called at boot and after every save. */
+export async function syncSharing() {
+  const s = (await readState()).sharing
+  await sharing.sync(Boolean(s.enabled && s.key))
+}
+
+export function stopSharing() {
+  return sharing.close()
 }
 
 /**
@@ -465,8 +521,16 @@ export async function apiMiddleware(req, res, next) {
       return serialise(async () => {
         const current = await readState()
         if (base && current.updatedAt !== base) return send(res, 409, current)
-        return send(res, 200, await writeState(body))
+        const saved = await writeState(body)
+        // The page reads /api/sharing straight after a save that flipped the toggle, so the port
+        // has to have opened (or failed to) before this answers.
+        await syncSharing().catch(() => {})
+        return send(res, 200, saved)
       })
+    }
+
+    if (url.pathname === '/api/sharing' && req.method === 'GET') {
+      return send(res, 200, { ...sharing.status(), lanAddress: lanAddress(), defaultName: defaultName() })
     }
 
     if (url.pathname === '/api/open' && req.method === 'POST') {

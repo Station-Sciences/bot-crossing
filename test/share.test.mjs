@@ -94,3 +94,58 @@ test('a port already in use is reported, not thrown', async () => {
     await second.close()
   })
 })
+
+// ── wired into the server ────────────────────────────────────────────────────
+
+import { withServer } from './support/with-server.mjs'
+import { withEnv } from './support/env.mjs'
+
+const shareEnv = { BOT_CROSSING_SHARE_PORT: '0', BOT_CROSSING_SHARE_HOST: '127.0.0.1' }
+
+test('turning sharing on in the colony file opens the port, and off closes it', async () => {
+  await withEnv(shareEnv, () =>
+    withServer(async ({ call, put }) => {
+      let info = await (await call('/api/sharing')).json()
+      assert.equal(info.listening, false)
+      assert.equal(typeof info.defaultName, 'string')
+      assert.ok('lanAddress' in info)
+
+      await put({ sharing: { enabled: true, key: KEY, name: 'Mark' } })
+      info = await (await call('/api/sharing')).json()
+      assert.equal(info.listening, true)
+      const res = await fetch(`http://127.0.0.1:${info.port}${SHARE_PATH}`, auth(KEY))
+      assert.equal(res.status, 200)
+      const snap = await res.json()
+      assert.equal(snap.v, 1)
+      assert.equal(snap.name, 'Mark')
+
+      await put({ sharing: { enabled: false, key: KEY, name: 'Mark' } })
+      assert.equal((await (await call('/api/sharing')).json()).listening, false)
+    })
+  )
+})
+
+test('rotating the key locks out the old one at once', async () => {
+  await withEnv(shareEnv, () =>
+    withServer(async ({ call, put }) => {
+      await put({ sharing: { enabled: true, key: KEY, name: '' } })
+      const { port } = await (await call('/api/sharing')).json()
+      const fresh = '1'.repeat(32)
+      await put({ sharing: { enabled: true, key: fresh, name: '' } })
+      assert.equal((await fetch(`http://127.0.0.1:${port}${SHARE_PATH}`, auth(KEY))).status, 401)
+      assert.equal((await fetch(`http://127.0.0.1:${port}${SHARE_PATH}`, auth(fresh))).status, 200)
+    })
+  )
+})
+
+test('the local API is not reachable through the share port', async () => {
+  await withEnv(shareEnv, () =>
+    withServer(async ({ call, put }) => {
+      await put({ sharing: { enabled: true, key: KEY, name: '' } })
+      const { port } = await (await call('/api/sharing')).json()
+      for (const p of ['/api/state', '/api/threads', '/api/sharing', '/api/neighbors']) {
+        assert.equal((await fetch(`http://127.0.0.1:${port}${p}`, auth(KEY))).status, 404, p)
+      }
+    })
+  )
+})
