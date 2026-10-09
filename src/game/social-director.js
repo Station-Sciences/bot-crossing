@@ -24,6 +24,11 @@ import { MOOD_MS, SCENE_MS, SocialPlanner, canSocialise, makeScene, near, partsA
 
 /** How often the planner is asked what has changed. Steps are applied every frame regardless. */
 export const PLAN_EVERY_MS = 250
+/**
+ * A gap between looks longer than this means frames stopped — a tab in the background — and the
+ * statuses last seen are from before it: compared with now, they would report runs long over.
+ */
+const STALE_MS = 30000
 /** How long after a run stops working its bot may still go off to play when it reaches idle. */
 export const FINISH_WINDOW_MS = 10 * 60 * 1000
 
@@ -61,8 +66,9 @@ export function plannerBot(agent, zone = null) {
  * finishing, and one read ten minutes on is old news.
  *
  * `before` is what the last look returned, per bot: its status, its last status other than
- * waiting, and when it stopped working. Returns the events and the same to compare against next
- * time; a bot seen for the first time is only remembered, since nothing about it has changed yet.
+ * waiting, and when it stopped working. Returns the events, stamped with `now`, and the same to
+ * compare against next time; a bot seen for the first time is only remembered, since nothing about
+ * it has changed yet.
  */
 export function statusEvents(before, agents, now = Date.now()) {
   const seen = new Map()
@@ -73,14 +79,14 @@ export function statusEvents(before, agents, now = Date.now()) {
     const leftAt = was?.status === 'working' && a.status !== 'working' ? now : (was?.leftAt ?? null)
     seen.set(a.id, { status: a.status, last, leftAt })
     const finished = was && was.status !== 'idle' && a.status === 'idle' && was.last === 'working'
-    if (finished && leftAt != null && now - leftAt <= FINISH_WINDOW_MS) events.push({ kind: 'finished', id: a.id })
+    if (finished && leftAt != null && now - leftAt <= FINISH_WINDOW_MS) events.push({ kind: 'finished', id: a.id, at: now })
   }
   return { events, seen }
 }
 
 /**
  * Threads that left: one `archived` event per zone that lost one, so a repo cleared out in one go
- * gets one heartbreak rather than a plot of bots in tears.
+ * gets one heartbreak rather than a plot of bots in tears. Each is stamped with `now`.
  *
  * Home (`before`/`after` are the colony's live threads, `scan` everything scanned): a thread counts
  * when it was archived, or vanished from the scan altogether. One that is still scanned but was
@@ -97,14 +103,14 @@ export function statusEvents(before, agents, now = Date.now()) {
  * Errands never count: a subagent ending is the ordinary end of an errand, not a loss. A friend's
  * are not in `shared` at all.
  */
-export function departureEvents({ before = new Map(), after = new Map(), scan = [], archivedIds = new Set(), friendsBefore = new Map(), friendsAfter = new Map() }) {
+export function departureEvents({ before = new Map(), after = new Map(), scan = [], archivedIds = new Set(), friendsBefore = new Map(), friendsAfter = new Map() }, now = Date.now()) {
   const events = []
   const zones = new Set()
   const add = (owner, zone) => {
     const key = `${owner}\u0000${zone}`
     if (zones.has(key)) return
     zones.add(key)
-    events.push({ kind: 'archived', zone, owner })
+    events.push({ kind: 'archived', zone, owner, at: now })
   }
   const archived = archivedIds instanceof Set ? archivedIds : new Set(archivedIds)
   const scanned = new Map(scan.map((t) => [t.id, t]))
@@ -124,15 +130,16 @@ export function departureEvents({ before = new Map(), after = new Map(), scan = 
 }
 
 /**
- * A battle's result as the planner hears it: home won or lost, and the friend it was against the
- * other way round. Only while the result is fresh — a battle that ended while this page was shut
- * is still counted on the next load, and a sulk about it an hour later would be about nothing.
+ * A battle's result as the planner hears it, stamped with `now`: home won or lost, and the friend
+ * it was against the other way round. Only while the result is fresh — a battle that ended while
+ * this page was shut is still counted on the next load, and a sulk about it an hour later would be
+ * about nothing.
  */
 export function warEvents({ won, enemyId, endedAt = null }, now = Date.now()) {
   if (!enemyId || (endedAt != null && now - endedAt > MOOD_MS)) return []
   return [
-    { kind: 'warResult', owner: 'home', won: Boolean(won) },
-    { kind: 'warResult', owner: enemyId, won: !won },
+    { kind: 'warResult', owner: 'home', won: Boolean(won), at: now },
+    { kind: 'warResult', owner: enemyId, won: !won, at: now },
   ]
 }
 
@@ -142,10 +149,14 @@ export function warEvents({ won, enemyId, endedAt = null }, now = Date.now()) {
  * can come out drawn round a dome with everyone hidden behind it. The scene is kept whole — every
  * spot, and for a ring (a group, a game) its middle and the circle its players stand or run round,
  * have to be clear (`clear(x, z)`) — and moved as little as possible, nearest first. A pair's
- * middle is only somewhere between them, and a heartbroken bot sits where it already stands, so
- * neither is moved for ground nobody uses.
+ * middle is only somewhere between them, so it is not moved for ground nobody uses.
+ *
+ * A heartbreak is never moved: the heartbroken bot sits down where it already stands, and moving
+ * the scene would walk it off somewhere first. Only its comforter's spot can be in the way, and
+ * `sceneStep` sends that one bot to clear ground instead.
  */
 export function sceneShift(scene, clear, { reach = 8, step = 0.5 } = {}) {
+  if (scene.kind === 'heartbreak') return { x: 0, z: 0 }
   const c = scene.centre
   const spots = Object.values(scene.spots || {})
   const ring = scene.kind === 'group' || scene.kind === 'play'
@@ -181,6 +192,16 @@ export function shiftStep(step, off, clear = () => true, nearest = () => null) {
   let goal = move(step.goal)
   if (goal && !clear(goal.x, goal.z)) goal = nearest(goal.x, goal.z) || goal
   return { ...step, goal, face: move(step.face) }
+}
+
+/**
+ * One cast member's step in a scene, as played: moved with the scene (`shiftStep`). The
+ * heartbroken bot is left where it sits, whatever the ground there reads as — it is already
+ * standing on it.
+ */
+export function sceneStep(scene, id, step, off, clear, nearest) {
+  const sitting = scene.kind === 'heartbreak' && id === scene.cast[0]
+  return shiftStep(step, off, sitting ? () => true : clear, nearest)
 }
 
 /** The ball's flight, in ms and world units. The kick connects a beat after the leg starts up. */
@@ -309,11 +330,12 @@ export class SocialDirector {
   /**
    * The colony's roster just changed: anything that left is an event. Called from `setThreads`
    * with the live threads before and after, the whole scan, the archive list and what each friend
-   * shares.
+   * shares. Scans land with the tab in the background too, so each event carries when it was
+   * noted, and the planner lets go of one that has waited too long by the time it looks.
    */
-  noteThreads(change) {
+  noteThreads(change, now = Date.now()) {
     if (!this.enabled) return
-    this.events.push(...departureEvents(change))
+    this.events.push(...departureEvents(change, now))
   }
 
   /** A battle has been counted: the losers sulk and the winners play, for a minute. */
@@ -336,6 +358,7 @@ export class SocialDirector {
     const astronauts = this.colony.astronauts
 
     if (now - this.planAt >= PLAN_EVERY_MS) {
+      if (now - this.planAt > STALE_MS) this.statuses = new Map()
       this.planAt = now
       // Statuses only change when a scan lands, seconds apart, so a look per planning step
       // misses no run that finishes.
@@ -356,7 +379,7 @@ export class SocialDirector {
     for (const scene of this.planner.active) {
       const off = this._shift(scene)
       const parts = partsAt(scene, now)
-      for (const id in parts) astronauts.setSceneOrders(id, shiftStep(parts[id], off, this._clear, this._nearest))
+      for (const id in parts) astronauts.setSceneOrders(id, sceneStep(scene, id, parts[id], off, this._clear, this._nearest))
     }
 
     // Getting up, then off home. A bot that will not take the step any more has been called away.

@@ -28,7 +28,8 @@ import { mulberry32 } from './war.js'
  *    at the goal they settle into standing.
  *  - `emote`: a bubble from EMOTES beside the head, or null for none.
  *  - `expression`: a face from EXPRESSIONS, or null to leave the bot's own face alone.
- * None of these is a status look: no badge, no red eyes, no `error` face. Anger is `grumpy` and 💢.
+ * None of these is a status look: no badge, no red eyes, no `error` face. Anger is `grumpy` and an
+ * angry-face bubble.
  */
 
 export const ACTIONS = Object.freeze(['walk', 'talk', 'wave', 'stomp', 'sit', 'stand', 'cheer', 'jump', 'run', 'kick'])
@@ -50,6 +51,12 @@ export const SCENE_MS = Object.freeze({
 export const REST_MS = Object.freeze([30000, 60000])
 /** Bots in different zones still count as neighbours this close (world units). */
 export const NEAR = 15
+/**
+ * How far from the bot a cast is built round its company may stand (world units). A zone can
+ * sprawl well past NEAR, and a group called together from across it spends its whole scene
+ * walking over.
+ */
+export const CAST_REACH = 8
 /**
  * How long an event may wait for a free slot. Long enough that a busy colony still gets its
  * heartbreaks and games when the next scene ends; short enough that the scene is still about
@@ -425,14 +432,17 @@ function shuffle(list, rand) {
 const byDistanceFrom = (anchor) => (a, b) => dist(a.pos, anchor.pos) - dist(b.pos, anchor.pos)
 
 /**
- * A cast for `kind` from `pool`: a random anchor and its nearest neighbours. Anchors are tried in
- * random order until one has enough company, so a lone bot in a corner does not block the rest.
+ * A cast for `kind` from `pool`: a random anchor and its nearest neighbours, none further than
+ * CAST_REACH from it. Anchors are tried in random order until one has enough company, so a lone
+ * bot in a corner does not block the rest.
  */
 function castFor(kind, pool, rand) {
   const [lo, hi] = SIZE[kind]
   const want = lo + Math.floor(rand() * (hi - lo + 1))
   for (const anchor of shuffle(pool, rand)) {
-    const others = pool.filter((b) => b !== anchor && near(anchor, b)).sort(byDistanceFrom(anchor))
+    const others = pool
+      .filter((b) => b !== anchor && near(anchor, b) && dist(anchor.pos, b.pos) <= CAST_REACH)
+      .sort(byDistanceFrom(anchor))
     if (others.length + 1 >= lo) return [anchor, ...others.slice(0, want - 1)]
   }
   return null
@@ -442,9 +452,10 @@ function castFor(kind, pool, rand) {
  * One planning step. Pure: it reads its inputs and returns what changed.
  *
  * In: `now` (ms); `bots` `[{ id, status, pos: {x,z}, zone, owner, atWar, restUntil }]`; `events`
- * since the last step (`archived {zone, owner}`, `finished {id}`, `warResult {owner, won}`);
- * `active` scenes, `pending` events and `moods` from the last step; `ambientAt`, the earliest the
- * next ambient scene may start; and the seeded `rand`.
+ * since the last step (`archived {zone, owner}`, `finished {id}`, `warResult {owner, won}`, each
+ * with `at`, when it was noted — now, if it has none); `active` scenes, `pending` events and
+ * `moods` from the last step; `ambientAt`, the earliest the next ambient scene may start; and the
+ * seeded `rand`.
  *
  * Out: `start` (new scenes), `end` (ids of scenes now over), `left` (`{scene, id}` for each bot whose
  * part ended this step in a scene that goes on), and the next state — `active`, `pending`, `moods`,
@@ -452,9 +463,10 @@ function castFor(kind, pool, rand) {
  *
  * Order matters: scenes end first (freeing their cast to rest), then events — which jump the queue
  * but still obey the limits — then the moods battles leave behind, then at most one ambient scene.
- * An event that cannot be cast yet (no slot, or nobody free) waits up to EVENT_WAIT_MS, oldest
- * first. Because waiting events are served before anything else, a slot that frees while one could
- * be cast always goes to it: ambient scenes only ever get slots no waiting event can use.
+ * An event that cannot be cast yet (no slot, or nobody free) waits up to EVENT_WAIT_MS from when
+ * it was noted, oldest first. Because waiting events are served before anything else, a slot that
+ * frees while one could be cast always goes to it: ambient scenes only ever get slots no waiting
+ * event can use.
  */
 export function planSocial({
   now, bots, events = [], active = [], pending = [], moods = [], ambientAt = 0, rand = Math.random,
@@ -502,13 +514,17 @@ export function planSocial({
     slots--
   }
 
+  // An event's clock runs from when it was noted (`at`), not from this step: with the tab in the
+  // background no step runs, and a heartbreak planned a minute late would be about nothing.
   let nextMoods = moods.filter((m) => m.until > now)
   const queue = pending.filter((e) => e.until > now)
   for (const e of events) {
+    const at = e?.at ?? now
     if (e?.kind === 'warResult') {
-      nextMoods = [...nextMoods.filter((m) => m.owner !== e.owner), { owner: e.owner, won: !!e.won, until: now + MOOD_MS }]
-    } else if (e?.kind === 'archived' || e?.kind === 'finished') {
-      queue.push({ ...e, until: now + EVENT_WAIT_MS })
+      if (at + MOOD_MS <= now) continue
+      nextMoods = [...nextMoods.filter((m) => m.owner !== e.owner), { owner: e.owner, won: !!e.won, until: at + MOOD_MS }]
+    } else if ((e?.kind === 'archived' || e?.kind === 'finished') && at + EVENT_WAIT_MS > now) {
+      queue.push({ ...e, until: at + EVENT_WAIT_MS })
     }
   }
   /** Casts an event's scene if it can, and says whether it did. */

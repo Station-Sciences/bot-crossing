@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  ACTIONS, EMOTES, EXPRESSIONS, AMBIENT, BOTS_PER_SCENE, EVENT_WAIT_MS, MAX_SCENES, MOOD_MS, NEAR, REST_MS, SCENE_MS,
+  ACTIONS, EMOTES, EXPRESSIONS, AMBIENT, BOTS_PER_SCENE, CAST_REACH, EVENT_WAIT_MS, MAX_SCENES, MOOD_MS, NEAR, REST_MS, SCENE_MS,
   SocialPlanner, canSocialise, makeScene, near, partsAt, pickAmbient, planSocial, sceneLimit, stillValid,
 } from '../src/game/social.js'
 import { mulberry32 } from '../src/game/war.js'
@@ -262,6 +262,21 @@ test('far-apart zones never mix, and friends\' bots socialise only within their 
   }
 })
 
+test("a scene's cast stands close together, even in a zone that sprawls", () => {
+  assert.ok(CAST_REACH >= 6 && CAST_REACH <= 10)
+  // One long zone, a bot every five units: the nearest four of any bot reach ten units out.
+  const bots = Array.from({ length: 18 }, (_, i) => bot(`s${String(i).padStart(3, '0')}`, { pos: { x: i * 5, z: 0 } }))
+  const byId = new Map(bots.map((b) => [b.id, b]))
+  const { started } = simulate({ bots, ms: 600000 })
+  assert.ok(started.length > 10)
+  assert.ok(started.some(({ scene }) => scene.cast.length > 2), 'groups still form')
+  for (const { scene } of started) {
+    const cast = scene.cast.map((id) => byId.get(id).pos)
+    // Somebody in it — the one the scene was built round — has everyone else within reach.
+    assert.ok(cast.some((a) => cast.every((b) => dist(a, b) <= CAST_REACH)), `${scene.kind} spread over ${JSON.stringify(cast)}`)
+  }
+})
+
 // --- ambient ---
 
 test('ambient scenes are picked by weight: chat 45, group 20, play 20, argue 10, heartbreak 5', () => {
@@ -384,6 +399,27 @@ test('an event left waiting too long is let go', () => {
   const late = planSocial({ ...quiet, now: 1000 + EVENT_WAIT_MS, active: [], pending: first.pending })
   assert.equal(late.start.length, 0)
   assert.deepEqual(late.pending, [])
+})
+
+test('an event is timed from when it was noted, not from when the planner next looks', () => {
+  const bots = crowd(12)
+  const running = [makeScene('chat', bots.slice(0, 2), 0, mulberry32(1)), makeScene('chat', bots.slice(2, 4), 0, mulberry32(2))]
+  const noted = { kind: 'archived', zone: 'repo', owner: 'home', at: 1000 }
+  const waiting = planSocial({ now: 6000, bots, active: running, rand: mulberry32(1), events: [noted] })
+  assert.deepEqual(waiting.pending.map((e) => e.until), [1000 + EVENT_WAIT_MS])
+  // Noted before a tab went to the background and only planned now: let go, slots free or not.
+  const quiet = { bots, rand: mulberry32(1), ambientAt: Infinity }
+  const stale = planSocial({ ...quiet, now: 1000 + EVENT_WAIT_MS, events: [noted, { kind: 'finished', id: bots[6].id, at: 1000 }] })
+  assert.equal(stale.start.length, 0)
+  assert.deepEqual(stale.pending, [])
+  // A battle's mood runs from when it was noted too, and is over if that was a minute ago.
+  const lost = { kind: 'warResult', owner: 'home', won: false, at: 1000 }
+  assert.deepEqual(planSocial({ ...quiet, now: 31000, events: [lost] }).moods.map((m) => m.until), [1000 + MOOD_MS])
+  const over = planSocial({ ...quiet, now: 1000 + MOOD_MS, events: [lost] })
+  assert.deepEqual(over.moods, [])
+  assert.equal(over.start.length, 0)
+  // An event with no stamp is taken as just noted.
+  assert.equal(planSocial({ now: 6000, bots, active: running, rand: mulberry32(1), events: [{ kind: 'archived', zone: 'repo', owner: 'home' }] }).pending[0].until, 6000 + EVENT_WAIT_MS)
 })
 
 test('event scenes still obey the limits', () => {

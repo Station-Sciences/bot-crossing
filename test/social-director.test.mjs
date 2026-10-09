@@ -5,11 +5,13 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import * as THREE from 'three'
 import {
-  BALL, FINISH_WINDOW_MS, ballAt, departureEvents, kickArc, plannerBot, sceneShift, shiftStep, statusEvents, warEvents, zoneOfThread,
+  BALL, FINISH_WINDOW_MS, SocialDirector, ballAt, departureEvents, kickArc, plannerBot, sceneShift, sceneStep, shiftStep, statusEvents,
+  warEvents, zoneOfThread,
 } from '../src/game/social-director.js'
 import { hydrateNeighbors } from '../src/game/neighbors.js'
-import { MOOD_MS, makeScene } from '../src/game/social.js'
+import { MOOD_MS, makeScene, partsAt } from '../src/game/social.js'
 import { mulberry32 } from '../src/game/war.js'
 
 const agent = (id, status = 'idle', extra = {}) => ({ id, status, state: 'at-site', pos: { x: 1, y: 0.2, z: 2 }, neighbor: null, war: null, ...extra })
@@ -54,7 +56,7 @@ test('a run that finishes (working to idle) is an event; nothing else is', () =>
   const first = statusEvents(new Map(), [agent('a', 'working'), agent('b', 'idle'), agent('c', 'working'), agent('d', 'sleeping')], t0)
   assert.deepEqual(first.events, [], 'a bot seen for the first time has not changed')
   const next = statusEvents(first.seen, [agent('a', 'idle'), agent('b', 'idle'), agent('c', 'blocked'), agent('d', 'idle'), agent('e', 'idle')], t0 + 1000)
-  assert.deepEqual(next.events, [{ kind: 'finished', id: 'a' }])
+  assert.deepEqual(next.events, [{ kind: 'finished', id: 'a', at: t0 + 1000 }], 'stamped with when it was seen')
   assert.equal(next.seen.get('c').status, 'blocked')
   // Stuck, then sorted out: the run did not finish, it broke.
   assert.deepEqual(statusEvents(next.seen, [agent('c', 'idle')], t0 + 2000).events, [])
@@ -72,7 +74,7 @@ test('a run that ends waiting on you still finished, once you have read it, if t
   const still = statusEvents(unread.seen, [agent('a', 'waiting'), agent('b', 'waiting')], t0 + 5 * 60 * 1000)
   assert.deepEqual(still.events, [])
   const read = statusEvents(still.seen, [agent('a', 'idle')], t0 + 1000 + FINISH_WINDOW_MS)
-  assert.deepEqual(read.events, [{ kind: 'finished', id: 'a' }], 'read within ten minutes')
+  assert.deepEqual(read.events, [{ kind: 'finished', id: 'a', at: t0 + 1000 + FINISH_WINDOW_MS }], 'read within ten minutes')
   const late = statusEvents(still.seen, [agent('b', 'idle')], t0 + 1000 + FINISH_WINDOW_MS + 1)
   assert.deepEqual(late.events, [], 'read after ten minutes: old news')
   // Waiting with no run before it is not a run finishing either.
@@ -85,11 +87,11 @@ test('a home thread that is archived, or vanishes from the scan, is a heartbreak
   const before = byId([thread('a', 'x'), thread('b', 'x'), thread('c', 'y'), thread('d', 'z')])
   const after = byId([thread('b', 'x')])
   const scan = [thread('a', 'x', { archived: true }), thread('b', 'x'), thread('d', 'z')]
-  const events = departureEvents({ before, after, scan, archivedIds: new Set(['d']) })
+  const events = departureEvents({ before, after, scan, archivedIds: new Set(['d']) }, 7)
   assert.deepEqual(events, [
-    { kind: 'archived', zone: 'x', owner: 'home' }, // archived flag
-    { kind: 'archived', zone: 'y', owner: 'home' }, // gone from the scan
-    { kind: 'archived', zone: 'z', owner: 'home' }, // on the archive list
+    { kind: 'archived', zone: 'x', owner: 'home', at: 7 }, // archived flag
+    { kind: 'archived', zone: 'y', owner: 'home', at: 7 }, // gone from the scan
+    { kind: 'archived', zone: 'z', owner: 'home', at: 7 }, // on the archive list
   ])
   // The archive list may come as an array too.
   assert.equal(departureEvents({ before, after, scan, archivedIds: ['d'] }).length, 3)
@@ -104,8 +106,8 @@ test('a hidden or dormant-folded thread has not gone anywhere, and an errand end
 
 test('one heartbreak per repo, however many of its threads go at once', () => {
   const before = byId([thread('a', 'x'), thread('b', 'x'), thread('c', 'x'), thread('d', 'y')])
-  const events = departureEvents({ before, after: byId([thread('d', 'y')]), scan: [] })
-  assert.deepEqual(events, [{ kind: 'archived', zone: 'x', owner: 'home' }])
+  const events = departureEvents({ before, after: byId([thread('d', 'y')]), scan: [] }, 7)
+  assert.deepEqual(events, [{ kind: 'archived', zone: 'x', owner: 'home', at: 7 }])
 })
 
 test('a friend\'s thread that drops out of what they share is theirs to mourn; a friend going entirely is not', () => {
@@ -113,7 +115,7 @@ test('a friend\'s thread that drops out of what they share is theirs to mourn; a
   const friendsBefore = new Map([shop('mark', 1, 2), shop('sue', 1)])
   // Mark loses one thread and keeps one; Sue's whole settlement goes (removed, or offline).
   const friendsAfter = new Map([shop('mark', 2)])
-  assert.deepEqual(departureEvents({ friendsBefore, friendsAfter }), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark' }])
+  assert.deepEqual(departureEvents({ friendsBefore, friendsAfter }, 5), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark', at: 5 }])
   // Home threads and friends' are kept apart even with the same repo name.
   const both = departureEvents({
     before: byId([thread('a', 'shop')]), after: new Map(), scan: [],
@@ -135,7 +137,7 @@ const markPoll = (threads, { status = 'online', now = 10_000_000 } = {}) => hydr
   now,
 )
 const friendsOf = (hydrated) => new Map(hydrated.map((n) => [n.id, n.shared]))
-const leaving = (a, b) => departureEvents({ friendsBefore: friendsOf(a), friendsAfter: friendsOf(b) })
+const leaving = (a, b) => departureEvents({ friendsBefore: friendsOf(a), friendsAfter: friendsOf(b) }, 0)
 
 test('a friend\'s errand ending is no loss, nor is their settlement going offline', () => {
   const errand = sharedThread(9, { isErrand: true, running: true })
@@ -164,19 +166,19 @@ test('a friend who rotates their key changes every id at once: a reset, not a st
   assert.deepEqual(leaving(before, rotated), [])
   // Losing more than half in one poll reads the same way; half or fewer is real.
   assert.deepEqual(leaving(before, markPoll([sharedThread(1)])), [])
-  assert.deepEqual(leaving(before, markPoll([sharedThread(1), sharedThread(2)])), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark' }])
+  assert.deepEqual(leaving(before, markPoll([sharedThread(1), sharedThread(2)])), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark', at: 0 }])
 })
 
 test('a friend\'s thread really leaving is one heartbreak', () => {
   const before = markPoll([1, 2, 3, 4].map((n) => sharedThread(n)))
-  assert.deepEqual(leaving(before, markPoll([1, 2, 4].map((n) => sharedThread(n)))), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark' }])
+  assert.deepEqual(leaving(before, markPoll([1, 2, 4].map((n) => sharedThread(n)))), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark', at: 0 }])
 })
 
 test('a battle\'s result: home and the friend it fought, opposite ways round, while it is fresh', () => {
   const now = 1_000_000
   assert.deepEqual(warEvents({ won: true, enemyId: 'mark', endedAt: now - 1000 }, now), [
-    { kind: 'warResult', owner: 'home', won: true },
-    { kind: 'warResult', owner: 'mark', won: false },
+    { kind: 'warResult', owner: 'home', won: true, at: now },
+    { kind: 'warResult', owner: 'mark', won: false, at: now },
   ])
   assert.deepEqual(warEvents({ won: false, enemyId: 'mark' }, now).map((e) => e.won), [false, true])
   assert.deepEqual(warEvents({ won: true, enemyId: 'mark', endedAt: now - MOOD_MS - 1 }, now), [], 'counted on a later load: no sulk')
@@ -306,13 +308,25 @@ test('a scene drawn round a building is moved, whole and as little as it can be,
   assert.equal(sceneShift(scene, () => false), null)
 })
 
-test('a heartbreak is not moved for ground between the two that nobody stands on', () => {
+test('a heartbreak is never moved: the sad one sits where it is, and only the comforter finds clear ground', () => {
   const members = [{ id: 'sad', owner: 'home', pos: { x: 0, z: 0 } }, { id: 'pal', owner: 'home', pos: { x: 6, z: 0 } }]
   const scene = makeScene('heartbreak', members, 0, mulberry32(1))
   // A wall across the middle, clear of both spots: it stays where it is, the sad one unmoved.
   assert.deepEqual(sceneShift(scene, (x) => Math.abs(x - 3) > 0.5), { x: 0, z: 0 })
-  // Its own spot in a wall, though, and it moves.
-  assert.notDeepEqual(sceneShift(scene, (x, z) => Math.hypot(x, z) > 0.3), { x: 0, z: 0 })
+  // The comforter's spot in a wall: still not moved, so the sad one is not dragged off its seat.
+  const wall = (x, z) => Math.hypot(x - scene.spots.pal.x, z - scene.spots.pal.z) > 0.3
+  assert.deepEqual(sceneShift(scene, wall), { x: 0, z: 0 })
+  // Its own spot read as blocked, even: a bot already standing there can sit there.
+  assert.deepEqual(sceneShift(scene, (x, z) => Math.hypot(x, z) > 0.3), { x: 0, z: 0 })
+  const off = { x: 0, z: 0 }
+  const parts = partsAt(scene, 2000)
+  const clearSpot = { x: 7, z: 7 }
+  assert.deepEqual(sceneStep(scene, 'pal', parts.pal, off, wall, () => clearSpot).goal, clearSpot, 'the comforter goes to clear ground')
+  const nowhere = () => false
+  assert.deepEqual(sceneStep(scene, 'sad', parts.sad, off, nowhere, () => clearSpot).goal, scene.spots.sad, 'the sad one stays put')
+  // Any other scene's steps are treated alike.
+  const chat = makeScene('chat', members, 0, mulberry32(1))
+  assert.deepEqual(sceneStep(chat, 'sad', partsAt(chat, 2000).sad, off, nowhere, () => clearSpot).goal, clearSpot)
 })
 
 test('a step is moved with its scene: goal and faced point, but not a faced bot', () => {
@@ -328,3 +342,64 @@ test('a step is moved with its scene: goal and faced point, but not a faced bot'
   assert.equal(shiftStep(undefined, off), undefined)
 })
 
+/**
+ * Enough of a browser for the director's bubbles to build their atlas: nothing is drawn under node,
+ * so every canvas call does nothing.
+ */
+function withFakeCanvas(fn) {
+  const ctx = new Proxy({}, { get: (target, key) => (key in target ? target[key] : () => {}) })
+  const saved = { document: globalThis.document, Path2D: globalThis.Path2D }
+  globalThis.document = { createElement: () => ({ getContext: () => ctx }) }
+  globalThis.Path2D = class {}
+  try {
+    return fn()
+  } finally {
+    Object.assign(globalThis, saved)
+  }
+}
+
+function fakeColony(agents) {
+  return {
+    scene: new THREE.Scene(),
+    settings: { get: () => true },
+    buildings: new Map(agents.map((a) => [a.id, { plot: 'repo' }])),
+    nav: null,
+    groundAt: () => 0,
+    astronauts: {
+      agents,
+      byId: new Map(agents.map((a) => [a.id, a])),
+      setSceneOrders: () => true,
+      clearSceneOrders() {},
+    },
+  }
+}
+
+test('back from a long gap, the director looks afresh: a run that ended while nobody watched is not news', () => {
+  const a = agent('a', 'working')
+  const director = withFakeCanvas(() => new SocialDirector(fakeColony([a])))
+  const t0 = 1_000_000
+  director.update(t0)
+  a.status = 'idle'
+  // A tab left in the background: no frames for forty seconds.
+  director.update(t0 + 40_000)
+  assert.deepEqual(director.planner.pending, [])
+  // While it is watched, the same step is an event (one bot is too few for a scene, so it waits).
+  a.status = 'working'
+  director.update(t0 + 40_250)
+  a.status = 'idle'
+  director.update(t0 + 40_500)
+  assert.deepEqual(director.planner.pending.map((e) => [e.kind, e.id]), [['finished', 'a']])
+  director.dispose()
+})
+
+test('an event is stamped when it is noted, so one that sat behind a hidden tab is let go', () => {
+  const director = withFakeCanvas(() => new SocialDirector(fakeColony([agent('a')])))
+  const t0 = 1_000_000
+  director.noteThreads({ before: byId([thread('x', 'repo')]), after: new Map(), scan: [] }, t0)
+  director.noteWarResult({ won: true, enemyId: 'mark' }, t0)
+  assert.deepEqual(director.events.map((e) => e.at), [t0, t0, t0])
+  director.update(t0 + MOOD_MS)
+  assert.deepEqual(director.planner.pending, [])
+  assert.deepEqual(director.planner.moods, [])
+  director.dispose()
+})
