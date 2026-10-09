@@ -1,4 +1,5 @@
 import { reflectionUniforms, withLocalReflections } from '../world/reflections.js'
+import { rosterRank } from './roster-rank.js'
 import * as THREE from 'three'
 import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js'
 import { buildFaceAtlas, FACE, FACE_LOOPS, FRAME_COLS, FRAME_ROWS } from './faces.js'
@@ -49,9 +50,6 @@ const AGENT_LOOK = {
 
 const WALK_SPEED = 2.1
 
-/** Who survives a display cap: the ones that want you, then the ones doing something. */
-const ROSTER_RANK = { blocked: 0, waiting: 1, working: 2, celebrating: 3, idle: 4, sleeping: 5 }
-const rosterRank = (entry) => ROSTER_RANK[entry.status] ?? 6
 const TURN_RATE = 7.5
 /**
  * How many astronauts may walk out of the ship in one reconcile. The rest of a big arrival —
@@ -553,8 +551,8 @@ export class Astronauts {
   }
 
   _spawnAgent(entry, walksOut = true) {
-    const door = this.world?.shipDoor?.() || new THREE.Vector3(0, 0, 0)
-    const airlock = this.world?.shipAirlock?.() || door
+    const door = this._door(entry) || new THREE.Vector3(0, 0, 0)
+    const airlock = this._airlock(entry) || door
     const jitter = () => (Math.random() - 0.5) * 1.4
     // Out of the airlock and down the ramp, or straight onto its plot, a pace off the exact
     // spot so a zone's crew does not appear in a stack. The nav grid sorts out anything
@@ -574,6 +572,9 @@ export class Astronauts {
     const agent = {
       id: entry.id,
       thread: entry.thread,
+      // A neighbour's bot: never grabbed, never counted, and it comes and goes by its own ship.
+      neighbor: entry.neighbor || null,
+      doors: entry.doors || null,
       status: entry.status,
       site: entry.site ? entry.site.clone() : new THREE.Vector3(),
       // The thing being worked on, and where round it this astronaut is standing to do it.
@@ -664,6 +665,8 @@ export class Astronauts {
 
   _updateAgent(agent, entry) {
     agent.thread = entry.thread
+    // A neighbour's ship is rebuilt if their settlement moves; the closures follow it.
+    if (entry.doors) agent.doors = entry.doors
     if (entry.site) {
       // Measured against the site the roster last handed over, not the one being stood at:
       // an astronaut that gave up on an unreachable site and adopted the ground it reached
@@ -710,13 +713,22 @@ export class Astronauts {
     agent.pathVersion = -1
   }
 
-  /** Close enough to the ramp that standing still there is in somebody's way. */
-  _nearDoor(pos) {
-    const door = this.world?.shipDoor?.()
+  /** Close enough to its own ramp that standing still there is in somebody's way. */
+  _nearDoor(agent) {
+    const door = this._door(agent)
     if (!door) return false
-    const dx = pos.x - door.x
-    const dz = pos.z - door.z
+    const dx = agent.pos.x - door.x
+    const dz = agent.pos.z - door.z
     return dx * dx + dz * dz < DOORWAY_CLEAR * DOORWAY_CLEAR
+  }
+
+  /** The ramp this one belongs to: its own ship's for a neighbour, the colony's otherwise. */
+  _door(owner) {
+    return owner?.doors?.shipDoor?.() || this.world?.shipDoor?.()
+  }
+
+  _airlock(owner) {
+    return owner?.doors?.shipAirlock?.() || this.world?.shipAirlock?.()
   }
 
   /** Off the map this frame, with no walk: the update loop reaps anything marked gone. */
@@ -739,7 +751,7 @@ export class Astronauts {
     agent.loop = null
     agent.faceFrame = FACE.wink
     agent.pathVersion = -1
-    const door = this.world?.shipDoor?.()
+    const door = this._door(agent)
     if (door) agent.site.copy(door)
   }
 
@@ -806,8 +818,8 @@ export class Astronauts {
     agent.clipTime = 0
     agent.pathVersion = -1
     // Out of the airlock as it stands now — the ship may have moved since the roster.
-    const airlock = this.world?.shipAirlock?.()
-    const door = this.world?.shipDoor?.()
+    const airlock = this._airlock(agent)
+    const door = this._door(agent)
     if (airlock && door) {
       agent.rampFrom.copy(airlock)
       agent.rampTo.set(door.x + (Math.random() - 0.5) * 0.7, door.y, door.z + (Math.random() - 0.5) * 0.7)
@@ -916,7 +928,7 @@ export class Astronauts {
           // of the doorway would claim the doorway, and the queue behind it inherits a
           // permanent wall. Out there it keeps its real site and tries again, which the crowd
           // thinning out is usually enough to fix.
-          const inDoorway = this._nearDoor(agent.pos)
+          const inDoorway = this._nearDoor(agent)
           if (stuck && dist >= ARRIVE_RADIUS && !inDoorway) agent.site.copy(agent.pos)
           if (stuck && inDoorway) {
             agent.stateAge = 0
