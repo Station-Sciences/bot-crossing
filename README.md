@@ -106,6 +106,11 @@ loose is slid back into contact, each stranded group moving as one body so an ar
 by hand is not reshuffled around you. Two things are still refused: a drop that lands nowhere near
 the colony, and one that would leave the zone holding a corner of the map on its own.
 
+**So can a bot.** Press and hold one — a session's bot or an errand's — and it dangles from the
+cursor; let go anywhere and it walks back to its own site. Put it far away and it runs: the longer
+the way home, the faster it goes. A bot has no say in where it lives, so dropping one never
+rearranges anything.
+
 The version before this was a pure function of the thread counts: one session appearing
 anywhere changed the sort order, the order decided the tiles, and the whole colony re-laid
 itself out. A zone you were watching could jump to the far side of the map because a
@@ -275,6 +280,7 @@ Navigation is Google Earth's, including both of the things that make Earth feel 
 | | |
 | --- | --- |
 | **Drag** | Grabs the ground. The point under your cursor stays pinned there for the whole drag |
+| **Press and hold** a bot or a zone | Picks it up; a bot walks (or runs) home when you let go, a zone stays where you drop it |
 | **Right-drag** (or ⌃ / ⇧ / middle-drag) | Tilt and rotate. Up tilts toward the horizon |
 | **Scroll** | Zooms **at the cursor**, not at the screen centre |
 | **Two fingers** | Pinch to zoom, drag to pan — both anchored between your fingers |

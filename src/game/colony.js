@@ -686,6 +686,7 @@ export class Colony {
       shipDoor: () => this.ship.shipDoor(),
       shipAirlock: () => this.ship.shipAirlock(),
       groundAt: (x, z) => this.groundAt(x, z),
+      onIsland: (x, z) => this.onIsland(x, z),
     }
   }
 

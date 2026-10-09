@@ -25,6 +25,7 @@ import {
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 import { withErrands } from './game/errands.js'
+import { canGrab } from './agents/carry.js'
 
 /**
  * Boot and the outer game loop.
@@ -480,6 +481,11 @@ engine.canvas.addEventListener('pointermove', (e) => {
     engine.canvas.style.cursor = rig._mode === 'orbit' ? 'move' : 'grabbing'
     return
   }
+  // A zone or a bot in hand: the hand stays shut, and nothing under it is worth hovering.
+  if (drag.lifted) {
+    engine.canvas.style.cursor = 'grabbing'
+    return
+  }
   const p = ndc(e)
   const agent = colony.pick(p.x, p.y, p.aspect)
   hoverId = agent?.id ?? null
@@ -530,10 +536,12 @@ const GHOST_INVALID_RIM = 0xffcfcf
 const drag = {
   timer: 0, // pending long-press
   candidate: null, // repo name under the pressed pointer
+  candidateAgent: null, // the bot under the pressed pointer, if that is what was pressed
   startX: 0,
   startY: 0,
   lifted: false,
   name: null,
+  agent: null, // the bot in hand, when it is a bot rather than a zone that was lifted
   cells: null, // the zone's footprint at lift, root first
   grab: null, // which lattice cell the press landed on — the drag is relative to it
   dq: 0,
@@ -652,6 +660,47 @@ function cancelHold() {
   clearTimeout(drag.timer)
   drag.timer = 0
   drag.candidate = null
+  drag.candidateAgent = null
+}
+
+/** The hold has run out: whatever the press landed on — a bot or a zone — picks up. */
+function liftPressed() {
+  if (drag.candidateAgent) liftAgent()
+  else liftPlot()
+}
+
+/**
+ * A bot in hand. Same hold, same swallowed click, same escape hatches as a zone; the
+ * difference is what putting it down means. A zone's drop is a layout change, but a bot
+ * has no say in where it lives, so letting go simply sends it home — see `carry.js`.
+ */
+function liftAgent() {
+  drag.timer = 0
+  const agent = drag.candidateAgent
+  drag.candidate = null
+  drag.candidateAgent = null
+  if (!colony.astronauts.grab(agent)) return // it set off for the ship, or went in, during the hold
+  drag.lifted = true
+  drag.agent = agent
+  rig.suppressed = true
+  engine.canvas.style.cursor = 'grabbing'
+}
+
+/** Follow the pointer along the ground; a bot that has left the roster mid-carry ends the drag. */
+function carryAgent(e) {
+  if (drag.agent.state !== 'held') return endAgentDrag()
+  if (!rig.groundPoint(e.clientX, e.clientY, dragGround)) return
+  colony.astronauts.carry(drag.agent, dragGround.x, dragGround.z)
+}
+
+function endAgentDrag() {
+  colony.astronauts.release(drag.agent)
+  const pending = drag.pendingThreads
+  drag.lifted = false
+  drag.agent = null
+  drag.pendingThreads = null
+  if (pending) applyThreads(pending)
+  engine.canvas.style.cursor = 'grab'
 }
 
 function liftPlot() {
@@ -687,6 +736,7 @@ function liftPlot() {
  * layout diff writes the move to the colony file.
  */
 function settleDrag(apply) {
+  if (drag.agent) return endAgentDrag()
   colony.setPlotLift(drag.name, 0)
   disposeGhost()
   if (apply && drag.plan) colony.applyLayout(drag.plan)
@@ -712,13 +762,19 @@ engine.canvas.addEventListener('pointerdown', (e) => {
   // The camera reads these modifiers as "tilt and rotate" — that press is never a lift.
   if (e.button !== 0 || e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return
   const p = ndc(e)
-  if (colony.pick(p.x, p.y, p.aspect)) return // a press on an astronaut is a selection
-  const plot = plotUnder(e, p)
-  if (!plot) return
-  drag.candidate = plot.name
+  const agent = colony.pick(p.x, p.y, p.aspect)
+  if (agent) {
+    // Held, it picks up; let go early and it was a selection all along.
+    if (!canGrab(agent)) return
+    drag.candidateAgent = agent
+  } else {
+    const plot = plotUnder(e, p)
+    if (!plot) return
+    drag.candidate = plot.name
+  }
   drag.startX = e.clientX
   drag.startY = e.clientY
-  drag.timer = setTimeout(liftPlot, HOLD_MS)
+  drag.timer = setTimeout(liftPressed, HOLD_MS)
 })
 
 // On window, like the camera's own listeners: a carry does not end at the canvas edge.
@@ -726,6 +782,7 @@ window.addEventListener('pointermove', (e) => {
   // The same 6px the camera's `wasClick` uses: past it this press was a pan all along.
   if (drag.timer && Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 6) cancelHold()
   if (!drag.lifted) return
+  if (drag.agent) return carryAgent(e)
   if (!rig.groundPoint(e.clientX, e.clientY, dragGround)) return
   const cell = worldToHex(dragGround.x, dragGround.z)
   const dq = cell.q - drag.grab.q
