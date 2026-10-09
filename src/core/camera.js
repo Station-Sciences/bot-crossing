@@ -66,6 +66,8 @@ export class CameraRig {
     this.enabled = true
     /** Google Earth's auto-rotate: a slow continuous sweep around whatever is centred. */
     this.orbiting = false
+    /** How far from the middle the target may go: the home colony, or the furthest neighbour. */
+    this.worldLimit = WORLD_LIMIT
     /** 0..1 share of ORBIT_RATE currently being applied — see `update`. */
     this.orbitBlend = 0
     /** Set by the picker when a drag started on something clickable, so it does not pan. */
@@ -260,10 +262,15 @@ export class CameraRig {
   _clampTarget() {
     const t = this.desiredTarget
     const len = Math.hypot(t.x, t.z)
-    if (len > WORLD_LIMIT) {
-      t.x = (t.x / len) * WORLD_LIMIT
-      t.z = (t.z / len) * WORLD_LIMIT
+    if (len > this.worldLimit) {
+      t.x = (t.x / len) * this.worldLimit
+      t.z = (t.z / len) * this.worldLimit
     }
+  }
+
+  /** Widen the leash to cover every settlement on the map. Never narrower than home. */
+  setWorldLimit(r) {
+    this.worldLimit = Math.max(WORLD_LIMIT, Number(r) || 0)
   }
 
   /** True when the pointer went down and up without really moving — a click, not a drag. */
