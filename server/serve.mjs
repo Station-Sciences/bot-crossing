@@ -2,7 +2,7 @@ import http from 'node:http'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { apiMiddleware } from './api.mjs'
+import { apiMiddleware, syncSharing } from './api.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.join(here, '..', 'dist')
@@ -60,4 +60,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Bot Crossing → http://${HOST}:${PORT}`)
+  // A colony that was sharing when it last ran shares again, without waiting for the page.
+  syncSharing().catch((err) => console.warn('bot-crossing: could not open the share port —', err?.message || err))
 })

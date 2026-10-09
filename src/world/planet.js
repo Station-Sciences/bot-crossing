@@ -538,7 +538,7 @@ export const COLONY_RADIUS = 46
 const DETAIL_SEGMENTS = { low: 72, medium: 128, high: 190 }
 
 /** Where the sea is, on a coast: the far side of the default view, so you look out to it. */
-const COAST_DIR = { x: -Math.SQRT1_2, z: -Math.SQRT1_2 }
+export const COAST_DIR = { x: -Math.SQRT1_2, z: -Math.SQRT1_2 }
 /** How far out the land ends on a coast. Past the colony, before the far hills. */
 const COAST_OFFSET = 58
 /** The island's outer islets start past here; the island itself is the colony's footprint. */
@@ -557,14 +557,55 @@ export const SKY_MARGIN = 3.2
 export const SKY_MAX_CELLS = 96
 
 /**
+ * Neighbours' settlements, as flat discs `{ x, z, r }` in world units. Home is always flat inside
+ * `COLONY_RADIUS` of the origin; each of these is flat inside `r` of its own centre, with the same
+ * ramp out to the hills. Empty unless a friend is on the map, and then everything below behaves
+ * exactly as it did before.
+ */
+let _sites = []
+
+export function setSettlementSites(sites) {
+  _sites = (sites || []).map(({ x, z, r }) => ({ x, z, r }))
+  _shores.clear()
+}
+
+/** The ground plane's width: the default, or wide enough to hold the furthest neighbour. */
+export function groundSize() {
+  let reach = 0
+  for (const s of _sites) reach = Math.max(reach, Math.hypot(s.x, s.z) + s.r + 60)
+  return Math.max(GROUND_SIZE, Math.ceil((reach * 2) / 20) * 20)
+}
+
+/** 0 on any colony's flat ground, 1 well out in the hills. */
+function farField(x, z) {
+  let out = THREE.MathUtils.smoothstep(Math.hypot(x, z), COLONY_RADIUS - 6, COLONY_RADIUS + 40)
+  for (const s of _sites) out = Math.min(out, THREE.MathUtils.smoothstep(Math.hypot(x - s.x, z - s.z), s.r - 6, s.r + 40))
+  return out
+}
+
+/** Distance to the nearest colony's middle, for the far-field darkening. */
+function colonyDistance(x, z) {
+  let d = Math.hypot(x, z)
+  for (const s of _sites) d = Math.min(d, Math.hypot(x - s.x, z - s.z))
+  return d
+}
+
+/** A crater that would land on a neighbour's ground is simply not there. */
+function craterOnSite(crater) {
+  return _sites.some((s) => Math.hypot(crater.x - s.x, crater.z - s.z) < s.r + crater.r * 1.5 + 6)
+}
+
+/**
  * Terrain is one plane, displaced and vertex-coloured on the CPU at build time. Doing it
  * once and baking it into the buffer means the GPU only ever sees static geometry — no
  * displacement map sample, no per-frame work — and vertex colours give the surface its
  * mottling for free rather than costing a texture fetch.
  */
 export function createTerrain(planet, detail, seed = 1337) {
-  const segments = DETAIL_SEGMENTS[detail] || DETAIL_SEGMENTS.medium
-  const geo = new THREE.PlaneGeometry(GROUND_SIZE, GROUND_SIZE, segments, segments)
+  // A wider plane for a neighbour far out keeps the same vertex spacing, up to twice the count.
+  const size = groundSize()
+  const segments = Math.round((DETAIL_SEGMENTS[detail] || DETAIL_SEGMENTS.medium) * Math.min(2, size / GROUND_SIZE))
+  const geo = new THREE.PlaneGeometry(size, size, segments, segments)
   geo.rotateX(-Math.PI / 2)
 
   const field = fieldFor(planet, seed)
@@ -608,7 +649,7 @@ export function createTerrain(planet, detail, seed = 1337) {
     // Darken the far field so the eye settles on the colony and the hills read as a
     // silhouette rather than as more ground competing with the plots for attention.
     // Gentler than it was: a bright little world should stay bright to its edges.
-    c.multiplyScalar(1 - THREE.MathUtils.smoothstep(dist, COLONY_RADIUS * 0.8, GROUND_SIZE * 0.36) * 0.55)
+    c.multiplyScalar(1 - THREE.MathUtils.smoothstep(colonyDistance(x, z), COLONY_RADIUS * 0.8, GROUND_SIZE * 0.36) * 0.55)
     colors[i * 3] = c.r
     colors[i * 3 + 1] = c.g
     colors[i * 3 + 2] = c.b
@@ -701,7 +742,7 @@ export function createTerrain(planet, detail, seed = 1337) {
 function sampleHeight(x, z, field, planet) {
   const { noise, craters, islets } = field
   const dist = Math.hypot(x, z)
-  const outside = THREE.MathUtils.smoothstep(dist, COLONY_RADIUS - 6, COLONY_RADIUS + 40)
+  const outside = farField(x, z)
   const gentle = fbm(noise, x * 0.035, z * 0.035, 3) * 0.5
   let broad = fbm(noise, x * 0.012, z * 0.012, 4)
   // On a world whose water is meant to sit in its hollows — lakes, ponds, lava pools —
@@ -758,6 +799,7 @@ function sampleHeight(x, z, field, planet) {
   }
 
   for (const crater of craters) {
+    if (_sites.length && craterOnSite(crater)) continue
     const d = Math.hypot(x - crater.x, z - crater.z)
     if (d > crater.r * 1.5) continue
     // A bowl with a raised rim — the rim is what makes it read as an impact.
@@ -1136,7 +1178,7 @@ export function shorelinePoints(planet, spacing = 10) {
   if (pts) return pts
   pts = []
   const level = planet.water.level
-  const half = GROUND_SIZE / 2 - spacing
+  const half = groundSize() / 2 - spacing
   for (let x = -half; x <= half; x += spacing) {
     for (let z = -half; z <= half; z += spacing) {
       if (terrainHeight(x, z, planet) >= level) continue

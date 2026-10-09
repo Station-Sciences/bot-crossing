@@ -28,11 +28,14 @@ const SURFACE = new Map([
 const DEFAULT_SURFACE = [0.55, 0.15]
 
 export class Ship {
-  constructor(scene, position) {
+  constructor(scene, position, facing = null) {
     this.group = new THREE.Group()
     this.group.position.copy(position)
-    // Turned so the ramp points back toward the middle of the colony.
-    this.group.rotation.y = Math.atan2(-position.x, -position.z)
+    // Turned so the ramp points back toward the middle of *its* colony: the world origin for
+    // home, the middle of their own zones for a neighbour.
+    const fx = facing ? facing.x - position.x : -position.x
+    const fz = facing ? facing.z - position.z : -position.z
+    this.group.rotation.y = Math.atan2(fx, fz)
     this.group.name = 'ship'
     scene.add(this.group)
     this.scene = scene

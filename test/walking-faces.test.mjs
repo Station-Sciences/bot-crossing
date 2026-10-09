@@ -78,3 +78,13 @@ test('walking sequence includes every mouth position and smile, all within the a
   assert.equal(new Set(Object.values(FACE)).size, Object.keys(FACE).length)
   for (const frame of Object.values(FACE)) assert.ok(frame >= 0 && frame < FRAME_COLS * FRAME_ROWS)
 })
+
+test('a bot in the air looks distressed, whatever its thread is doing', () => {
+  for (const state of ['held', 'falling']) {
+    const a = walker({ state, status: 'working', loop: FACE_LOOPS.working, blinkAt: 100 })
+    const seen = new Set()
+    for (let i = 0; i < 120; i++) { face(a, 1 / 60); seen.add(a.faceFrame) }
+    assert.ok(seen.size > 1, 'it changes expression, it does not sit on one')
+    for (const f of seen) assert.ok([FACE.alert, FACE.sad, FACE.error].includes(f), `${state}: ${f}`)
+  }
+})

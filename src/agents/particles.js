@@ -310,6 +310,77 @@ export class Particles {
     }
   }
 
+  /**
+   * A shot: a flash at the muzzle and a short bright streak flying to where it was aimed. The
+   * streak is a few points spaced along the line, all moving at the same speed and each timed to
+   * die as it arrives, so it reads as one travelling dash and never flies on past the target.
+   * `size` scales the flash and the streak — a tank's shell is a fat one.
+   */
+  tracer(x0, y0, z0, x1, y1, z1, color, size = 1, speed = 60) {
+    if (!this.enabled) return
+    const dx = x1 - x0
+    const dy = y1 - y0
+    const dz = z1 - z0
+    const d = Math.hypot(dx, dy, dz)
+    if (d < 0.05) return
+    const ux = dx / d
+    const uy = dy / d
+    const uz = dz / d
+    const full = this.settings.get('particles') === 'full'
+    // Thrown well below anything, so nothing in flight bounces off the ground it is passing over.
+    const never = -1e4
+    for (let i = 0; i < (full ? 3 : 2); i++) {
+      this.glow.spawn(
+        x0 + (Math.random() - 0.5) * 0.08 * size,
+        y0 + (Math.random() - 0.5) * 0.08 * size,
+        z0 + (Math.random() - 0.5) * 0.08 * size,
+        ux * 0.6, uy * 0.6, uz * 0.6,
+        color.r * 1.4, color.g * 1.4, color.b * 1.4,
+        (0.3 + Math.random() * 0.15) * size,
+        0.06 + Math.random() * 0.05,
+        4, 0, never
+      )
+    }
+    // Points are sized in world units, and a bullet-sized one is a pixel across from any distance
+    // you would watch a battle from; these are drawn as big as a streak needs to be seen.
+    const dots = full ? 4 : 3
+    for (let k = 0; k < dots; k++) {
+      const ahead = Math.min(d * 0.5, k * 0.22 * size)
+      this.glow.spawn(
+        x0 + ux * ahead, y0 + uy * ahead, z0 + uz * ahead,
+        ux * speed, uy * speed, uz * speed,
+        color.r, color.g, color.b,
+        (0.17 - k * 0.025) * size,
+        Math.max(0.02, (d - ahead) / speed),
+        0, 0, never
+      )
+    }
+  }
+
+  /** A burst of dust: a bot hitting the floor, a shell landing. `size` scales the cloud. */
+  puff(x, y, z, tint, size = 1, ground = 0) {
+    if (!this.enabled) return
+    const n = Math.round((this.settings.get('particles') === 'full' ? 9 : 4) * Math.min(2, size))
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2
+      const s = (0.5 + Math.random() * 0.8) * size
+      this.dust.spawn(
+        x + Math.cos(a) * 0.2 * size,
+        y + 0.06,
+        z + Math.sin(a) * 0.2 * size,
+        Math.cos(a) * s,
+        0.3 + Math.random() * 0.45 * size,
+        Math.sin(a) * s,
+        tint.r, tint.g, tint.b,
+        (0.18 + Math.random() * 0.16) * size,
+        0.7 + Math.random() * 0.6,
+        2.2,
+        0.15,
+        ground
+      )
+    }
+  }
+
   /** Thruster wash when the ship is used. */
   thruster(x, y, z) {
     if (!this.enabled) return

@@ -88,3 +88,14 @@ test('roof slope deflects a parcel sideways and a wall reflects horizontal trave
   assert.ok(wall.x < 0 && wall.vx < 0)
   assert.ok(wall.y < 1)
 })
+
+test('the walkable square can grow to reach a neighbour', () => {
+  const nav = new Navigation()
+  assert.equal(nav.isBlocked(100, 0), true, 'outside the default grid')
+  nav.resize(120)
+  nav.rebuild([])
+  assert.equal(nav.isBlocked(100, 0), false)
+  nav.rebuild([{ x: 100, z: 0, r: 2, keep: 3 }])
+  assert.equal(nav.isBlocked(100, 0), true)
+  assert.ok(nav.findPath(90, 0, 110, 0), 'routes around it out there')
+})

@@ -8,7 +8,9 @@ its head; click it and the thread opens back in whichever harness it came from.
 
 It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
 account, and **it never writes to a harness at all** — `data/colony.json`, where the map lives,
-is the only file it writes anywhere.
+is the only file it writes anywhere. The one thing that ever leaves the machine is opt-in:
+[sharing with neighbors](#neighbors) on the same Wi-Fi, which sends repo names and what the bots
+are doing, never a title, a prompt or a path.
 
 > **Status:** published as-is. I built this for myself and cannot promise to maintain it —
 > issues and PRs are welcome but may go unanswered, and forking is an entirely reasonable
@@ -106,6 +108,11 @@ loose is slid back into contact, each stranded group moving as one body so an ar
 by hand is not reshuffled around you. Two things are still refused: a drop that lands nowhere near
 the colony, and one that would leave the zone holding a corner of the map on its own.
 
+**So can a bot.** Press and hold one — a session's bot or an errand's — and it dangles from the
+cursor; let go anywhere and it walks back to its own site. Put it far away and it runs: the longer
+the way home, the faster it goes. A bot has no say in where it lives, so dropping one never
+rearranges anything.
+
 The version before this was a pure function of the thread counts: one session appearing
 anywhere changed the sort order, the order decided the tiles, and the whole colony re-laid
 itself out. A zone you were watching could jump to the far side of the map because a
@@ -144,6 +151,31 @@ sitting quiet, a symbol over every bot buries the one `?` that actually matters.
 Zone names follow the same rule: a plot shows its name only while somebody there is working,
 waiting or stuck. Everything else is nameless until you point at it. The plate itself is just
 text over a soft halo with a small accent dot — no panel, no outline.
+
+### Social life
+
+Idle bots have a social life. Two wander over to each other and chat, or three to five gather in a
+ring and take turns talking. Two argue, stomp, and walk off in opposite directions. One sits down
+heartbroken and the nearest idle bot comes over to comfort it until it stands up cheered. A few kick a
+ball about or play chase. Small bubbles beside their heads say what is going on: a chat bubble, an
+angry face, a broken heart, a tear, a heart, a ball and a music note.
+
+Some of it just happens, so the colony never stands still. The rest is set off by your threads:
+
+- **Archiving a thread** can leave one of its repo-mates heartbroken. The same can happen when a
+  thread disappears from what a friend shares — not when one of their errands ends, and not when a
+  new share key changes all their threads at once.
+- **A run that finishes** may send that bot off to play with a repo-mate: working → idle, or
+  working → waiting on you → idle, as long as you read it within ten minutes.
+- **After a war battle**, for a minute, the losing side's bots sulk and argue and the winners play.
+
+Only idle bots take part. A bot that is working, waiting on you, stuck, celebrating or asleep is
+never pulled in, and if a bot's thread wakes up mid-scene, it leaves straight away and goes back
+to work. Fighting in a battle always comes first. None of it looks like a status: there is no
+badge, no red eyes and no error face, and anger has its own grumpy face.
+
+Nothing about it is saved or shared. Your friends' bots join in on your screen only, and their
+screen runs its own. Turn it off under Settings → View → *Bot social life*.
 
 ## Getting about
 
@@ -275,6 +307,7 @@ Navigation is Google Earth's, including both of the things that make Earth feel 
 | | |
 | --- | --- |
 | **Drag** | Grabs the ground. The point under your cursor stays pinned there for the whole drag |
+| **Press and hold** a bot or a zone | Picks it up; a bot walks (or runs) home when you let go, a zone stays where you drop it |
 | **Right-drag** (or ⌃ / ⇧ / middle-drag) | Tilt and rotate. Up tilts toward the horizon |
 | **Scroll** | Zooms **at the cursor**, not at the screen centre |
 | **Two fingers** | Pinch to zoom, drag to pan — both anchored between your fingers |
@@ -308,6 +341,60 @@ under **View → Return to isometric**.
 | `0` | Reset the view |
 | `Esc` | Deselect, and close the zone sidebar |
 | `?` | Help |
+
+## Neighbors
+
+Friends on the same Wi-Fi can see each other's colonies as neighbouring settlements.
+
+- **Share yours:** Settings → Neighbors → *Share my colony*. You get a link like
+  `http://192.168.1.42:5275/#k=…` — give it to whoever you like. *New link* makes a fresh one and
+  the old one stops working at once.
+- **Add a friend's:** paste their link into *Paste a friend's link* and press *Add*. Up to six;
+  each gets their own side of your colony and keeps it. On Shoreline the sea takes half the
+  horizon, so only the three landward sides are used and two friends can share one, the later
+  further out. If a friend makes a new link, paste it the same way and theirs is updated.
+
+A friend sees the name on your ship's sign (your OS username until you type another under
+*Your name*), your repo names (just the last folder name), how big each building is, and what
+each bot is doing — working, waiting, stuck, asleep. Never a thread title, a prompt, a folder
+path, a branch or a model. Archived threads and hidden repos stay off their map too.
+
+Sharing opens a second, read-only port (5275; `BOT_CROSSING_SHARE_PORT` changes it) that answers
+one request and nothing else — see [DECISIONS.md](DECISIONS.md). It listens on every interface so
+friends can reach it; `BOT_CROSSING_SHARE_HOST` binds it to one address instead. The first time it
+opens, Windows asks whether Node may use the network: allow it on private networks, or friends
+cannot reach you.
+
+### War mode
+
+With war mode on, your idle bots can fight a friend's idle bots. Turn it on under Settings →
+Neighbors → *War mode*; it is off until you do. A friend can only be attacked once they have turned
+it on too, so both of you have to agree to it.
+
+- **Attack:** each friend in the sidebar's Neighbors list gets an *Attack* button. It works when
+  you are sharing, the friend is online with war mode on, both sides have at least one free bot,
+  and neither you nor they are already in a battle, attacking or defending. When it is greyed
+  out, hover over it to see why. War mode needs the page opened on `localhost`, not on a network
+  address.
+- **Only idle and sleeping bots fight.** Bots that are working, waiting on you, stuck or celebrating never fight.
+  If a fighter's thread wakes up mid-battle, it drops its weapon and goes back to work. Each side
+  fields at most 30 bots. A big side brings tanks and helicopters.
+- **The battle:** your bots march to the edge of the friend's colony, fight for up to a minute,
+  and walk home. The side with more bots standing at the end wins, and a tie goes to the defender.
+  A banner at the top shows the score and the clock. Both screens show the same battle, with the
+  same winner, score and timing, because both run the same rules on the same starting numbers.
+  Your friend sees the battle only if they have added you as a neighbour too. If they have not,
+  they see no battle at all and record no result: only your screen shows it and counts it.
+- **Nothing real changes.** A battle never touches a thread, a building or a zone. It is just a
+  show on top of the colony.
+- **The tally:** each result is counted once. Your won–lost record against each friend appears on
+  their ship's sign (`Mark · 3–1`) and next to their name in Settings.
+
+Your friend finds out about an attack from your share link, which they already check every few
+seconds. The share port stays read-only. The battle only names its target as a hash of that
+friend's share key mixed with the battle's own id, so friends who do not have that friend's link
+cannot tell who is being attacked, and the hash is different every battle. While you are
+defending, your own link says only that you are busy, not who is attacking you.
 
 ## Planets and light
 

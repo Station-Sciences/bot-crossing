@@ -197,6 +197,11 @@ const DEFAULTS = {
   showFps: false,
   showLabels: true,
   reducedMotion: false,
+  /**
+   * Idle bots chat, argue, comfort each other and play. Only ever idle ones, and only on this
+   * screen: nothing about it is saved to the colony or shared with friends.
+   */
+  socialLife: true,
 
   // Opening
   openIn: 'app', // 'app' | 'terminal' — the harness's desktop app, or its CLI in a new window

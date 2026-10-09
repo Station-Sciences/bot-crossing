@@ -31,21 +31,9 @@ const SQRT2 = Math.SQRT2
 const _near = []
 
 export class Navigation {
-  constructor() {
+  constructor(half = HALF) {
     this.cell = CELL
-    this.half = HALF
-    this.size = Math.ceil((HALF * 2) / CELL)
-    const n = this.size * this.size
-
-    this.blocked = new Uint8Array(n)
-    this.gScore = new Float32Array(n)
-    this.parent = new Int32Array(n)
-    this.stamp = new Int32Array(n) // which search last touched this node
-    this.closed = new Uint8Array(n)
-
-    this.heap = new Int32Array(n)
-    this.heapKey = new Float32Array(n)
-    this.heapSize = 0
+    this._allocate(half)
 
     this.generation = 0
     /** Bumped on every rebuild; agents use it to notice their path is stale. */
@@ -61,6 +49,34 @@ export class Navigation {
     /** The solids bucketed on a coarse grid, so a query only looks at its neighbourhood. */
     this._solidBuckets = new Map()
     this._bucket = 4
+  }
+
+  /** Everything indexed by grid cell, sized for a square `half` metres either side of the origin. */
+  _allocate(half) {
+    this.half = half
+    this.size = Math.ceil((half * 2) / this.cell)
+    const n = this.size * this.size
+
+    this.blocked = new Uint8Array(n)
+    this.gScore = new Float32Array(n)
+    this.parent = new Int32Array(n)
+    this.stamp = new Int32Array(n) // which search last touched this node
+    this.closed = new Uint8Array(n)
+
+    this.heap = new Int32Array(n)
+    this.heapKey = new Float32Array(n)
+    this.heapSize = 0
+  }
+
+  /**
+   * Grow or shrink the walkable square. Neighbours' settlements sit well outside the home one,
+   * and their crews walk this same grid. The bitmap starts empty, so a `rebuild` must follow;
+   * bumping the version sends every agent for a fresh route.
+   */
+  resize(half) {
+    if (half === this.half) return
+    this._allocate(half)
+    this.version++
   }
 
   _bucketKey(bx, bz) {

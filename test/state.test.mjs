@@ -184,3 +184,97 @@ test('viewedAt is carried through the v1 migration with the ids it keys on', asy
     assert.deepEqual(Object.keys(state.viewedAt), [`claude-code:${id}`])
   })
 })
+
+// ── neighbors ────────────────────────────────────────────────────────────────
+
+test('sharing and neighbors round-trip through the colony file', async () => {
+  await withServer(async ({ call, put }) => {
+    const sharing = { enabled: true, key: 'a'.repeat(32), name: 'Mark' }
+    const neighbors = [{ id: 'nb_1', url: 'http://192.168.1.9:5275', key: 'b'.repeat(32), slot: 0, addedAt: 5 }]
+    assert.equal((await put({ sharing, neighbors })).status, 200)
+    const state = await (await call('/api/state')).json()
+    assert.deepEqual(state.sharing, sharing)
+    assert.deepEqual(state.neighbors, neighbors)
+  })
+})
+
+test('a fresh colony is not sharing and has no neighbors', async () => {
+  await withServer(async ({ call }) => {
+    const state = await (await call('/api/state')).json()
+    assert.deepEqual(state.sharing, { enabled: false, key: '', name: '' })
+    assert.deepEqual(state.neighbors, [])
+  })
+})
+
+test('junk neighbor entries are dropped and the list is capped at six', async () => {
+  await withServer(async ({ call, put }) => {
+    const ok = (i) => ({ id: `nb_${i}`, url: `http://10.0.0.${i}:5275`, key: 'c'.repeat(32), slot: i, addedAt: 1 })
+    await put({ neighbors: [null, { id: 3 }, ...[0, 1, 2, 3, 4, 5, 6].map(ok)] })
+    const state = await (await call('/api/state')).json()
+    assert.equal(state.neighbors.length, 6)
+    assert.equal(state.neighbors[0].id, 'nb_0')
+  })
+})
+
+test('sharing merges whole: whichever tab changed it wins', () => {
+  const base = { sharing: { enabled: false, key: '', name: '' } }
+  const mine = { sharing: { enabled: true, key: 'k'.repeat(32), name: 'Me' } }
+  assert.deepEqual(mergeState(base, mine, base).sharing, mine.sharing)
+  assert.deepEqual(mergeState(base, base, mine).sharing, mine.sharing)
+})
+
+test('neighbors merge by id: an add in each tab survives, a removal stays removed', () => {
+  const a = { id: 'nb_a', url: 'http://a', key: '', slot: 0, addedAt: 1 }
+  const b = { id: 'nb_b', url: 'http://b', key: '', slot: 1, addedAt: 2 }
+  const c = { id: 'nb_c', url: 'http://c', key: '', slot: 2, addedAt: 3 }
+  const out = mergeState({ neighbors: [a] }, { neighbors: [a, b] }, { neighbors: [a, c] })
+  assert.deepEqual(out.neighbors.map((n) => n.id), ['nb_a', 'nb_b', 'nb_c'])
+  const removed = mergeState({ neighbors: [a, b] }, { neighbors: [b] }, { neighbors: [a, b] })
+  assert.deepEqual(removed.neighbors.map((n) => n.id), ['nb_b'])
+})
+
+// ── war ──────────────────────────────────────────────────────────────────────
+
+const WAR_BATTLE = { id: 'war_k_1', target: 'a'.repeat(16), seed: 9, startedAt: 1, attackers: 4, defenders: 5, targetNeighborId: 'nb_1' }
+
+test('war round-trips through the colony file', async () => {
+  await withServer(async ({ call, put }) => {
+    const war = { enabled: true, battle: WAR_BATTLE, tally: { nb_1: { won: 2, lost: 1 } }, seen: ['war_k_0'], busyUntil: 123456 }
+    assert.equal((await put({ war })).status, 200)
+    const state = await (await call('/api/state')).json()
+    assert.deepEqual(state.war, war)
+  })
+})
+
+test('a fresh colony is at peace', async () => {
+  await withServer(async ({ call }) => {
+    const state = await (await call('/api/state')).json()
+    assert.deepEqual(state.war, { enabled: false, battle: null, tally: {}, seen: [], busyUntil: 0 })
+  })
+})
+
+test('junk war entries are dropped and seen is capped at fifty', async () => {
+  await withServer(async ({ call, put }) => {
+    const seen = Array.from({ length: 60 }, (_, i) => `war_x_${i}`)
+    await put({ war: {
+      enabled: 'yes',
+      battle: { ...WAR_BATTLE, attackers: 0 },
+      tally: { nb_1: { won: 3, lost: 'x' }, nb_2: null, nb_3: { won: -1, lost: 2 } },
+      seen: [...seen, 5, null],
+      busyUntil: 'later',
+    } })
+    const { war } = await (await call('/api/state')).json()
+    assert.equal(war.enabled, false)
+    assert.equal(war.battle, null)
+    assert.deepEqual(war.tally, { nb_1: { won: 3, lost: 0 }, nb_3: { won: 0, lost: 2 } })
+    assert.deepEqual(war.seen, seen.slice(0, 50))
+    assert.equal(war.busyUntil, 0)
+  })
+})
+
+test('war merges whole: whichever tab changed it wins', () => {
+  const peace = { enabled: false, battle: null, tally: {}, seen: [], busyUntil: 0 }
+  const mine = { ...peace, enabled: true, busyUntil: 99 }
+  assert.deepEqual(mergeState({ war: peace }, { war: mine }, { war: peace }).war, mine)
+  assert.deepEqual(mergeState({ war: peace }, { war: peace }, { war: mine }).war, mine)
+})
