@@ -65,6 +65,10 @@ const CLIP = {
   phoneUp: { name: 'Idle_A', loop: false, tweak: 'phoneUp', frames: [0, 15] },
   phone: { name: 'Idle_A', loop: true, tweak: 'phone' },
   phoneDown: { name: 'Idle_A', loop: false, tweak: 'phoneDown', frames: [0, 15] },
+  // War mode's gunner: the idle again, with the right arm out straight at shoulder height and
+  // the left come across to steady it. Brought up over a short one-shot, then held.
+  aimUp: { name: 'Idle_A', loop: false, tweak: 'aimUp', frames: [0, 10] },
+  aim: { name: 'Idle_A', loop: true, tweak: 'aim' },
 }
 
 /**
@@ -88,10 +92,21 @@ export const TWEAKS = {
     'upperarm.l': { offset: [3.09, 0.53, -0.96] },
     'lowerarm.l': { offset: [-0.54, 0.89, 0.92] },
   },
+  // Found the same way: the right hand a straight arm's length out in front of the shoulder,
+  // the left just behind and below it, where it would cup the grip. The idle's breathing
+  // still comes through, so a gunner holding its aim is not a statue.
+  aim: {
+    'upperarm.r': { offset: [0.73, 0.45, 1.5] },
+    'lowerarm.r': { offset: [0.01, -0.02, -0.52] },
+    'upperarm.l': { offset: [-0.54, 0.35, -1.25] },
+    'lowerarm.l': { offset: [-0.1, 0, -0.12] },
+  },
 }
 // The raise and the lower are the held pose, ramped.
-TWEAKS.phoneUp = Object.fromEntries(Object.entries(TWEAKS.phone).map(([k, v]) => [k, { ...v, ramp: 0.45 }]))
-TWEAKS.phoneDown = Object.fromEntries(Object.entries(TWEAKS.phone).map(([k, v]) => [k, { ...v, ramp: -0.45 }]))
+const ramped = (pose, ramp) => Object.fromEntries(Object.entries(pose).map(([k, v]) => [k, { ...v, ramp }]))
+TWEAKS.phoneUp = ramped(TWEAKS.phone, 0.45)
+TWEAKS.phoneDown = ramped(TWEAKS.phone, -0.45)
+TWEAKS.aimUp = ramped(TWEAKS.aim, 0.3)
 
 const plainName = (n) => n.replace(/[.\s_]/g, '').toLowerCase()
 

@@ -120,6 +120,50 @@ export function fallStep(agent, dt) {
   return agent.hop <= -FALL_DEPTH
 }
 
+// ── knocked down ──────────────────────────────────────────────────────────────────────
+//
+// War mode's knockout is the fall above turned on its side: the same gravity, but hinged at
+// the feet like a plank going over instead of dropping through the clouds. A bot topples
+// backwards from the recoil of being hit, slams flat, bounces once or twice and lies still.
+
+/** Flat on its back, radians from upright. */
+export const KNOCK_FLAT = Math.PI / 2
+/** Angular gravity for a body hinged at its feet: 3g / 2L for a rod about one end, L ≈ 1.1. */
+const TOPPLE = (3 * GRAVITY) / (2 * 1.1)
+/** The shove off balance that starts it going; without it a perfectly upright plank never falls. */
+const KNOCK_KICK = 1.2
+/** How much of its speed survives hitting the floor, and the speed below which it stops. */
+const KNOCK_BOUNCE = 0.3
+const KNOCK_SETTLE = 0.5
+/** How briskly it gets back up once it is no longer down. */
+const KNOCK_RISE = 7
+
+/**
+ * One frame of being knocked down (`down` true) or getting back up (false). The angle is
+ * `agent.knock`, 0 standing to `KNOCK_FLAT` lying down, for the renderer to tip the body by.
+ * Inert and free for a bot that is neither.
+ */
+export function knockStep(agent, dt, down) {
+  agent.knock ??= 0
+  agent.knockV ??= 0
+  if (!down) {
+    if (agent.knock === 0) return
+    agent.knockV = 0
+    agent.knock *= Math.exp(-KNOCK_RISE * dt)
+    if (agent.knock < 0.01) agent.knock = 0
+    return
+  }
+  if (agent.knock >= KNOCK_FLAT && agent.knockV === 0) return // lying still
+  if (agent.knock === 0 && agent.knockV === 0) agent.knockV = KNOCK_KICK
+  agent.knockV += TOPPLE * Math.sin(agent.knock) * dt
+  agent.knock += agent.knockV * dt
+  if (agent.knock >= KNOCK_FLAT) {
+    agent.knock = KNOCK_FLAT
+    agent.knockV = -agent.knockV * KNOCK_BOUNCE
+    if (Math.abs(agent.knockV) < KNOCK_SETTLE) agent.knockV = 0
+  }
+}
+
 // ── the cartoon on top ────────────────────────────────────────────────────────────────
 //
 // None of this is a clip. It is a spring or two on the whole body — tilt and stretch —

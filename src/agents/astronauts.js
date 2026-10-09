@@ -9,7 +9,9 @@ import { bendPoint, withCurve } from '../core/curve.js'
 import { Props, CHECK_LEN, CHECK_EVERY, pickProp } from './props.js'
 import { projectHitPoint, bodyHitDistance } from './picking.js'
 import { helmetGeometry, visorGeometry, screenGeometry } from './model.js'
-import { CARRY_LIFT, grab, carryTo, followCarry, release, homeRunFactor, isAirborne, startFall, fallStep, FLAIL_RATE, stepCarryPose } from './carry.js'
+import { CARRY_LIFT, grab, carryTo, followCarry, release, homeRunFactor, isAirborne, startFall, fallStep, FLAIL_RATE, stepCarryPose, knockStep } from './carry.js'
+import { mayObey, cleanOrders, nextOrders, warGoal, stepArrival, warPace, warClip, warFace, HIT_LEN, HIT_PEAK } from './war-orders.js'
+import { createSword, createGun, dispose as disposeArmament } from '../world/arsenal.js'
 
 /**
  * Every astronaut in the colony, batched into a fixed set of instanced draw calls.
@@ -131,6 +133,26 @@ const P = {
   gripRz: Math.PI,
 }
 
+/**
+ * How war mode's weapons sit in the right hand, in the hand bone's own frame. The arsenal
+ * builds them at world size for a bot about 1.1 tall, and everything hung off a bone is
+ * already inside CREW_SCALE, so they are scaled back out of it to come out the size they
+ * were drawn.
+ */
+const ARMS = {
+  scale: 1 / CREW_SCALE,
+  // The sword stands up out of the fist the way the hammer does, and the hammer's grip is
+  // reused outright; the blade is slid down so the fist closes round the middle of the grip.
+  swordSlide: -0.08,
+  // The gun's grip, in the gun's own frame, and where in the hand it is held: a little way
+  // out along the bone, which is the middle of the fist rather than the wrist.
+  gunGrip: [0, -0.12, -0.1],
+  fist: [0, 0.06, 0],
+  // Aiming: the inverse of the hand's world rotation in the baked aim pose, so the barrel
+  // comes out level and straight ahead of the body. Recompute it if TWEAKS.aim changes.
+  gunAim: [-1.061, -0.336, 2.265],
+}
+
 // Rig-space radii cover the helmet, torso, gloves and boots. Capsules between these
 // landmarks follow the pose without CPU-skinning or raycasting every body vertex.
 const PICK_PARTS = [
@@ -168,11 +190,16 @@ export class Astronauts {
     this._one = new THREE.Vector3(1, 1, 1)
     this._color = new THREE.Color()
     this._wp = new THREE.Vector3()
+    this._warGoal = new THREE.Vector3()
     this._sep = new THREE.Vector3()
     this._pickBadge = new THREE.Vector3()
     this._pickLifted = new THREE.Vector3()
     this._pickBody = PICK_PARTS.map(() => ({}))
     this._drawnAgents = []
+    // War mode's weapons: one small group per armed bot, pooled so a battle that ends and
+    // another that starts reuse them. See `_placeArm`.
+    this._arms = { sword: [], gun: [] }
+    this._holds = armHolds()
     /** Uniform bucket grid for the separation query, so it stays O(n) as the crew grows. */
     this._buckets = new Map()
     this.nav = null
@@ -436,6 +463,7 @@ export class Astronauts {
     // The body is the shadow that matters — it is the whole silhouette.
     if (this.crew) this.crew.castShadow = on
     this.props?.setShadows(on)
+    for (const pool of Object.values(this._arms || {})) for (const g of pool) setCastShadow(g, on)
   }
 
   /** The colony hands over the navigation grid once it has been built. */
@@ -701,6 +729,8 @@ export class Astronauts {
     agent.eye.setRGB(look.eye[0], look.eye[1], look.eye[2])
     agent.loop = FACE_LOOPS[status] || null
     agent.colorDirty = true
+    // A thread that wakes up mid-battle drops everything and goes back to its job at once.
+    if (agent.war && !mayObey({ status, state: agent.state })) this._endWar(agent)
 
     if (status === 'leaving') {
       this._sendHome(agent)
@@ -760,6 +790,118 @@ export class Astronauts {
     if (agent) this._sendHome(agent)
   }
 
+  // ── battle orders ───────────────────────────────────────────────────────────────────
+  //
+  // War mode's director tells fighters what to do; this is where they listen. An order
+  // overrides a bot's site and behaviour while it lasts, and only ever a bot with nothing
+  // better to do — see `mayObey`. The order is re-checked every frame, so a thread that
+  // wakes up mid-battle is back at work on the next one, whatever the director says.
+
+  /**
+   * Give a bot battle orders, or take them away with `null`.
+   *
+   * `orders` is `{ goal: {x, z}, weapon: 'sword' | 'gun' | null, action: 'march' | 'fight' |
+   * 'down' | 'cheer', face: {x, z} | null }`. Meant to be called every frame with the order
+   * as it stands: an unchanged action keeps its clock, so a bot that is down stays down
+   * rather than being knocked over afresh. Returns whether the bot took the order — false
+   * for an unknown id, a malformed order, or a bot whose thread is busy, in which case any
+   * order it held is gone too. Cleared, it walks back to its own site.
+   */
+  setWarOrders(id, orders) {
+    const agent = this.byId.get(id)
+    if (!agent) return false
+    if (orders == null) {
+      this._endWar(agent)
+      return true
+    }
+    const clean = cleanOrders(orders)
+    if (!clean || !mayObey(agent)) {
+      this._endWar(agent)
+      return false
+    }
+    if (!agent.war) {
+      // Whatever it was in the middle of — a check, a wander — it puts down.
+      agent.checkStart = -1
+      agent.stuckFor = 0
+      agent.pathVersion = -1
+    }
+    agent.war = nextOrders(agent.war, clean)
+    return true
+  }
+
+  /** The orders a bot is under, or null. Its own copy: editing it changes nothing. */
+  warOrders(id) {
+    const war = this.byId.get(id)?.war
+    return war ? { goal: { ...war.goal }, weapon: war.weapon, action: war.action, face: war.face && { ...war.face }, t: war.t } : null
+  }
+
+  /** Stand everybody down at once — the battle is over, or never happened. */
+  clearWarOrders() {
+    for (const agent of this.agents) this._endWar(agent)
+  }
+
+  /**
+   * Where a gunner's barrel ends, in world space, as of the last frame drawn — for the muzzle
+   * flash and the tracer. Null for a bot that is not holding a gun.
+   */
+  muzzleOf(id, out = new THREE.Vector3()) {
+    const agent = this.byId.get(id)
+    const gun = agent?.war?.weapon === 'gun' ? agent.armed : null
+    if (!gun || !gun.visible) return null
+    return out.copy(gun.userData.muzzle.position).applyMatrix4(gun.matrixWorld)
+  }
+
+  /** Off duty: back to its own site, on its own two feet, as whatever its thread says. */
+  _endWar(agent) {
+    if (!agent.war) return
+    agent.war = null
+    if (agent.state === 'at-site' || agent.state === 'walking') {
+      agent.state = 'walking'
+      agent.stateAge = 0
+      agent.stuckFor = 0
+      agent.pathVersion = -1
+    }
+  }
+
+  /**
+   * One frame of following orders. The same walking, routing and settling as the bot's own
+   * life, pointed somewhere else: there is no second way of moving, so a fighter jams, ghosts
+   * through a crowd and climbs onto a deck exactly as it would going home.
+   */
+  _warStep(agent, dt) {
+    const orders = agent.war
+    orders.t += dt
+    agent.scale = Math.min(1, agent.scale + dt * 3)
+    // Put down mid-battle: the drop finishes before anything else does.
+    if (isAirborne(agent)) {
+      agent.vel.set(0, 0, 0)
+      agent.hop = THREE.MathUtils.damp(agent.hop, 0, 14, dt)
+      return
+    }
+    agent.hop = THREE.MathUtils.damp(agent.hop, 0, 10, dt)
+
+    // Down is down: nothing moves it, not even the crowd, so the fallen do not slide about
+    // under the feet of the ones still fighting.
+    if (orders.action === 'down') {
+      agent.vel.set(0, 0, 0)
+      return
+    }
+
+    const goal = warGoal(orders, agent.pos)
+    const dist = goal ? Math.hypot(goal.x - agent.pos.x, goal.z - agent.pos.z) : null
+    if (stepArrival(orders, dist)) {
+      const target = this._warGoal.set(goal.x, 0, goal.z)
+      const steer = this._steerTarget(agent, this._wp, target)
+      const toward = this._v.set(steer.x - agent.pos.x, 0, steer.z - agent.pos.z)
+      this._walk(agent, toward, dist, dt, warPace(orders, dist))
+      return
+    }
+    // There: stop dead, face the enemy (or the way it was going), and hold the spot.
+    agent.vel.set(0, 0, 0)
+    if (orders.face) this._faceToward(agent, orders.face, dt)
+    this._settle(agent, dt)
+  }
+
   // ── per-frame simulation ────────────────────────────────────────────────────────────
 
   update(dt, elapsed) {
@@ -778,9 +920,13 @@ export class Astronauts {
         continue
       }
       agent.stateAge += dt
+      // Orders are re-checked every frame, not only when given: a thread can wake up, a bot
+      // can be picked up or sent home, and none of that waits for the director to notice.
+      if (agent.war && !mayObey(agent)) this._endWar(agent)
       this._step(agent, dt, elapsed, anim)
       this._animate(agent, dt, anim)
       animateFace(agent, dt, anim)
+      if (agent.war) agent.faceFrame = FACE[warFace(agent.war, elapsed)] ?? agent.faceFrame
 
       if (agent.state === 'gone') {
         this.agents.splice(i, 1)
@@ -835,23 +981,23 @@ export class Astronauts {
    * Falls back to the goal itself when there is no path — an astronaut heading vaguely the
    * right way and sliding along walls beats one standing still because A* gave up.
    */
-  _steerTarget(agent, out) {
+  _steerTarget(agent, out, goal = agent.site) {
     const nav = this.nav
-    if (!nav) return out.copy(agent.site)
+    if (!nav) return out.copy(goal)
 
     const stale =
       agent.pathVersion !== nav.version ||
-      agent.pathGoal.distanceToSquared(agent.site) > 0.25
+      agent.pathGoal.distanceToSquared(goal) > 0.25
     if (stale && this._routeBudget > 0) {
       this._routeBudget--
-      agent.path = nav.findPath(agent.pos.x, agent.pos.z, agent.site.x, agent.site.z)
+      agent.path = nav.findPath(agent.pos.x, agent.pos.z, goal.x, goal.z)
       agent.pathAt = 0
       agent.pathVersion = nav.version
-      agent.pathGoal.copy(agent.site)
+      agent.pathGoal.copy(goal)
     }
 
     const path = agent.path
-    if (!path || !path.length) return out.copy(agent.site)
+    if (!path || !path.length) return out.copy(goal)
 
     // Retire waypoints already reached, and any the agent can already see past.
     while (agent.pathAt < path.length - 1) {
@@ -861,7 +1007,7 @@ export class Astronauts {
       if (dx * dx + dz * dz > WAYPOINT_REACHED * WAYPOINT_REACHED) break
       agent.pathAt++
     }
-    if (agent.pathAt >= path.length) return out.copy(agent.site)
+    if (agent.pathAt >= path.length) return out.copy(goal)
     const wp = path[agent.pathAt]
     return out.set(wp.x, 0, wp.z)
   }
@@ -870,6 +1016,15 @@ export class Astronauts {
     const fromX = agent.pos.x
     const fromZ = agent.pos.z
     agent.blocked = false
+    // Under battle orders the order says where to be and what to do there. Everything after
+    // that — how fast it really went, turning, standing on the ground — is the same for both.
+    if (agent.war) this._warStep(agent, dt)
+    else this._ownStep(agent, dt, elapsed, anim)
+    this._endStep(agent, fromX, fromZ, dt, elapsed, anim)
+  }
+
+  /** What an agent does of its own accord: whatever its thread and its state say. */
+  _ownStep(agent, dt, elapsed, anim) {
     // Distance is always measured to the real goal; steering follows the route to it.
     const steer = agent.state === 'at-site' || agent.state === 'held' ? this._wp.copy(agent.site) : this._steerTarget(agent, this._wp)
     const toSite = this._v.set(steer.x - agent.pos.x, 0, steer.z - agent.pos.z)
@@ -902,8 +1057,8 @@ export class Astronauts {
       case 'walking': {
         agent.scale = Math.min(1, agent.scale + dt * 3)
         // Dropped from a carry: it finishes the drop, kicking, and only sets off once its feet
-        // are down.
-        if (isAirborne(agent)) {
+        // are down. Knocked flat in a battle that has just ended, it gets up first.
+        if (isAirborne(agent) || agent.knock > 0.25) {
           agent.vel.set(0, 0, 0)
           agent.hop = THREE.MathUtils.damp(agent.hop, 0, 14, dt)
           break
@@ -992,7 +1147,9 @@ export class Astronauts {
         break
       }
     }
+  }
 
+  _endStep(agent, fromX, fromZ, dt, elapsed, anim) {
     // How fast the astronaut *actually* travelled, not how fast it meant to. The two come
     // apart whenever something is in the way: velocity stays high while the collision code
     // refuses the step, and an agent driven off intent alone walks on the spot against a
@@ -1012,6 +1169,9 @@ export class Astronauts {
 
     agent.yaw = angleDamp(agent.yaw, agent.targetYaw, TURN_RATE, dt)
     stepCarryPose(agent, dt)
+    // Knocked down in a battle: over it goes once the hit has landed, and back up it gets
+    // the moment it is no longer down — orders cleared, or picked up off the floor.
+    knockStep(agent, dt, agent.war?.action === 'down' && agent.war.t >= HIT_LEN)
 
     // Stand on the ground rather than on y=0. A plot's deck is a raised slab and the terrain
     // between plots rolls by half a metre either way, so a crew pinned to zero is buried for
@@ -1433,6 +1593,7 @@ export class Astronauts {
     let key
     if (agent.state === 'spawning') key = 'spawn'
     else if (isAirborne(agent)) key = 'run'
+    else if (agent.war) key = warClip(agent.war, speed > 0.12 ? (speed > WALK_SPEED * 1.25 ? 'run' : 'walk') : null, agent.clipKey)
     else if (speed > 0.12) key = speed > WALK_SPEED * 1.25 ? 'run' : 'walk'
     else {
       switch (agent.status) {
@@ -1467,21 +1628,33 @@ export class Astronauts {
       agent.clipTime = 0
     }
 
+    // Out cold: held on the frame of the hit where it is thrown furthest back, which is the
+    // pose it goes over in.
+    if (key === 'down') {
+      agent.frame = frameFor(rig.clips.hit, HIT_PEAK)
+      return
+    }
+
     const clip = rig.clips[key] || rig.clips.idle
     if (!clip) return
 
-    // Stride rate follows the ground, everything else runs at its authored speed.
+    // Stride rate follows the ground, everything else runs at its authored speed — except a
+    // knockout's hit, slowed so its furthest recoil lands just as the bot starts to go over.
     const rate = isAirborne(agent)
       ? FLAIL_RATE
       : key === 'walk' || key === 'run'
         ? THREE.MathUtils.clamp(speed / WALK_SPEED, 0.4, 2.1)
-        : 1
+        : key === 'hit' && agent.war
+          ? HIT_PEAK / HIT_LEN
+          : 1
     agent.clipTime += dt * anim * rate
 
-    if (key === 'sitDown' && agent.clipTime >= clip.duration) {
-      agent.clipKey = 'sit'
+    // One-shots that hand over to a loop: sitting down to sitting, raising a gun to aiming it.
+    const next = key === 'sitDown' ? 'sit' : key === 'aimUp' ? 'aim' : null
+    if (next && agent.clipTime >= clip.duration && rig.clips[next]) {
+      agent.clipKey = next
       agent.clipTime = 0
-      agent.frame = frameFor(rig.clips.sit, 0)
+      agent.frame = frameFor(rig.clips[next], 0)
       return
     }
     agent.frame = frameFor(clip, agent.clipTime)
@@ -1510,7 +1683,9 @@ export class Astronauts {
     const props = this.props
     props.begin()
     props.update(elapsed)
+    const armed = { sword: 0, gun: 0 }
     for (const agent of this.agents) {
+      agent.armed = null
       // Never write past the end of the instance buffers. Going over is not a rendering
       // artefact you can squint past: WebGL refuses the whole `drawElementsInstanced` call, so
       // one agent too many takes *every* astronaut off screen at once.
@@ -1530,6 +1705,13 @@ export class Astronauts {
       e.set(0, agent.yaw, 0)
       q.setFromEuler(e)
       v.set(agent.pos.x, agent.pos.y, agent.pos.z)
+      if (agent.knock) {
+        // Knocked down: tipped over backwards about its feet, in its own frame so it falls
+        // away from whatever it was facing, and lifted by the backpack and helmet it lands on
+        // so it lies on the ground rather than half in it.
+        q.multiply(_poseQ.setFromAxisAngle(_xAxis, -agent.knock))
+        v.y += Math.sin(agent.knock) * KNOCK_LIFT * s
+      }
       const base = s * CREW_SCALE
       const stretch = agent.stretch ?? 1
       if (agent.tiltX || agent.tiltZ || stretch !== 1) {
@@ -1572,10 +1754,18 @@ export class Astronauts {
 
         // The hammer only exists while a thread is running, so it gets its own instance
         // counter — an unused slot in the middle of an instanced mesh still draws.
-        if (agent.clipKey === 'work') {
+        // A bot at war swings a sword, or nothing, but never the hammer: that is for work.
+        if (agent.clipKey === 'work' && !agent.war) {
           attachMatrixAt(rig, agent.frame, this.handSlot, bone)
           worn.multiplyMatrices(root, bone)
           setPart(child, worn, hammer, hands++, P.gripX, P.gripY, P.gripZ, P.gripRx, 0, P.gripRz)
+        }
+        // And a battle's weapon, in the same hand.
+        const weapon = agent.war?.weapon
+        if (weapon) {
+          attachMatrixAt(rig, agent.frame, this.handSlot, bone)
+          worn.multiplyMatrices(root, bone)
+          this._placeArm(agent, weapon, armed[weapon]++, worn)
         }
         // And whatever a checking astronaut has got out, in its left hand.
         if (agent.checkStart >= 0 && agent.clipKey.startsWith('phone') && elapsed - agent.checkStart < CHECK_LEN) {
@@ -1618,6 +1808,11 @@ export class Astronauts {
 
     const n = i
     props.end()
+    // Whatever was carried last frame and is not this one goes out of sight, not away: the
+    // next battle picks the same groups back up.
+    for (const [kind, pool] of Object.entries(this._arms)) {
+      for (let k = armed[kind]; k < pool.length; k++) pool[k].visible = false
+    }
     // The glowing parts pulse every frame; the rest only re-upload when something moved slot.
     const animated = new Set(['tip', 'lamp'])
     for (const [name, mesh] of Object.entries(this.parts)) {
@@ -1634,6 +1829,32 @@ export class Astronauts {
     this.frameAttr.needsUpdate = true
     this.visibleCount = n
     this._drawnAgents.length = n
+  }
+
+  /**
+   * Put the `n`th weapon of a kind in a bot's hand. One small group per armed bot rather than
+   * an instanced mesh: a battle is at most sixty of them for a minute, the arsenal's pieces
+   * are separate meshes with their own moving parts, and the gun's muzzle has to be findable
+   * for the effects. Built the first time a battle needs that many, then reused.
+   */
+  _placeArm(agent, kind, n, hand) {
+    const pool = this._arms[kind]
+    let arm = pool[n]
+    if (!arm) {
+      arm = kind === 'gun' ? createGun() : createSword()
+      arm.matrixAutoUpdate = false
+      setCastShadow(arm, this.settings.shadowSize > 0)
+      this.group.add(arm)
+      pool.push(arm)
+    }
+    // A gun is levelled while aiming and carried barrel-down otherwise; a sword stands up out
+    // of the fist whatever the arm is doing.
+    const aiming = agent.clipKey === 'aim' || agent.clipKey === 'aimUp'
+    const hold = kind === 'sword' ? this._holds.sword : aiming ? this._holds.aim : this._holds.gun
+    arm.matrix.multiplyMatrices(hand, hold)
+    arm.matrixWorldNeedsUpdate = true
+    arm.visible = true
+    agent.armed = arm
   }
 
   // ── picking ─────────────────────────────────────────────────────────────────────────
@@ -1801,6 +2022,7 @@ export class Astronauts {
       mesh.material.dispose()
     }
     this._disposeCrew()
+    for (const pool of Object.values(this._arms)) for (const arm of pool) disposeArmament(arm)
     // The bone texture is the rig's, not this instance's — the rig outlives any one colony.
     this.faceTexture.dispose()
     this.scene.remove(this.group)
@@ -1816,6 +2038,39 @@ const _poseV = new THREE.Vector3()
 const _poseS = new THREE.Vector3()
 /** Where on the body a carried bot hangs from, in metres at full size: roughly the top of the helmet. */
 const HANG_HEIGHT = 1.1
+const _xAxis = new THREE.Vector3(1, 0, 0)
+/** How far a bot lying on its back sits above the ground: its backpack and helmet, at full size. */
+const KNOCK_LIFT = 0.26
+
+/**
+ * The three ways a weapon sits in the right hand, as matrices in the hand bone's frame:
+ * a sword, a gun aimed, and a gun carried.
+ */
+function armHolds() {
+  const scale = new THREE.Vector3().setScalar(ARMS.scale)
+  const hold = (at, turn, slide) =>
+    new THREE.Matrix4()
+      .compose(new THREE.Vector3(...at), turn, scale)
+      .multiply(new THREE.Matrix4().makeTranslation(...slide))
+  const euler = (r) => new THREE.Quaternion().setFromEuler(new THREE.Euler(...r))
+  const grip = ARMS.gunGrip.map((n) => -n)
+  // Carried, the barrel carries on down the line of the arm (the hand's +Y) with the sight
+  // turned forward (the hand's -X, at rest), which reads as holding it, not dropping it.
+  const carry = new THREE.Quaternion().setFromRotationMatrix(
+    new THREE.Matrix4().makeBasis(new THREE.Vector3(0, 0, -1), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 1, 0))
+  )
+  return {
+    sword: hold([P.gripX, P.gripY, P.gripZ], euler([P.gripRx, 0, P.gripRz]), [0, ARMS.swordSlide, 0]),
+    aim: hold(ARMS.fist, euler(ARMS.gunAim), grip),
+    gun: hold(ARMS.fist, carry, grip),
+  }
+}
+
+function setCastShadow(group, on) {
+  group.traverse((o) => {
+    if (o.isMesh) o.castShadow = on
+  })
+}
 const _ce = new THREE.Euler()
 const _cv = new THREE.Vector3()
 const _cs = new THREE.Vector3(1, 1, 1)

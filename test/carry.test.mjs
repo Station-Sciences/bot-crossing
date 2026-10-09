@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
-import { CARRY_LIFT, canGrab, carryTo, fallStep, followCarry, grab, homeRunFactor, isAirborne, release, startFall, FALL_DEPTH, FLAIL_RATE, stepCarryPose } from '../src/agents/carry.js'
+import { CARRY_LIFT, canGrab, carryTo, fallStep, followCarry, grab, homeRunFactor, isAirborne, release, startFall, FALL_DEPTH, FLAIL_RATE, stepCarryPose, knockStep, KNOCK_FLAT } from '../src/agents/carry.js'
 
 const bot = (values = {}) => ({
   state: 'at-site',
@@ -230,4 +230,34 @@ test('an ordinary bot is never posed', () => {
   assert.equal(a.tiltX, 0)
   assert.equal(a.tiltZ, 0)
   assert.equal(a.stretch, 1)
+})
+
+test('a knocked-down bot goes over, bounces, and lies flat', () => {
+  const a = bot()
+  let t = 0
+  let peak = 0
+  let landed = -1
+  let bounced = false
+  while (t < 3) {
+    knockStep(a, 1 / 60, true)
+    t += 1 / 60
+    peak = Math.max(peak, a.knock)
+    if (landed < 0 && a.knock >= KNOCK_FLAT) landed = t
+    if (landed >= 0 && a.knock < KNOCK_FLAT - 0.01) bounced = true
+  }
+  assert.ok(landed > 0.3 && landed < 1.2, `hit the floor at ${landed}s`)
+  assert.ok(bounced, 'came up off the floor a little')
+  assert.ok(peak <= KNOCK_FLAT, 'never through the floor')
+  assert.equal(a.knock, KNOCK_FLAT)
+  assert.equal(a.knockV, 0, 'and lies still')
+})
+
+test('a bot that is no longer down gets back up, and one never knocked is untouched', () => {
+  const a = bot({ knock: KNOCK_FLAT, knockV: 0 })
+  for (let i = 0; i < 90; i++) knockStep(a, 1 / 60, false)
+  assert.equal(a.knock, 0)
+  const b = bot()
+  knockStep(b, 1 / 60, false)
+  assert.equal(b.knock, 0)
+  assert.equal(b.knockV, 0)
 })
