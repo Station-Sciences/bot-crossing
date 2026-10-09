@@ -15,6 +15,7 @@ import {
 } from './scan.mjs'
 import { createShareService } from './share.mjs'
 import { buildSnapshot } from './share-snapshot.mjs'
+import { createNeighborFetcher } from './neighbors.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
@@ -214,6 +215,9 @@ export async function syncSharing() {
 export function stopSharing() {
   return sharing.close()
 }
+
+/** Friends' last good snapshots live here for as long as this server does — never on disk. */
+const neighborFetcher = createNeighborFetcher()
 
 /**
 /**
@@ -531,6 +535,11 @@ export async function apiMiddleware(req, res, next) {
 
     if (url.pathname === '/api/sharing' && req.method === 'GET') {
       return send(res, 200, { ...sharing.status(), lanAddress: lanAddress(), defaultName: defaultName() })
+    }
+
+    if (url.pathname === '/api/neighbors' && req.method === 'GET') {
+      const { neighbors } = await readState()
+      return send(res, 200, { neighbors: await neighborFetcher.refresh(neighbors) })
     }
 
     if (url.pathname === '/api/open' && req.method === 'POST') {
