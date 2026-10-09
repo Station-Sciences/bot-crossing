@@ -1,6 +1,6 @@
 import { SceneryReflections } from '../world/reflections.js'
 import * as THREE from 'three'
-import { PLANETS, createTerrain, createScatter, terrainHeight } from '../world/planet.js'
+import { COAST_DIR, PLANETS, createTerrain, createScatter, groundSize, setSettlementSites, terrainHeight } from '../world/planet.js'
 import { createWater } from '../world/water.js'
 import { Fauna } from '../world/fauna.js'
 import { BuildingSurfaces } from '../world/building-surfaces.js'
@@ -16,12 +16,14 @@ import {
   shipPosition,
   createLabel,
   hashString,
+  hexToWorld,
   worldToHex,
   DECK_TOP,
   PLOT_PALETTE,
   PLOT_CELL,
 } from '../world/plots.js'
-import { translateCells } from '../world/plot-move.js'
+import { SHIP_CELL, translateCells } from '../world/plot-move.js'
+import { landward, placeNeighbors } from '../world/neighbor-layout.js'
 import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
@@ -65,6 +67,8 @@ const TRAVEL_RADIUS = 0.12
 const LIVE_GROWTH = 0.004
 /** How many zones' positions to remember, including repos with nothing running in them. */
 const LAYOUT_MEMORY = 80
+/** The dot on a neighbour's ship sign. A cool blue that is not any repo's accent. */
+const NEIGHBOR_SIGN = 0x8fb4ee
 
 export const STATUS_ORDER = ['blocked', 'waiting', 'working', 'celebrating', 'idle', 'sleeping']
 
@@ -141,6 +145,19 @@ export class Colony {
     this.buildingSurfaces = new BuildingSurfaces(this.buildings, (x, z) => this.surfaceAt(x, z))
     this.threads = new Map()
     this.usedAccents = new Set()
+    /**
+     * Friends' settlements. Drawn on the same lattice as the home colony, but kept off its
+     * books: nothing here is saved, dragged, hidden, archived, or counted in the stats.
+     */
+    this.neighborPlots = new Map()
+    this.neighborShips = new Map()
+    this.neighborThreads = new Map()
+    this.neighborOffsets = new Map()
+    this.neighborSites = []
+    this._neighborKnown = new Set()
+    this._sitesSignature = '[]'
+    /** Every plot on the ground, home first — what anything about the *terrain* iterates. */
+    this.worldPlots = []
 
     this.worldGroup = new THREE.Group()
     this.worldGroup.name = 'world'
@@ -211,6 +228,10 @@ export class Colony {
     // at construction — a world with more relief would otherwise leave it hovering.
     const ship = shipPosition()
     this.ship.group.position.y = terrainHeight(ship.x, ship.z, this.planet)
+    for (const n of this.neighborShips.values()) {
+      const p = n.ship.group.position
+      p.y = terrainHeight(p.x, p.z, this.planet)
+    }
 
     this._dustTint.set(this.planet.ground.high)
 
@@ -273,15 +294,25 @@ export class Colony {
     this._syncIslandRock()
   }
 
-  /** Every hex cell the colony holds, plus the ship's, in world space. */
+  /** Every hex cell on the ground — home zones, home ship, then each neighbour's — in world space. */
   _footprintCells() {
     const list = []
-    for (const plot of this.plotOrder) {
+    const add = (plot) => {
       for (const local of plot.localCenters) list.push({ x: plot.center.x + local.x, z: plot.center.z + local.z })
     }
+    for (const plot of this.plotOrder) add(plot)
+    // Home's ship before any neighbour's cells: the sky island's cut-out has a cap, and if it is
+    // ever reached it is a friend's corner that goes missing, not your own lander's ground.
     const ship = shipPosition()
     list.push({ x: ship.x, z: ship.z })
+    for (const plot of this.neighborPlots.values()) add(plot)
+    for (const n of this.neighborShips.values()) list.push({ x: n.ship.group.position.x, z: n.ship.group.position.z })
     return list.slice(0, SKY_MAX_CELLS)
+  }
+
+  /** Where every lander stands: home's, then each neighbour's. */
+  _shipSpots() {
+    return [shipPosition(), ...[...this.neighborShips.values()].map((n) => n.ship.group.position)]
   }
 
   _footprintRadius() {
@@ -344,6 +375,7 @@ export class Colony {
     this.water = createWater({
       planet: this.planet,
       heightAt: (x, z) => terrainHeight(x, z, this.planet),
+      size: groundSize(),
       quality: detail === 'high' ? 'high' : detail === 'low' ? 'low' : 'medium',
     })
     if (this.water) this.worldGroup.add(this.water.mesh)
@@ -371,17 +403,17 @@ export class Colony {
       disposeTree(this.scatterGroup)
     }
     const clear = []
-    for (const plot of this.plotOrder) {
+    for (const plot of this.worldPlots) {
       for (const local of plot.localCenters) {
         clear.push({ x: plot.center.x + local.x, z: plot.center.z + local.z, r: 8.6 })
       }
     }
-    const ship = shipPosition()
-    clear.push({ x: ship.x, z: ship.z, r: 7.5 })
+    const aprons = this._shipSpots().map((p) => ({ x: p.x, z: p.z, r: 7.5 }))
+    clear.push(...aprons)
     this.scatterGroup = createScatter(this.planet, this.settings.get('scatterDensity'), clear, 4242, (x, z) => this.onIsland(x, z))
     this.worldGroup.add(this.scatterGroup)
     this._scatterFootprint = this._plotFootprint()
-    this._buildGrass(clear)
+    this._buildGrass(aprons)
     // The crew routes around scatter, so a new scatter is a new navigation grid.
     if (this.nav) this._rebuildNavigation()
   }
@@ -390,8 +422,7 @@ export class Colony {
    * The meadow, on worlds that have one. Kept clear of the same ground the scatter is, and
    * rebuilt with it: a plot laid over grass would have blades poking up through the deck.
    */
-  _buildGrass(clear) {
-    const apron = clear[clear.length - 1]
+  _buildGrass(aprons) {
     if (this.grass) {
       this.grass.dispose()
       this.grass = null
@@ -401,8 +432,8 @@ export class Colony {
       planet: this.planet,
       heightAt: (x, z) => terrainHeight(x, z, this.planet),
       blocked: (x, z) => !this.onIsland(x, z) ||
-        this.plotOrder.some((plot) => plot.containsWorld(x, z, -0.4)) ||
-        (apron && (x - apron.x) ** 2 + (z - apron.z) ** 2 < apron.r * apron.r),
+        this.worldPlots.some((plot) => plot.containsWorld(x, z, -0.4)) ||
+        aprons.some((a) => (x - a.x) ** 2 + (z - a.z) ** 2 < a.r * a.r),
       density: this.settings.get('scatterDensity'),
       quality: detail === 'high' ? 'high' : detail === 'low' ? 'low' : 'medium',
     })
@@ -411,7 +442,7 @@ export class Colony {
 
   /** What the scatter has to avoid, as one string — cheap to compare every poll. */
   _plotFootprint() {
-    return this.plotOrder.map((plot) => plot.signature).join('|')
+    return this.worldPlots.map((plot) => plot.signature).join('|')
   }
 
   /**
@@ -466,7 +497,7 @@ export class Colony {
    * ids — repo name for plots, session id for buildings — so a poll that changes nothing
    * moves nothing on screen.
    */
-  setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
+  setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set(), neighbors = []) {
     const now = Date.now()
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
 
@@ -507,6 +538,8 @@ export class Colony {
     })
 
     this._syncPlots(projects)
+    this._syncNeighbors(neighbors)
+    this._syncFootprint()
 
     // A repo that is off the map keeps its footprint in layout memory, so showing it again
     // reclaims the same ground if it is still free. Re-inserting the entry also keeps
@@ -533,22 +566,7 @@ export class Colony {
     for (const [name, list] of projects) {
       const plot = this.plots.get(name)
       if (!plot) continue
-      // Oldest thread first, so the *first* assignment of slots is deterministic; after that a
-      // thread keeps the slot it was given for as long as the plot stands. Numbering by
-      // position in this list, which is what this used to do, meant one archive shifted every
-      // younger sibling one slot along — every building on the plot moved and every
-      // astronaut walked, for a thread that had left.
-      list.sort((a, b) => a.createdAt - b.createdAt)
-      const slotOf = plot.slotOf || (plot.slotOf = new Map())
-      for (const id of [...slotOf.keys()]) if (!list.some((t) => t.id === id)) slotOf.delete(id)
-      const taken = new Set(slotOf.values())
-      for (const thread of list) {
-        if (slotOf.has(thread.id)) continue
-        let slot = 0
-        while (taken.has(slot)) slot++
-        taken.add(slot)
-        slotOf.set(thread.id, slot)
-      }
+      const slotOf = this._assignSlots(plot, list)
 
       list.forEach((thread) => {
         const i = slotOf.get(thread.id)
@@ -575,6 +593,42 @@ export class Colony {
       })
     }
 
+    // Friends' bots: the same buildings, sites and behaviours, but never counted, never urgent,
+    // and each one walking out of — and back into — its own owner's ship.
+    this.neighborThreads = new Map()
+    for (const n of neighbors) {
+      const ship = this.neighborShips.get(n.id)?.ship
+      const doors = ship ? { shipDoor: () => ship.shipDoor(), shipAirlock: () => ship.shipAirlock() } : null
+      const byPlot = new Map()
+      for (const thread of n.threads) {
+        const plot = this.neighborPlots.get(`nb:${n.id}/${thread.project}`)
+        if (!plot) continue
+        if (!byPlot.has(plot)) byPlot.set(plot, [])
+        byPlot.get(plot).push(thread)
+      }
+      for (const [plot, list] of byPlot) {
+        const slotOf = this._assignSlots(plot, list)
+        for (const thread of list) {
+          const status = statusFor(thread, now)
+          if (status === 'waiting' || status === 'blocked' || status === 'working') active.add(plot.id)
+          const building = this._syncBuilding(thread, plot, slotOf.get(thread.id))
+          seenBuildings.add(thread.id)
+          this.neighborThreads.set(thread.id, thread)
+          roster.push({
+            id: thread.id,
+            thread,
+            status,
+            site: null,
+            anchor: building.mesh.position.clone(),
+            known: this._neighborKnown.has(thread.id),
+            neighbor: thread.neighbor,
+            doors,
+          })
+          this._neighborKnown.add(thread.id)
+        }
+      }
+    }
+
     // Anything that dropped out of the scan — archived, or a transcript that vanished —
     // takes its building down and walks its astronaut back to the ship.
     for (const [id, entry] of this.buildings) {
@@ -587,7 +641,7 @@ export class Colony {
     this._rebuildNavigation()
     for (const member of roster) {
       const entry = this.buildings.get(member.id)
-      member.site = this._workSite(this.plots.get(entry.plot), entry, entry.slot)
+      member.site = this._workSite(this._plotById(entry.plot), entry, entry.slot)
     }
     this._syncFaunaSites()
     this.stats = { ...stats, done: stats.celebrating }
@@ -645,11 +699,25 @@ export class Colony {
     })
 
     this.plotOrder = [...this.plots.values()]
-    // Zones that just moved, appeared or grew are zones the scatter does not know about —
-    // nor, on a floating island, the rock under them; and on an island in the sea, the
-    // coast itself moves, which is the whole terrain.
-    if (this.scatterGroup && this._plotFootprint() !== this._scatterFootprint) {
-      if (this.planet.shape === 'island') this._buildTerrain()
+  }
+
+  /**
+   * After home and neighbour zones have both been reconciled: the ground under all of them.
+   *
+   * A neighbour arriving, leaving or moving changes the flat discs the terrain is built around,
+   * and that is a terrain rebuild. Anything else that moved is only scatter, as before — and on an
+   * island in the sea, the coast itself moves, which is the whole terrain.
+   */
+  _syncFootprint() {
+    this.worldPlots = [...this.plotOrder, ...this.neighborPlots.values()]
+    const sites = JSON.stringify(this.neighborSites)
+    const sitesMoved = sites !== this._sitesSignature
+    if (sitesMoved) {
+      this._sitesSignature = sites
+      setSettlementSites(this.neighborSites)
+    }
+    if (this.scatterGroup && (sitesMoved || this._plotFootprint() !== this._scatterFootprint)) {
+      if (sitesMoved || this.planet.shape === 'island') this._buildTerrain()
       else {
         this._buildScatter()
         if (this.island) this._syncIslandRock()
@@ -658,10 +726,180 @@ export class Colony {
     // Which hex cells are decked. Ground height is asked for once per moving agent per
     // frame, so it wants to be a lookup rather than a scan over every plot's every tile.
     this.deckedCells = new Set()
-    for (const plot of this.plotOrder) {
+    for (const plot of this.worldPlots) {
       for (const cell of plot.cells) this.deckedCells.add(`${cell.q},${cell.r}`)
     }
     this._syncLabels()
+  }
+
+  /**
+   * Oldest thread first, so the *first* assignment of slots is deterministic; after that a thread
+   * keeps the slot it was given for as long as the plot stands. Numbering by position in the list,
+   * which is what this used to do, meant one archive shifted every younger sibling one slot along
+   * — every building on the plot moved and every astronaut walked, for a thread that had left.
+   */
+  _assignSlots(plot, list) {
+    list.sort((a, b) => a.createdAt - b.createdAt)
+    const slotOf = plot.slotOf || (plot.slotOf = new Map())
+    for (const id of [...slotOf.keys()]) if (!list.some((t) => t.id === id)) slotOf.delete(id)
+    const taken = new Set(slotOf.values())
+    for (const thread of list) {
+      if (slotOf.has(thread.id)) continue
+      let slot = 0
+      while (taken.has(slot)) slot++
+      taken.add(slot)
+      slotOf.set(thread.id, slot)
+    }
+    return slotOf
+  }
+
+  /**
+   * A neighbour's zones in their own frame: their saved layout where they sent one, and anything
+   * they have not placed yet placed here by the same allocator, around what they have.
+   */
+  _neighborLayout(n) {
+    const counts = new Map()
+    for (const t of n.threads) counts.set(t.project, (counts.get(t.project) || 0) + 1)
+    const given = new Map()
+    for (const p of n.projects) {
+      if (p.cells.length) given.set(p.name, p.cells.map(([q, r]) => ({ q, r })))
+    }
+    const sized = [...counts]
+      .map(([id, size]) => ({ id, size }))
+      .sort((a, b) => b.size - a.size || a.id.localeCompare(b.id))
+    return allocateCells(sized, given)
+  }
+
+  /**
+   * Friends' settlements, rebuilt from what their machines last said.
+   *
+   * Each arrives in its own frame and is shifted out along its slot's direction until there are
+   * two clear rings between it and everyone else. A zone is torn down and raised again only when
+   * its footprint moved, exactly like a home zone; a ship only when its settlement moved.
+   */
+  _syncNeighbors(neighbors) {
+    const framed = neighbors.map((n) => ({ ...n, layout: this._neighborLayout(n) }))
+    const home = [SHIP_CELL, ...this.plotOrder.flatMap((plot) => plot.cells)]
+    this.neighborOffsets = placeNeighbors(
+      home,
+      framed.map((n) => ({ id: n.id, slot: n.slot, cells: [SHIP_CELL, ...[...n.layout.values()].flat()] })),
+      this.neighborOffsets,
+      this.planet.shape === 'coast' ? landward(COAST_DIR) : undefined
+    )
+
+    const wanted = new Map()
+    for (const n of framed) {
+      const off = this.neighborOffsets.get(n.id)
+      for (const [name, cells] of n.layout) {
+        if (!cells.length) continue
+        const moved = cells.map((c) => ({ q: c.q + off.q, r: c.r + off.r }))
+        const id = `nb:${n.id}/${name}`
+        wanted.set(id, { n, name, cells: moved, signature: `${id}:${moved.map((c) => `${c.q},${c.r}`).join('/')}` })
+      }
+    }
+
+    for (const [id, plot] of this.neighborPlots) {
+      if (wanted.get(id)?.signature === plot.signature) continue
+      this.plotGroup.remove(plot.group)
+      if (plot.label) {
+        this.labelGroup.remove(plot.label)
+        plot.label.userData.dispose?.()
+      }
+      plot.dispose()
+      this.neighborPlots.delete(id)
+    }
+    for (const [id, want] of wanted) {
+      if (this.neighborPlots.has(id)) continue
+      // Hashed rather than probed: the friend's own screen sorts out collisions between their
+      // zones, and a colour that depended on which of their repos arrived first would flicker.
+      const accent = PLOT_PALETTE[hashString(want.name) % PLOT_PALETTE.length]
+      const plot = new Plot({ id, name: want.name, index: 0, cells: want.cells, accent })
+      plot.signature = want.signature
+      plot.neighbor = { id: want.n.id, name: want.n.name }
+      this.neighborPlots.set(id, plot)
+      this.plotGroup.add(plot.group)
+      const label = createLabel(want.name, accent)
+      label.position.set(plot.labelAnchor.x, 3.2, plot.labelAnchor.z)
+      plot.label = label
+      this.labelGroup.add(label)
+    }
+
+    const present = new Set(framed.map((n) => n.id))
+    for (const [id, entry] of [...this.neighborShips]) {
+      const off = this.neighborOffsets.get(id)
+      if (!present.has(id) || entry.q !== off.q || entry.r !== off.r) this._removeNeighborShip(id)
+    }
+    for (const n of framed) {
+      const off = this.neighborOffsets.get(n.id)
+      let entry = this.neighborShips.get(n.id)
+      if (!entry) {
+        const spot = hexToWorld(SHIP_CELL.q + off.q, SHIP_CELL.r + off.r)
+        const middle = hexToWorld(off.q, off.r)
+        const ship = new Ship(
+          this.scene,
+          new THREE.Vector3(spot.x, terrainHeight(spot.x, spot.z, this.planet), spot.z),
+          new THREE.Vector3(middle.x, 0, middle.z)
+        )
+        entry = { ship, label: null, text: '', q: off.q, r: off.r }
+        this.neighborShips.set(n.id, entry)
+      }
+      // The minutes live in Settings; the sign only says whether they are here.
+      const text = n.online ? n.name : `${n.name} · away`
+      if (entry.text !== text) {
+        if (entry.label) {
+          this.labelGroup.remove(entry.label)
+          entry.label.userData.dispose?.()
+        }
+        const p = entry.ship.group.position
+        entry.label = createLabel(text, NEIGHBOR_SIGN)
+        entry.label.position.set(p.x, 8.5, p.z)
+        this.labelGroup.add(entry.label)
+        entry.text = text
+      }
+    }
+
+    this.neighborSites = framed.map((n) => this._siteOf(n.id))
+  }
+
+  _removeNeighborShip(id) {
+    const entry = this.neighborShips.get(id)
+    if (!entry) return
+    entry.ship.dispose()
+    if (entry.label) {
+      this.labelGroup.remove(entry.label)
+      entry.label.userData.dispose?.()
+    }
+    this.neighborShips.delete(id)
+  }
+
+  /** A neighbour's flat ground: the middle of everything they hold, and far enough to cover it. */
+  _siteOf(id) {
+    const pts = []
+    for (const plot of this.neighborPlots.values()) {
+      if (plot.neighbor.id !== id) continue
+      for (const l of plot.localCenters) pts.push({ x: plot.center.x + l.x, z: plot.center.z + l.z })
+    }
+    const ship = this.neighborShips.get(id)?.ship.group.position
+    if (ship) pts.push({ x: ship.x, z: ship.z })
+    const x = pts.reduce((s, p) => s + p.x, 0) / pts.length
+    const z = pts.reduce((s, p) => s + p.z, 0) / pts.length
+    const r = Math.max(...pts.map((p) => Math.hypot(p.x - x, p.z - z))) + PLOT_CELL
+    return { id, x: Math.round(x), z: Math.round(z), r: Math.ceil(r) }
+  }
+
+  /** A home plot or a neighbour's, by plot id. */
+  _plotById(id) {
+    return this.plots.get(id) || this.neighborPlots.get(id)
+  }
+
+  /** How far from the middle the furthest zone or ship reaches — what the camera and grid cover. */
+  worldReach() {
+    let r = 0
+    for (const plot of this.worldPlots) {
+      for (const l of plot.localCenters) r = Math.max(r, Math.hypot(plot.center.x + l.x, plot.center.z + l.z))
+    }
+    for (const p of this._shipSpots()) r = Math.max(r, Math.hypot(p.x, p.z))
+    return r + PLOT_CELL * 2
   }
 
   /**
@@ -777,7 +1015,7 @@ export class Colony {
     }
     // Ground clutter counts too. A crate is only knee-high, but an astronaut walking
     // straight through one is exactly as wrong as one walking through a habitat.
-    for (const plot of this.plotOrder) {
+    for (const plot of this.worldPlots) {
       for (const spot of plot.clutterSpots || []) {
         obstacles.push({ x: plot.center.x + spot.x, z: plot.center.z + spot.z, r: spot.r + TRAVEL_RADIUS, keep: spot.r + AGENT_RADIUS + 0.1 })
       }
@@ -818,8 +1056,10 @@ export class Colony {
       }
     }
 
-    const ship = shipPosition()
-    obstacles.push({ x: ship.x, z: ship.z, r: 3.4 + AGENT_RADIUS })
+    for (const ship of this._shipSpots()) obstacles.push({ x: ship.x, z: ship.z, r: 3.4 + AGENT_RADIUS })
+    // Wide enough for every settlement on the map: a neighbour's crew walks this grid too.
+    const half = Math.max(56, Math.ceil((this.worldReach() + 12) / 8) * 8)
+    if (half !== this.nav.half) this.nav.resize(half)
     this.nav.rebuild(obstacles)
   }
 
@@ -827,7 +1067,7 @@ export class Colony {
   plotAt(x, z) {
     let best = null
     let bestD = Infinity
-    for (const plot of this.plotOrder) {
+    for (const plot of this.worldPlots) {
       for (const local of plot.localCenters) {
         const dx = x - (plot.center.x + local.x)
         const dz = z - (plot.center.z + local.z)
@@ -857,7 +1097,7 @@ export class Colony {
     const p = this.camera.projectionMatrix.elements
     let best = null
     let bestDist = Infinity
-    for (const plot of this.plotOrder) {
+    for (const plot of this.worldPlots) {
       const label = plot.label
       if (!label) continue
       // Bent like the shader bends the anchor, so a far plate is hit where it is drawn.
@@ -974,13 +1214,19 @@ export class Colony {
    */
   _updateLabels(dt) {
     const show = this.uiVisible && this.settings.get('showLabels')
-    for (const plot of this.plotOrder) {
+    for (const plot of this.worldPlots) {
       const label = plot.label
       if (!label) continue
       const wanted = show && (this.activePlots.has(plot.id) || this.hoveredPlot === plot) ? 1 : 0
       const next = THREE.MathUtils.damp(label.material.opacity, wanted, 9, dt)
       label.material.opacity = next
       label.visible = next > 0.01
+    }
+    for (const n of this.neighborShips.values()) {
+      if (!n.label) continue
+      const next = THREE.MathUtils.damp(n.label.material.opacity, show ? 1 : 0, 9, dt)
+      n.label.material.opacity = next
+      n.label.visible = next > 0.01
     }
   }
 
@@ -1035,6 +1281,7 @@ export class Colony {
     // One write turns every rotor in the colony.
     buildingUniforms.uTime.value = elapsed
     this.ship.update(dt, elapsed, night)
+    for (const n of this.neighborShips.values()) n.ship.update(dt, elapsed, night)
 
     this._growBuildings(dt)
     this.astronauts.update(dt, elapsed)
@@ -1075,13 +1322,13 @@ export class Colony {
   }
 
   _isLive(id) {
-    const thread = this.threads.get(id)
+    const thread = this.threads.get(id) || this.neighborThreads.get(id)
     return Boolean(thread && thread.running)
   }
 
   /** A site somebody is standing at: running, or stopped waiting on you. */
   _isActive(id) {
-    const thread = this.threads.get(id)
+    const thread = this.threads.get(id) || this.neighborThreads.get(id)
     return Boolean(thread && (thread.running || thread.unread || thread.hasError))
   }
 
@@ -1206,7 +1453,7 @@ export class Colony {
 
   _updatePlots(night, elapsed) {
     const urgent = this.urgentPlots
-    for (const plot of this.plotOrder) plot.setNight(night, urgent?.has(plot.id) ?? false, elapsed)
+    for (const plot of this.worldPlots) plot.setNight(night, urgent?.has(plot.id) ?? false, elapsed)
   }
 
   /** Which buildings have scaffolding up right now, and where its poles stand. */
@@ -1225,7 +1472,7 @@ export class Colony {
         z: p.z,
         y: p.y,
         radius: (entry.mesh.userData.footprint || 1.4) + 0.25,
-        contains: (x, z) => this.plots.get(entry.plot)?.containsWorld(x, z, 0.2),
+        contains: (x, z) => this._plotById(entry.plot)?.containsWorld(x, z, 0.2),
         height: Math.max(0.6, entry.mesh.userData.height * entry.progress + 0.5),
       })
     }
@@ -1265,6 +1512,7 @@ export class Colony {
   }
 
   dispose() {
+    for (const id of [...this.neighborShips.keys()]) this._removeNeighborShip(id)
     this.reflections.dispose()
     this.sky.dispose()
     this.fauna.dispose()
