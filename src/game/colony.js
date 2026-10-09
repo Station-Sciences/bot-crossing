@@ -846,8 +846,9 @@ export class Colony {
         entry = { ship, label: null, text: '', q: off.q, r: off.r }
         this.neighborShips.set(n.id, entry)
       }
-      // The minutes live in Settings; the sign only says whether they are here.
-      const text = n.online ? n.name : `${n.name} · away`
+      // The minutes live in Settings; the sign only says whether they are here, and how your
+      // battles with them have gone (`record`, won–lost, set by the page once there is one).
+      const text = [n.name, n.online ? '' : 'away', n.record || ''].filter(Boolean).join(' · ')
       if (entry.text !== text) {
         if (entry.label) {
           this.labelGroup.remove(entry.label)

@@ -353,15 +353,20 @@ export class Hud {
          <input class="text-input" data-nb="paste" placeholder="Paste a friend's link" spellcheck="false" />
          <button type="button" class="btn" data-nb="add">Add</button>
        </div>
-       <div class="nb-list" data-nb="list"></div>`
+       <div class="nb-list" data-nb="list"></div>
+       <div class="row">
+         <div class="label"><span>War mode</span><span class="hint">Your idle bots can fight friends who also turned this on. Busy bots never fight.</span></div>
+         <button type="button" class="toggle" role="switch" aria-label="War mode" data-nb="war"></button>
+       </div>`
     )
     const el = (name) => g.querySelector(`[data-nb="${name}"]`)
     this.nb = {
       share: el('share'), sharing: el('sharing'), name: el('name'), link: el('link'), copy: el('copy'),
-      rotate: el('rotate'), note: el('note'), paste: el('paste'), add: el('add'), list: el('list'),
+      rotate: el('rotate'), note: el('note'), paste: el('paste'), add: el('add'), list: el('list'), war: el('war'),
     }
     const nb = this.nb
     nb.share.addEventListener('click', () => this.actions.toggleSharing?.())
+    nb.war.addEventListener('click', () => this.actions.toggleWar?.())
     nb.name.addEventListener('change', () => this.actions.setShareName?.(nb.name.value))
     nb.copy.addEventListener('click', () => this.actions.copyShareLink?.())
     nb.rotate.addEventListener('click', () => this.actions.rotateShareKey?.())
@@ -639,13 +644,20 @@ export class Hud {
   setNeighbors(model) {
     if (!this.nb || !model) return
     const { sharing, neighbors, full } = model
+    const war = model.war || { enabled: false }
     const now = Date.now()
-    const signature = JSON.stringify([sharing, full, neighbors.map((n) => [n.id, n.name, n.status, describeNeighbor(n.status, n.lastSeenAt, now)])])
+    const signature = JSON.stringify([
+      sharing,
+      full,
+      war,
+      neighbors.map((n) => [n.id, n.name, n.status, describeNeighbor(n.status, n.lastSeenAt, now), n.record, n.attack]),
+    ])
     if (this._last.neighbors === signature) return
     this._last.neighbors = signature
 
     const nb = this.nb
     nb.share.setAttribute('aria-checked', String(sharing.enabled))
+    nb.war.setAttribute('aria-checked', String(war.enabled))
     nb.sharing.hidden = !sharing.enabled
     if (document.activeElement !== nb.name) nb.name.value = sharing.name
     nb.link.textContent = sharing.link || (sharing.error ? '—' : 'Opening the share port…')
@@ -664,6 +676,7 @@ export class Hud {
       row.innerHTML =
         `<i class="nb-dot ${n.status}"></i>` +
         `<span class="n">${escapeHtml(n.name)}</span>` +
+        (n.record ? `<span class="nb-record" title="Battles won–lost">${escapeHtml(n.record)}</span>` : '') +
         `<span class="s">${escapeHtml(describeNeighbor(n.status, n.lastSeenAt, now))}</span>`
       const remove = document.createElement('button')
       remove.type = 'button'
@@ -680,6 +693,8 @@ export class Hud {
     const side = this.$('.neighbors')
     side.innerHTML = ''
     for (const n of neighbors) {
+      const item = document.createElement('div')
+      item.className = 'nb-item'
       const b = document.createElement('button')
       b.type = 'button'
       b.className = 'repo'
@@ -689,8 +704,44 @@ export class Hud {
         `<span class="n">${escapeHtml(n.name)}</span>` +
         `<span class="count">${escapeHtml(describeNeighbor(n.status, n.lastSeenAt, now))}</span>`
       b.addEventListener('click', () => this.actions.focusNeighbor?.(n.id))
-      side.appendChild(b)
+      item.appendChild(b)
+      // Only offered once you have opted in: with war mode off there is nothing to press and
+      // nothing to explain, and a sword on every friend's row would be a strange thing to see.
+      if (war.enabled) {
+        const attack = document.createElement('button')
+        attack.type = 'button'
+        attack.className = 'btn nb-attack'
+        attack.textContent = '⚔ Attack'
+        attack.disabled = Boolean(n.attack)
+        attack.title = n.attack || `Send your idle bots against ${n.name}'s`
+        attack.addEventListener('click', () => this.actions.attack?.(n.id))
+        item.appendChild(attack)
+      }
+      side.appendChild(item)
     }
+  }
+
+  /**
+   * The battle banner, top centre: attacker first, the knockouts each side has landed, and the
+   * fight clock. `view` is `{ side, name, score: { attack, defend }, label }`, or null to hide it.
+   */
+  setBattleBanner(view) {
+    const signature = view ? JSON.stringify(view) : ''
+    if (this._last.banner === signature) return
+    this._last.banner = signature
+    const el = this.$('.war-banner')
+    el.hidden = !view
+    if (!view) return
+    const them = escapeHtml(view.name)
+    const defending = view.side === 'defend'
+    el.classList.toggle('defend', defending)
+    el.innerHTML =
+      (defending ? `<span class="call">${them} attacks!</span>` : '') +
+      `<span class="who">${defending ? them : 'You'}</span>` +
+      '<span class="vs">⚔</span>' +
+      `<span class="who">${defending ? 'You' : them}</span>` +
+      `<span class="score">${view.score.attack} : ${view.score.defend}</span>` +
+      `<span class="clock">${escapeHtml(view.label)}</span>`
   }
 
   toggleHiddenList() {
@@ -1270,6 +1321,7 @@ const TEMPLATE = `
   </div>
 </div>
 
+<div class="war-banner panel" hidden></div>
 <div class="toasts"></div>
 <div class="fps panel"></div>
 <div class="hint-pill panel"></div>

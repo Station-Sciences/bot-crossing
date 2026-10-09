@@ -29,6 +29,9 @@ import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-project
 import { withErrands } from './game/errands.js'
 import { canGrab } from './agents/carry.js'
 import { NEIGHBOR_CAP, addNeighbor, hydrateNeighbors, newShareKey, removeNeighbor, shareLink } from './game/neighbors.js'
+import { battleLive, newBattle, planBattle, scoreAt, warTag } from './game/war.js'
+import { eligibleFighters } from './game/war-director.js'
+import { attackBlocker, bannerPhase, formatRecord, friendFighters, incomingBattle, recordResult, resultText } from './game/war-page.js'
 
 /**
  * Boot and the outer game loop.
@@ -70,7 +73,7 @@ engine.setPlanetGrade(PLANETS[settings.get('planet')]?.grade)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, sharing: { enabled: false, key: '', name: '' }, neighbors: [] }
+let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, sharing: { enabled: false, key: '', name: '' }, neighbors: [], war: { enabled: false, battle: null, tally: {}, seen: [] } }
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -87,6 +90,20 @@ const hoverGround = new THREE.Vector3()
 let neighborResults = []
 /** Whether our own share port is open, and on what address — `GET /api/sharing`. */
 let sharingInfo = null
+/** Friends as last handed to the colony: their hydrated threads, their battle, and our record against them. */
+let hydrated = []
+/**
+ * War tags are SHA-256, and `crypto.subtle` only exists on a secure origin. localhost is one; the
+ * page opened by LAN address is not. Without it there is no attacking and no noticing an attack,
+ * and the page says so rather than throwing.
+ */
+const warSecure = Boolean(globalThis.crypto?.subtle)
+/** Our own war tag, made once per share key: what a friend's battle names when it is aimed at us. */
+let warTagFor = { key: null, tag: '' }
+/** The battle on screen — `{ battle, side, neighborId, plan }` — or null. */
+let warNow = null
+let attacking = false
+let lastWarSync = 0
 
 // ── actions the HUD can trigger ────────────────────────────────────────────────────────
 
@@ -383,6 +400,59 @@ const actions = {
     await saveNow()
     applyThreads(threads)
     hud.setNeighbors(neighborModel())
+  },
+
+  // ── war ────────────────────────────────────────────────────────────────────────────
+
+  /** Consent, published as `warReady`. Turning it off also calls off a battle you started. */
+  toggleWar: async () => {
+    const previous = state.war
+    const current = previous || { enabled: false, battle: null, tally: {}, seen: [] }
+    const enabled = !current.enabled
+    state.war = { ...current, enabled, battle: enabled ? current.battle : null }
+    // Friends read it off the share port, which follows the file: unsaved, it did not happen.
+    if (!(await saveNow())) {
+      state.war = previous
+      hud.setNeighbors(neighborModel())
+      return
+    }
+    syncWar()
+    hud.setNeighbors(neighborModel())
+    hud.hint(enabled ? 'War mode on — attack a friend from the sidebar' : 'War mode off')
+  },
+
+  attack: async (id) => {
+    if (attacking) return
+    const entry = neighborModel().neighbors.find((n) => n.id === id)
+    const saved = (state.neighbors || []).find((n) => n.id === id)
+    if (!entry || !saved) return
+    if (entry.attack) {
+      hud.hint(entry.attack)
+      return
+    }
+    attacking = true
+    try {
+      // Counted again here, on the numbers that go into the battle: a side with nobody on it is
+      // not a battle, and `newBattle` itself does not refuse one.
+      const attackers = eligibleFighters(colony.astronauts.agents, null).length
+      const defenders = friendFighters(hydrated.find((n) => n.id === id)?.threads)
+      if (attackers < 1 || defenders < 1) return
+      const battle = await newBattle({ targetNeighborId: id, targetKey: saved.key, attackers, defenders })
+      const previous = state.war
+      state.war = { ...(state.war || {}), battle }
+      // The friend learns of it from our snapshot, which is read from the file.
+      if (!(await saveNow())) {
+        state.war = previous
+        return
+      }
+      syncWar()
+      hud.hint(`Your bots are marching on ${entry.name}`)
+    } catch (err) {
+      hud.toast(err.message || 'Could not start the battle', 'err')
+    } finally {
+      attacking = false
+      hud.setNeighbors(neighborModel())
+    }
   },
 
   focusNeighbor: (id) => {
@@ -1096,7 +1166,9 @@ function applyThreads(list) {
   }
   if (firstSeen) queueSave()
 
-  const stats = colony.setThreads(list, archivedSet, hiddenSet, known, hydrateNeighbors(state.neighbors, neighborResults))
+  const tally = state.war?.tally || {}
+  hydrated = hydrateNeighbors(state.neighbors, neighborResults).map((n) => ({ ...n, record: formatRecord(tally[n.id]) }))
+  const stats = colony.setThreads(list, archivedSet, hiddenSet, known, hydrated)
   rig.setWorldLimit(colony.worldReach())
   hud.setStats(stats)
   chimeForNewWaiting(list, archivedSet, hiddenSet)
@@ -1172,6 +1244,7 @@ async function poll() {
     ])
     if (nb) neighborResults = nb.neighbors || []
     applyThreads(res.threads || [])
+    syncWar()
     hud.setNeighbors(neighborModel())
     hud.removeBoot()
   } catch (err) {
@@ -1196,6 +1269,7 @@ async function pollNeighbors() {
     if (!nb) return
     neighborResults = nb.neighbors || []
     applyThreads(threads)
+    syncWar()
     hud.setNeighbors(neighborModel())
   } finally {
     pollingNeighbors = false
@@ -1234,9 +1308,12 @@ const hostOf = (url) => {
 /** Everything Settings → Neighbors and the sidebar list show, from state plus the last fetch. */
 function neighborModel() {
   const sharing = state.sharing || {}
+  const war = state.war || {}
   const info = sharingInfo
   const byId = new Map(neighborResults.map((r) => [r.id, r]))
   const noAddress = sharing.enabled && info?.listening && !info.lanAddress
+  const homeFighters = eligibleFighters(colony.astronauts.agents, null).length
+  const busy = Boolean(warNow) || battleLive(war.battle)
   return {
     sharing: {
       enabled: Boolean(sharing.enabled),
@@ -1246,10 +1323,120 @@ function neighborModel() {
     },
     neighbors: (state.neighbors || []).map((n) => {
       const r = byId.get(n.id)
-      return { id: n.id, name: r?.snapshot?.name || hostOf(n.url), status: r?.status || 'unreachable', lastSeenAt: r?.lastSeenAt || 0 }
+      const name = r?.snapshot?.name || hostOf(n.url)
+      const attack = attackBlocker({
+        secure: warSecure,
+        enabled: war.enabled === true,
+        sharing: Boolean(sharing.enabled),
+        result: r,
+        name,
+        busy,
+        homeFighters,
+        friendFighters: friendFighters(hydrated.find((h) => h.id === n.id)?.threads),
+      })
+      return {
+        id: n.id,
+        name,
+        status: r?.status || 'unreachable',
+        lastSeenAt: r?.lastSeenAt || 0,
+        record: formatRecord(war.tally?.[n.id]),
+        attack,
+      }
     }),
     full: (state.neighbors || []).length >= NEIGHBOR_CAP,
+    war: { enabled: war.enabled === true },
   }
+}
+
+/** A friend's name as their own snapshot gives it, or their address before they have answered. */
+function friendName(id) {
+  const r = neighborResults.find((x) => x.id === id)
+  const saved = (state.neighbors || []).find((n) => n.id === id)
+  return r?.snapshot?.name || (saved ? hostOf(saved.url) : 'Neighbor')
+}
+
+/** Hash our share key into the tag a friend's battle would carry — once per key, not once per poll. */
+function refreshWarTag() {
+  const key = state.sharing?.key || ''
+  if (!warSecure || key === warTagFor.key) return
+  warTagFor = { key, tag: '' }
+  if (!key) return
+  warTag(key)
+    .then((tag) => {
+      if (warTagFor.key === key) warTagFor.tag = tag
+    })
+    .catch(() => {
+      /* no tag, so no incoming battles: the colony carries on as if nobody attacked */
+    })
+}
+
+/**
+ * War mode's one loop, run on every poll and a few times a second from the frame. Decides which
+ * battle is on screen — our own attack first, else a friend's attack aimed at us — hands it to the
+ * colony, keeps the banner's score and clock current, and counts the result once when it ends.
+ */
+function syncWar(now = Date.now()) {
+  lastWarSync = now
+  refreshWarTag()
+  const own = state.war?.battle
+  // Our own battle, gone past its linger, leaves the file. Counted first in case this page was
+  // closed through its end: the plan is the same whenever it is run, so the result still stands.
+  if (own && !battleLive(own, now)) {
+    countResult({ battle: own, side: 'attack', neighborId: own.targetNeighborId })
+    state.war = { ...state.war, battle: null }
+    queueSave()
+  }
+
+  let next = null
+  if (state.war?.battle) {
+    const b = state.war.battle
+    next = { battle: b, side: 'attack', neighborId: b.targetNeighborId }
+  } else if (state.war?.enabled && warTagFor.tag) {
+    // One battle at a time: we only look for an attack on us while we are not attacking anyone.
+    const hit = incomingBattle(hydrated, warTagFor.tag, now, warNow?.side === 'defend' ? warNow.battle.id : null)
+    if (hit) next = { battle: hit.battle, side: 'defend', neighborId: hit.neighborId }
+  }
+
+  if (!next?.neighborId) {
+    if (warNow) {
+      warNow = null
+      colony.setBattle(null)
+      hud.setBattleBanner(null)
+      hud.setNeighbors(neighborModel())
+    }
+    return
+  }
+  if (warNow?.battle.id !== next.battle.id || warNow.side !== next.side) {
+    warNow = { ...next, plan: planBattle(next.battle) }
+    hud.setNeighbors(neighborModel())
+  }
+  colony.setBattle(next.battle, { side: next.side, enemyNeighborId: next.neighborId })
+
+  const view = bannerPhase(warNow.plan, next.battle.startedAt, now)
+  if (!view) {
+    hud.setBattleBanner(null)
+    countResult(warNow)
+    return
+  }
+  hud.setBattleBanner({
+    side: next.side,
+    name: friendName(next.neighborId),
+    score: scoreAt(warNow.plan, next.battle.startedAt, now),
+    label: view.label,
+  })
+}
+
+/** A finished battle into the tally — once per battle id, whichever tab or reload sees it end. */
+function countResult({ battle, side, neighborId }) {
+  if (!neighborId) return
+  const result = recordResult(state.war, { battle, side, neighborId }, planBattle(battle))
+  if (!result) return
+  state.war = result.war
+  queueSave()
+  hud.toast(resultText(friendName(neighborId), result))
+  // The record is on their ship's sign, which is drawn with the roster.
+  applyThreads(threads)
+  hud.setNeighbors(neighborModel())
 }
 
 function queueSave() {
@@ -1351,6 +1538,9 @@ engine.add({
     // colony projects anything to the screen.
     setCurveView(rig.target, rig.azimuth, settings.get('worldCurve') * CURVE_FULL)
     colony.update(dt, elapsed, rig.target)
+    // The banner's clock ticks in seconds; four looks a second keep it, and the moment a battle is
+    // counted, within a quarter second of the plan on both screens.
+    if (Date.now() - lastWarSync > 250) syncWar()
     // Whatever the camera is orbiting is what should be in focus.
     engine.setFocusDistance(rig.distance)
 
