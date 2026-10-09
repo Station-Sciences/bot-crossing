@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
 
-import { createSword, createGun, createTank, createHelicopter, dispose } from '../src/world/arsenal.js'
+import { createSword, createGun, createTank, createHelicopter, createBall, dispose } from '../src/world/arsenal.js'
 
 function size(group) {
   group.updateMatrixWorld(true)
@@ -26,6 +26,16 @@ test('sword is about 0.7 long', () => {
   assert.ok(g.isGroup)
   const s = size(g)
   nearly(Math.max(s.x, s.y, s.z), 0.7)
+})
+
+test('ball is about 0.35 across and rests on the ground', () => {
+  const g = createBall()
+  assert.ok(g.isGroup)
+  const s = size(g)
+  nearly(Math.max(s.x, s.y, s.z), 0.35)
+  const box = new THREE.Box3().setFromObject(g)
+  assert.ok(Math.abs(box.min.y) < 0.01, 'bottom sits at y = 0')
+  dispose(g)
 })
 
 test('gun is about 0.5 long and has a muzzle', () => {

@@ -44,6 +44,8 @@ export const FACE = {
   strollLookRight: 24,
   strollBlinkLeft: 25,
   strollBlinkRight: 26,
+  // Takes the last free cell of the 4x7 atlas, so nothing above moves.
+  grumpy: 27,
 }
 
 // Long, quiet holds with the occasional change of mood. Mouth positions go through the
@@ -406,6 +408,22 @@ const DRAW = {
     ctx.lineTo(EYE_R - 0.08, EYE_Y - 0.17)
     ctx.stroke()
     smile(ctx, 0.79, 0.22, -0.09)
+  },
+
+  // Cross with someone: flat narrowed eyes under brows that slant down toward the nose, and a
+  // level mouth. The brows are what separate it from `sad` (which droops outward) and from
+  // `error` (crossed-out eyes, wobbly mouth).
+  grumpy(ctx) {
+    eye(ctx, EYE_L, EYE_Y + 0.03, 0.15, 0.09)
+    eye(ctx, EYE_R, EYE_Y + 0.03, 0.15, 0.09)
+    ctx.lineWidth = 0.055
+    ctx.beginPath()
+    ctx.moveTo(EYE_L - 0.1, EYE_Y - 0.12)
+    ctx.lineTo(EYE_L + 0.09, EYE_Y - 0.04)
+    ctx.moveTo(EYE_R + 0.1, EYE_Y - 0.12)
+    ctx.lineTo(EYE_R - 0.09, EYE_Y - 0.04)
+    ctx.stroke()
+    smile(ctx, 0.77, 0.2, 0, 0.05)
   },
 }
 

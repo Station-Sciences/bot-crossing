@@ -228,6 +228,23 @@ export function createHelicopter(accent = 0x4aa3df) {
   return group
 }
 
+/**
+ * A ball for the bots to play with, 0.35 across and resting on y = 0 with its centre at 0.175.
+ * Two paint colours split along a band round the middle, so a roll is visible as it spins.
+ */
+export function createBall() {
+  const group = new THREE.Group()
+  group.name = 'ball'
+  const r = 0.175
+  const b = new Builder()
+  // Top and bottom caps in toy red, with a cream band between them.
+  b.add(new THREE.SphereGeometry(r, 12, 5, 0, Math.PI * 2, 0, Math.PI * 0.36), 0xc96442, 'paint', [0, r, 0])
+  b.add(new THREE.SphereGeometry(r, 12, 5, 0, Math.PI * 2, Math.PI * 0.64, Math.PI * 0.36), 0xc96442, 'paint', [0, r, 0])
+  b.add(new THREE.SphereGeometry(r, 12, 4, 0, Math.PI * 2, Math.PI * 0.36, Math.PI * 0.28), 0xf1e6d2, 'paint', [0, r, 0])
+  group.add(...b.meshes())
+  return group
+}
+
 /** Free every geometry and material under `group`. The meshes own theirs; nothing is shared. */
 export function dispose(group) {
   group.traverse((o) => {
