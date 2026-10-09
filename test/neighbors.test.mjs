@@ -252,3 +252,10 @@ test('warReady must be a real boolean', () => {
   assert.equal(validateSnapshot(goodSnapshot({ warReady: 'true' })).snapshot.warReady, false)
   assert.equal(validateSnapshot(goodSnapshot({ warReady: 1 })).snapshot.warReady, false)
 })
+
+test('warBusy passes only as a real true', () => {
+  assert.equal(validateSnapshot(goodSnapshot({ warBusy: true })).snapshot.warBusy, true)
+  assert.equal(validateSnapshot(goodSnapshot()).snapshot.warBusy, false)
+  assert.equal(validateSnapshot(goodSnapshot({ warBusy: 'true' })).snapshot.warBusy, false)
+  assert.equal(validateSnapshot(goodSnapshot({ warBusy: { by: 'nb_1' } })).snapshot.warBusy, false)
+})

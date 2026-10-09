@@ -73,7 +73,7 @@ export function validateSnapshot(json) {
   return {
     ok: true,
     snapshot: { v: 1, name: str(json.name).slice(0, 40) || 'Neighbor', generatedAt: num(json.generatedAt),
-      warReady: json.warReady === true, battle: cleanBattle(json.battle), projects, threads },
+      warReady: json.warReady === true, warBusy: json.warBusy === true, battle: cleanBattle(json.battle), projects, threads },
   }
 }
 

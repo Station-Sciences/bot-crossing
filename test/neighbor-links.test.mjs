@@ -129,4 +129,7 @@ test('war readiness and an announced battle pass through to the page, and defaul
   const [off] = hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'online', lastSeenAt: 9, snapshot }])
   assert.equal(off.warReady, false)
   assert.equal(off.battle, null)
+  assert.equal(off.warBusy, false)
+  const [busy] = hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'online', lastSeenAt: 9, snapshot: { ...snapshot, warBusy: true } }])
+  assert.equal(busy.warBusy, true)
 })

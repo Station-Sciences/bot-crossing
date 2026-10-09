@@ -6,8 +6,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { MARCH_MS, battleLive, planBattle } from '../src/game/war.js'
 import {
-  FUTURE_SLACK_MS, SEEN_CAP, attackBlocker, bannerPhase, clock, formatRecord, friendFighters, incomingBattle,
-  recordResult, resultText,
+  FUTURE_SLACK_MS, SEEN_CAP, attackBlocker, bannerPhase, clock, formatRecord, friendFighters, friendInBattle,
+  incomingBattle, recordResult, resultText,
 } from '../src/game/war-page.js'
 
 const ready = {
@@ -46,6 +46,18 @@ test('a friend whose own snapshot carries a live battle is busy; one long over i
   assert.match(blocker(b.startedAt + 1000), /Mark is already in a battle/)
   assert.equal(blocker(end + 1), '')
   assert.equal(attackBlocker({ ...ready, friendBusy: battleLive(null) }), '')
+})
+
+test('a friend who is defending against someone else is busy too, though their own battle is null', () => {
+  const b = battle()
+  const now = b.startedAt + 1000
+  const defending = { warReady: true, warBusy: true, battle: null }
+  assert.equal(friendInBattle(defending, now), true)
+  assert.equal(attackBlocker({ ...ready, friendBusy: friendInBattle(defending, now) }), 'Mark is already in a battle')
+  assert.equal(friendInBattle({ warReady: true, battle: b }, now), true)
+  assert.equal(friendInBattle({ warReady: true, warBusy: false, battle: null }, now), false)
+  assert.equal(friendInBattle({ warReady: true, warBusy: 'yes', battle: null }, now), false)
+  assert.equal(friendInBattle(undefined, now), false)
 })
 
 test('only a battle aimed at our tag is incoming', () => {

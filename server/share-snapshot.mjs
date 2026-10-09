@@ -119,6 +119,9 @@ export function buildSnapshot({ threads, state, now = Date.now(), name = '' }) {
     // left out on purpose: the target is only a tag, so other friends cannot read a name from it.
     warReady: state.war?.enabled === true,
     battle: battleLive(state.war?.battle, now) ? cleanBattle(state.war.battle) : null,
+    // A battle someone else started on us is in *their* snapshot, not ours, so without this a third
+    // friend would see us free and attack while we are defending. A bare yes: it says nothing of who.
+    warBusy: Number.isFinite(state.war?.busyUntil) && now < state.war.busyUntil,
     threads: names.flatMap((n) => byProject.get(n).map((t) => toShared(t, key, shared.get(n)))),
   }
 }

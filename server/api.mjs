@@ -98,7 +98,11 @@ function asNeighbors(v) {
     .slice(0, 6)
 }
 
-/** Peace unless the file says otherwise; the tally is whole-number counts per friend and `seen` is a short memory of battles already settled. */
+/**
+ * Peace unless the file says otherwise; the tally is whole-number counts per friend and `seen` is a
+ * short memory of battles already settled. `busyUntil` is when a battle we are defending stops
+ * being shown: the snapshot turns it into a bare `warBusy`, so nobody picks a second fight with us.
+ */
 function asWar(v) {
   const o = asObject(v)
   const count = (n) => (Number.isInteger(n) && n > 0 ? n : 0)
@@ -112,6 +116,7 @@ function asWar(v) {
     battle: cleanBattle(o.battle, { allowLocal: true }),
     tally,
     seen: asArray(o.seen).filter((s) => typeof s === 'string').slice(0, 50),
+    busyUntil: Number.isFinite(o.busyUntil) && o.busyUntil > 0 ? o.busyUntil : 0,
   }
 }
 

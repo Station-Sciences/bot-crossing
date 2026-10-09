@@ -39,6 +39,14 @@ export function attackBlocker({ secure, enabled, sharing, result, name, homeFigh
 }
 
 /**
+ * Whether a friend's snapshot says they are in a battle: one they started, or — as a bare
+ * `warBusy`, since the battle itself is in the attacker's snapshot — one they are defending.
+ */
+export function friendInBattle(snapshot, now = Date.now()) {
+  return snapshot?.warBusy === true || battleLive(snapshot?.battle, now)
+}
+
+/**
  * The friend whose snapshot says they are attacking us, if any. A battle we are already showing
  * keeps its place over a newer one; otherwise the one that started first wins. A battle claiming
  * to start more than a minute from now is a clock we cannot trust, and is ignored.

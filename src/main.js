@@ -29,9 +29,11 @@ import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-project
 import { withErrands } from './game/errands.js'
 import { canGrab } from './agents/carry.js'
 import { NEIGHBOR_CAP, addNeighbor, hydrateNeighbors, newShareKey, removeNeighbor, shareLink } from './game/neighbors.js'
-import { battleLive, newBattle, planBattle, scoreAt, warTag } from './game/war.js'
+import { LINGER_MS, battleLive, newBattle, planBattle, scoreAt, warTag } from './game/war.js'
 import { eligibleFighters } from './game/war-director.js'
-import { attackBlocker, bannerPhase, formatRecord, friendFighters, incomingBattle, recordResult, resultText } from './game/war-page.js'
+import {
+  attackBlocker, bannerPhase, formatRecord, friendFighters, friendInBattle, incomingBattle, recordResult, resultText,
+} from './game/war-page.js'
 
 /**
  * Boot and the outer game loop.
@@ -73,7 +75,7 @@ engine.setPlanetGrade(PLANETS[settings.get('planet')]?.grade)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, sharing: { enabled: false, key: '', name: '' }, neighbors: [], war: { enabled: false, battle: null, tally: {}, seen: [] } }
+let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, sharing: { enabled: false, key: '', name: '' }, neighbors: [], war: { enabled: false, battle: null, tally: {}, seen: [], busyUntil: 0 } }
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -404,12 +406,12 @@ const actions = {
 
   // ── war ────────────────────────────────────────────────────────────────────────────
 
-  /** Consent, published as `warReady`. Turning it off also calls off a battle you started. */
+  /** Consent, published as `warReady`. Turning it off also calls off a battle you started, and stops showing one you were defending. */
   toggleWar: async () => {
     const previous = state.war
-    const current = previous || { enabled: false, battle: null, tally: {}, seen: [] }
+    const current = previous || { enabled: false, battle: null, tally: {}, seen: [], busyUntil: 0 }
     const enabled = !current.enabled
-    state.war = { ...current, enabled, battle: enabled ? current.battle : null }
+    state.war = { ...current, enabled, battle: enabled ? current.battle : null, busyUntil: enabled ? current.busyUntil : 0 }
     // Friends read it off the share port, which follows the file: unsaved, it did not happen.
     if (!(await saveNow())) {
       state.war = previous
@@ -1335,7 +1337,7 @@ function neighborModel() {
         result: r,
         name,
         busy,
-        friendBusy: battleLive(r?.snapshot?.battle, now),
+        friendBusy: friendInBattle(r?.snapshot, now),
         homeFighters,
         friendFighters: friendFighters(hydrated.find((h) => h.id === n.id)?.threads),
       })
@@ -1413,6 +1415,15 @@ function syncWar(now = Date.now()) {
   }
   if (warNow?.battle.id !== next.battle.id || warNow.side !== next.side) {
     warNow = { ...next, plan: planBattle(next.battle) }
+    if (next.side === 'defend') {
+      // The battle is in the attacker's snapshot, not ours: say in ours that we are busy until it
+      // has lingered, or a third friend would see us free and start a fight we never show.
+      const busyUntil = next.battle.startedAt + warNow.plan.durationMs + LINGER_MS
+      if (state.war?.busyUntil !== busyUntil) {
+        state.war = { ...state.war, busyUntil }
+        queueSave()
+      }
+    }
     hud.setNeighbors(neighborModel())
   }
   colony.setBattle(next.battle, { side: next.side, enemyNeighborId: next.neighborId })

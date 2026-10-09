@@ -172,3 +172,14 @@ test('a battle is announced while live and gone after it has lingered, and never
   const later = buildSnapshot({ threads: [], state, now: NOW + 10 * 60_000 })
   assert.equal(later.battle, null)
 })
+
+test('warBusy says we are defending until that battle has lingered, and nothing about who', () => {
+  const state = baseState({ war: { enabled: true, battle: null, busyUntil: NOW + 60_000 } })
+  const busy = buildSnapshot({ threads: [], state, now: NOW })
+  assert.equal(busy.warBusy, true)
+  assert.equal(busy.battle, null)
+  assert.doesNotMatch(JSON.stringify(busy), /busyUntil/)
+  assert.equal(buildSnapshot({ threads: [], state, now: NOW + 60_000 }).warBusy, false)
+  assert.equal(buildSnapshot({ threads: [], state: baseState(), now: NOW }).warBusy, false)
+  assert.equal(buildSnapshot({ threads: [], state: baseState({ war: { busyUntil: 'soon' } }), now: NOW }).warBusy, false)
+})

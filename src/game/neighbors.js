@@ -105,6 +105,7 @@ export function hydrateNeighbors(saved, results, now = Date.now()) {
       status: r.status,
       lastSeenAt: r.lastSeenAt,
       warReady: r.snapshot.warReady === true,
+      warBusy: r.snapshot.warBusy === true,
       battle: r.snapshot.battle ?? null,
       projects: r.snapshot.projects,
       threads: capNeighborThreads(r.snapshot.threads.filter((t) => online || !t.isErrand), NEIGHBOR_THREAD_CAP, now)
