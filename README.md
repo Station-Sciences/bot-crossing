@@ -348,8 +348,9 @@ it on too, so both of you have to agree to it.
 
 - **Attack:** each friend in the sidebar's Neighbors list gets an *Attack* button. It works when
   you are sharing, the friend is online with war mode on, both sides have at least one free bot,
-  and neither you nor they are already in a battle. When it is greyed out, hover over it to see
-  why. War mode needs the page opened on `localhost`, not on a network address.
+  and neither you nor they are already in a battle, attacking or defending. When it is greyed
+  out, hover over it to see why. War mode needs the page opened on `localhost`, not on a network
+  address.
 - **Only idle and sleeping bots fight.** Bots that are working, waiting on you, stuck or celebrating never fight.
   If a fighter's thread wakes up mid-battle, it drops its weapon and goes back to work. Each side
   fields at most 30 bots. A big side brings tanks and helicopters.
@@ -366,7 +367,9 @@ it on too, so both of you have to agree to it.
 
 Your friend finds out about an attack from your share link, which they already check every few
 seconds. The share port stays read-only. The battle only names its target as a hash of that
-friend's share key, so other friends reading your link cannot tell who is being attacked.
+friend's share key mixed with the battle's own id, so friends who do not have that friend's link
+cannot tell who is being attacked, and the hash is different every battle. While you are
+defending, your own link says only that you are busy, not who is attacking you.
 
 ## Planets and light
 

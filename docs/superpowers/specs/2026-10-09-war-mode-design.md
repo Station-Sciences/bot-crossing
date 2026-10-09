@@ -30,14 +30,18 @@ Both screens show the same battle: the same winner, the same score, the same pac
 
 1. Attacker presses **Attack** on a neighbour. The page writes `state.war.battle`:
    `{ id, target, seed, startedAt, attackers, defenders, targetNeighborId }`.
-   - `target` = first 16 hex of `sha256('war:' + defenderShareKey)`. Only the defender's machine
-     (which knows its own key) recognises itself; other friends reading the attacker's snapshot
-     cannot tell who is being attacked.
+   - `target` = first 16 hex of `sha256('war:' + battleId + ':' + defenderShareKey)`. Only the
+     defender's machine (which knows its own key) recognises itself, hashing its key once per
+     announced battle id; friends who do not hold the defender's link cannot tell who is being
+     attacked. Salting with the battle id makes the tag new every battle, so a friend who does
+     hold that link cannot hash it once and spot every later attack on that person.
    - `attackers` / `defenders` = how many idle bots each side has at that moment, from the
      attacker's view, each capped at 30. Both must be ≥ 1.
    - `targetNeighborId` is local only and never shared.
 2. The attacker's server includes `warReady` and `battle` (without `targetNeighborId`) in its
-   snapshot while the battle is live (until 30 s after it ends).
+   snapshot while the battle is live (until 30 s after it ends). The defender, on adopting the
+   battle, saves `war.busyUntil` (that battle's end + 30 s); its snapshot publishes the bare
+   boolean `warBusy` until then, so a third friend sees it as busy without learning who attacked.
 3. Every screen involved runs the same pure `planBattle({ seed, attackers, defenders })`, which
    returns the knockout timeline, the vehicles, the winner and the score. Each screen plays that
    timeline with the bots it can see. Exact bot-for-bot choreography may differ between screens;
@@ -69,21 +73,23 @@ Both screens show the same battle: the same winner, the same score, the same pac
 
 - **Settings → Neighbors → War mode** toggle (off by default). Published as `warReady`.
 - **Attack** button on each neighbour row in the sidebar. Enabled only when: war mode is on,
-  the friend is online and war-ready, both sides have an idle bot, and no battle involving you
-  is live.
+  the friend is online and war-ready, both sides have an idle bot, no battle involving you is
+  live, and the friend's snapshot shows neither a live `battle` of theirs nor `warBusy`.
 - **Battle banner** at the top while a battle is live: `You ⚔ Mark · 3 : 1 · 0:42` (attacker
   first), or `Mark attacks! …` on the defender's screen.
 - A toast with the result when it ends.
 
 ## Data
 
-- `colony.json` gains `war: { enabled, battle, tally, seen }` — `seen` is the last 50 battle ids
-  already tallied. Merged whole across tabs.
-- Snapshot gains optional `warReady: boolean` and `battle: { id, target, seed, startedAt,
-  attackers, defenders } | null`. Version stays `v: 1`: the fields are additive and an older
-  validator drops them.
-- `validateSnapshot` checks them strictly: id `/^war_[0-9a-z_]{1,40}$/`, target 16 hex, seed an
-  integer in 0..2³²−1, `startedAt` finite, fighter counts integers 1..30; anything else → no battle.
+- `colony.json` gains `war: { enabled, battle, tally, seen, busyUntil }` — `seen` is the last 50
+  battle ids already tallied; `busyUntil` (ms, 0 at peace) is when the battle we are defending
+  stops lingering. Merged whole across tabs.
+- Snapshot gains optional `warReady: boolean`, `warBusy: boolean` (`now < busyUntil`) and
+  `battle: { id, target, seed, startedAt, attackers, defenders } | null`. Version stays `v: 1`: the
+  fields are additive and an older validator drops them.
+- `validateSnapshot` checks them strictly: `warReady` and `warBusy` only as a real `true`; id
+  `/^war_[0-9a-z_]{1,40}$/`, target 16 hex, seed an integer in 0..2³²−1, `startedAt` finite,
+  fighter counts integers 1..30; anything else → no battle.
 
 ## Decisions (made for speed; each is cheap to change)
 
@@ -92,6 +98,12 @@ Both screens show the same battle: the same winner, the same score, the same pac
 - Knockout rate per 1 s tick for a side = `0.6 × enemyPower / (ownPower + enemyPower)`, where
   power = fighters standing + 3 per tank + 2 per helicopter.
 - One live battle per person at a time, attacking or defending.
+- An incoming battle is read off a friend's snapshot, so the defender does not take it on trust:
+  the battle on screen keeps the numbers it was first seen with (the same id with a new seed,
+  start or head count is ignored); an id already in `seen` is not shown again; a friend's battle
+  that starts before their last one on us ended is ignored (kept in memory), so a finished battle
+  re-announced under fresh ids is one loss, not one per poll; and a battle with a friend who has
+  been removed is called off without a tally entry or a toast.
 - Clocks: `startedAt` is the attacker's clock; LAN machines are NTP-synced to within a second,
   which is good enough for a 60 s show.
 
