@@ -109,3 +109,24 @@ without knowing about it and pick their uniforms up from the material prototype'
 has to call `withCurve(shader)` itself — otherwise its uniforms are zero, it stays flat, and
 it floats above the ground that bent away under it. Same for a custom depth material, or its
 shadow stays flat while it does not.
+
+## What a friend sees is an allowlist
+
+`server/share-snapshot.mjs` builds every shared thread field by field from a fixed list:
+`project`, `harness`, `harnessName`, the four status flags, the two timestamps floored to the
+minute, a size bucket, and a salted hash for an id. Nothing is deleted from a thread to make it
+safe; a field is either named there or it does not leave the machine.
+
+A denylist would be shorter today and wrong the first time an adapter adds a field — the new
+field would be published the day it landed, and nobody would notice, because nothing breaks.
+A PR that adds a field to the share list is a PR about privacy and gets read as one.
+
+## The share port is the only thing that listens to other machines
+
+The API binds to loopback and refuses any page it did not serve. Sharing does not loosen that:
+it opens a *second* `http.Server`, with its own handler, that answers `GET /share/v1/colony`
+with a Bearer key and nothing else. It exists only while sharing is on.
+
+It is deliberately not the API middleware behind a different guard. The things a stranger must
+never reach — opening a thread, starting a session, writing the colony file — are not routes
+on that server at all, so there is no check to get wrong.

@@ -8,7 +8,9 @@ its head; click it and the thread opens back in whichever harness it came from.
 
 It reads the harness's own files, on your own machine. Nothing is uploaded, there is no
 account, and **it never writes to a harness at all** — `data/colony.json`, where the map lives,
-is the only file it writes anywhere.
+is the only file it writes anywhere. The one thing that ever leaves the machine is opt-in:
+[sharing with neighbors](#neighbors) on the same Wi-Fi, which sends repo names and what the bots
+are doing, never a title, a prompt or a path.
 
 > **Status:** published as-is. I built this for myself and cannot promise to maintain it —
 > issues and PRs are welcome but may go unanswered, and forking is an entirely reasonable
@@ -314,6 +316,24 @@ under **View → Return to isometric**.
 | `0` | Reset the view |
 | `Esc` | Deselect, and close the zone sidebar |
 | `?` | Help |
+
+## Neighbors
+
+Friends on the same Wi-Fi can see each other's colonies as neighbouring settlements.
+
+- **Share yours:** Settings → Neighbors → *Share my colony*. You get a link like
+  `http://192.168.1.42:5275/#k=…` — give it to whoever you like. *New link* makes a fresh one and
+  the old one stops working at once.
+- **Add a friend's:** paste their link into *Add neighbor*. Up to six; each gets their own side of
+  your colony and keeps it.
+
+A friend sees your repo names, how big each building is, and what each bot is doing — working,
+waiting, stuck, asleep. Never a thread title, a prompt, a folder path, a branch or a model.
+Archived threads and hidden repos stay off their map too.
+
+Sharing opens a second, read-only port (5275; `BOT_CROSSING_SHARE_PORT` changes it) that answers
+one request and nothing else — see [DECISIONS.md](DECISIONS.md). The first time it opens, Windows
+asks whether Node may use the network: allow it on private networks, or friends cannot reach you.
 
 ## Planets and light
 
