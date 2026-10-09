@@ -16,6 +16,9 @@ import { mulberry32 } from './war.js'
  *
  * Nothing here is written anywhere. Friends' bots join in on this screen only; theirs runs its own.
  *
+ * `steps(t, gone)` takes the scene's clock and the cast who have left (`scene.gone`; `partsAt` passes
+ * it), so turns, passes and looks only ever go to bots still there.
+ *
  * What a step means to the bot layer, per cast member: `{ goal, face, action, emote, expression }`.
  *  - `goal` {x,z}: where to be. Away from it, the bot travels there — running if the action is `run`,
  *    walking otherwise. Null: stay put.
@@ -47,6 +50,12 @@ export const SCENE_MS = Object.freeze({
 export const REST_MS = Object.freeze([30000, 60000])
 /** Bots in different zones still count as neighbours this close (world units). */
 export const NEAR = 15
+/**
+ * How long an event may wait for a free slot. Long enough that a busy colony still gets its
+ * heartbreaks and games when the next scene ends; short enough that the scene is still about
+ * something — a heartbreak a minute after the thread went would be about nothing.
+ */
+export const EVENT_WAIT_MS = 15000
 /** How long a battle's result colours each side's mood. */
 export const MOOD_MS = 60000
 /** Ambient scene weights, in the order a draw walks them. */
@@ -123,7 +132,7 @@ export function stillValid(scene, bots) {
 
 /** What each cast member still in the scene should be doing at wall-clock `now`. */
 export function partsAt(scene, now) {
-  const steps = scene.steps(now - scene.startedAt)
+  const steps = scene.steps(now - scene.startedAt, scene.gone)
   const out = {}
   for (const id of scene.cast) if (!scene.gone.includes(id)) out[id] = steps[id]
   return out
@@ -209,10 +218,12 @@ function group(scene, members) {
   return {
     ...scene,
     spots,
-    steps(t) {
+    steps(t, gone = []) {
       t = clampT(t, D)
       const out = {}
-      const speaker = ring[Math.floor((t - GATHER_MS) / TURN_MS) % n]
+      // The turn goes round whoever is still in the ring; nobody waits on a bot that has left.
+      const here = ring.filter((id) => !gone.includes(id))
+      const speaker = here[Math.floor((t - GATHER_MS) / TURN_MS) % here.length]
       for (const id of scene.cast) {
         if (t < GATHER_MS) out[id] = step(spots[id], centre, 'walk', null, 'happy')
         else if (t >= D - FAREWELL_MS) out[id] = step(spots[id], centre, 'wave', null, 'happy')
@@ -304,23 +315,42 @@ function play(scene, members, rand) {
   const centre = scene.centre
   if (variant === 'ball') {
     const { spots, ring } = ringSpots(members, centre, BALL_RING)
-    const passes = []
-    for (let at = GATHER_MS, k = 0; at < D - FAREWELL_MS; at += PASS_MS, k++) {
-      passes.push({ at, from: ring[k % n], to: ring[(k + 1) % n] })
+    /**
+     * The kicks, in scene time, round whoever is still playing: each goes to the next player along
+     * the ring that is still there, and whoever received it kicks next. If the one holding the ball
+     * leaves, the next player along picks it up.
+     */
+    const passesFor = (gone = []) => {
+      const after = (id) => {
+        const i = ring.indexOf(id)
+        for (let j = 1; j <= n; j++) if (!gone.includes(ring[(i + j) % n])) return ring[(i + j) % n]
+        return null
+      }
+      const passes = []
+      let holder = gone.includes(ring[0]) ? after(ring[0]) : ring[0]
+      for (let at = GATHER_MS; at < D - FAREWELL_MS; at += PASS_MS) {
+        const to = after(holder)
+        if (!to || to === holder) break
+        passes.push({ at, from: holder, to })
+        holder = to
+      }
+      return passes
     }
     return {
       ...scene,
       variant,
       spots,
-      passes,
-      steps(t) {
+      passes: passesFor(),
+      passesFor,
+      steps(t, gone = []) {
         t = clampT(t, D)
         const out = {}
-        const k = Math.min(passes.length - 1, Math.floor((t - GATHER_MS) / PASS_MS))
-        const pass = passes[k]
+        const passes = passesFor(gone)
+        const pass = passes[Math.min(passes.length - 1, Math.floor((t - GATHER_MS) / PASS_MS))]
         for (const id of scene.cast) {
           if (t < GATHER_MS) out[id] = step(spots[id], centre, 'walk', null, 'happy')
           else if (t >= D - FAREWELL_MS) out[id] = step(spots[id], centre, 'cheer', 'music', 'cheer')
+          else if (!pass) out[id] = step(spots[id], centre, 'stand', null, 'happy')
           else if (id === pass.from && t - pass.at < KICK_MS) out[id] = step(spots[id], pass.to, 'kick', 'ball', 'cheer')
           // Everyone watches the ball in: the receiver looks at the kicker, the rest at the receiver.
           else out[id] = step(spots[id], id === pass.to ? pass.from : pass.to, 'stand', null, 'happy')
@@ -339,10 +369,11 @@ function play(scene, members, rand) {
     ...scene,
     variant,
     spots,
-    steps(t) {
+    steps(t, gone = []) {
       t = clampT(t, D)
       const out = {}
-      const singer = ring[Math.floor(t / 1500) % n]
+      const here = ring.filter((id) => !gone.includes(id))
+      const singer = here[Math.floor(t / 1500) % here.length]
       ring.forEach((id, i) => {
         if (t < GATHER_MS) out[id] = step(spots[id], null, 'walk', null, 'happy')
         else if (t >= stop) out[id] = step(round(i, stop), centre, 'cheer', 'music', 'cheer')
@@ -412,19 +443,22 @@ function castFor(kind, pool, rand) {
  *
  * In: `now` (ms); `bots` `[{ id, status, pos: {x,z}, zone, owner, atWar, restUntil }]`; `events`
  * since the last step (`archived {zone, owner}`, `finished {id}`, `warResult {owner, won}`);
- * `active` scenes from the last step; `moods` from the last step; `ambientAt`, the earliest the next
- * ambient scene may start; and the seeded `rand`.
+ * `active` scenes, `pending` events and `moods` from the last step; `ambientAt`, the earliest the
+ * next ambient scene may start; and the seeded `rand`.
  *
  * Out: `start` (new scenes), `end` (ids of scenes now over), `left` (`{scene, id}` for each bot whose
- * part ended this step in a scene that goes on), and the next state — `active`, `moods`,
+ * part ended this step in a scene that goes on), and the next state — `active`, `pending`, `moods`,
  * `ambientAt` — plus `rest`, `{ id: restUntil }` for every bot whose part just ended.
  *
  * Order matters: scenes end first (freeing their cast to rest), then events — which jump the queue
  * but still obey the limits — then the moods battles leave behind, then at most one ambient scene.
- * An event that cannot be cast right now (no free bots, no slot) is let go: these are moments, not
- * a backlog, and a heartbreak played a minute late would be about nothing.
+ * An event that cannot be cast yet (no slot, or nobody free) waits up to EVENT_WAIT_MS, oldest
+ * first. Because waiting events are served before anything else, a slot that frees while one could
+ * be cast always goes to it: ambient scenes only ever get slots no waiting event can use.
  */
-export function planSocial({ now, bots, events = [], active = [], moods = [], ambientAt = 0, rand = Math.random }) {
+export function planSocial({
+  now, bots, events = [], active = [], pending = [], moods = [], ambientAt = 0, rand = Math.random,
+}) {
   const roster = [...bots].sort(byId)
   const lookup = new Map(roster.map((b) => [b.id, b]))
   const rest = {}
@@ -436,7 +470,10 @@ export function planSocial({ now, bots, events = [], active = [], moods = [], am
   const left = []
   const live = []
   for (const scene of active) {
-    if (now >= scene.startedAt + scene.durationMs || !stillValid(scene, roster)) {
+    // A battle starting beside a scene ends it outright, rather than letting the rest carry on
+    // while their friend marches off: war outranks social.
+    const battle = scene.cast.some((id) => !scene.gone.includes(id) && lookup.get(id)?.atWar)
+    if (now >= scene.startedAt + scene.durationMs || battle || !stillValid(scene, roster)) {
       end.push(scene.id)
       for (const id of scene.cast) if (!scene.gone.includes(id)) rested(id)
       continue
@@ -466,29 +503,35 @@ export function planSocial({ now, bots, events = [], active = [], moods = [], am
   }
 
   let nextMoods = moods.filter((m) => m.until > now)
+  const queue = pending.filter((e) => e.until > now)
   for (const e of events) {
     if (e?.kind === 'warResult') {
       nextMoods = [...nextMoods.filter((m) => m.owner !== e.owner), { owner: e.owner, won: !!e.won, until: now + MOOD_MS }]
-      continue
+    } else if (e?.kind === 'archived' || e?.kind === 'finished') {
+      queue.push({ ...e, until: now + EVENT_WAIT_MS })
     }
-    if (slots <= 0) continue
-    if (e?.kind === 'archived') {
+  }
+  /** Casts an event's scene if it can, and says whether it did. */
+  const serve = (e) => {
+    if (e.kind === 'archived') {
       // Someone from the same repo takes it hard; whoever is nearest comes over.
       const repo = avail().filter((b) => b.owner === e.owner && b.zone === e.zone)
-      if (!repo.length) continue
+      if (!repo.length) return false
       const sad = repo[Math.floor(rand() * repo.length)]
       const pal = avail().filter((b) => b !== sad && near(sad, b)).sort(byDistanceFrom(sad))[0]
       if (pal) begin('heartbreak', [sad, pal])
-    } else if (e?.kind === 'finished') {
-      // Done with its run, it asks a repo-mate out to play.
-      const host = avail().find((b) => b.id === e.id)
-      if (!host || host.zone == null) continue
-      const mate = avail()
-        .filter((b) => b !== host && b.owner === host.owner && b.zone === host.zone)
-        .sort(byDistanceFrom(host))[0]
-      if (mate) begin('play', [host, mate])
+      return !!pal
     }
+    // Done with its run, it asks a repo-mate out to play.
+    const host = avail().find((b) => b.id === e.id)
+    if (!host || host.zone == null) return false
+    const mate = avail()
+      .filter((b) => b !== host && b.owner === host.owner && b.zone === host.zone)
+      .sort(byDistanceFrom(host))[0]
+    if (mate) begin('play', [host, mate])
+    return !!mate
   }
+  const nextPending = queue.filter((e) => slots <= 0 || !serve(e))
 
   // After a battle the losers sulk and bicker and the winners play. Taken in turns, so one side
   // cannot use up every slot before the other gets any.
@@ -515,18 +558,19 @@ export function planSocial({ now, bots, events = [], active = [], moods = [], am
     }
   }
 
-  return { start, end, left, active: live, moods: nextMoods, ambientAt: nextAmbient, rest }
+  return { start, end, left, active: live, pending: nextPending, moods: nextMoods, ambientAt: nextAmbient, rest }
 }
 
 /**
- * The planner with its memory: live scenes, who is resting until when, battle moods, and the
- * ambient clock. The director makes one and calls `tick` a few times a second; everything it
+ * The planner with its memory: live scenes, events waiting for a slot, who is resting until when,
+ * battle moods, and the ambient clock. The director makes one and calls `tick` a few times a second; everything it
  * decides is in `planSocial`, this only carries the state from one step to the next.
  */
 export class SocialPlanner {
   constructor({ seed = 0x50c1a1 } = {}) {
     this.rand = mulberry32(seed)
     this.active = []
+    this.pending = []
     this.moods = []
     this.ambientAt = 0
     this.rest = new Map()
@@ -538,9 +582,17 @@ export class SocialPlanner {
       this.rest.has(b.id) ? { ...b, restUntil: Math.max(b.restUntil ?? 0, this.rest.get(b.id)) } : b
     )
     const out = planSocial({
-      now, bots: roster, events, active: this.active, moods: this.moods, ambientAt: this.ambientAt, rand: this.rand,
+      now,
+      bots: roster,
+      events,
+      active: this.active,
+      pending: this.pending,
+      moods: this.moods,
+      ambientAt: this.ambientAt,
+      rand: this.rand,
     })
     this.active = out.active
+    this.pending = out.pending
     this.moods = out.moods
     this.ambientAt = out.ambientAt
     for (const [id, until] of Object.entries(out.rest)) this.rest.set(id, until)
@@ -551,6 +603,7 @@ export class SocialPlanner {
   clear() {
     const ended = this.active.map((s) => s.id)
     this.active = []
+    this.pending = []
     this.moods = []
     return ended
   }

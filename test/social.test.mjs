@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  ACTIONS, EMOTES, EXPRESSIONS, AMBIENT, BOTS_PER_SCENE, MAX_SCENES, MOOD_MS, NEAR, REST_MS, SCENE_MS,
+  ACTIONS, EMOTES, EXPRESSIONS, AMBIENT, BOTS_PER_SCENE, EVENT_WAIT_MS, MAX_SCENES, MOOD_MS, NEAR, REST_MS, SCENE_MS,
   SocialPlanner, canSocialise, makeScene, near, partsAt, pickAmbient, planSocial, sceneLimit, stillValid,
 } from '../src/game/social.js'
 import { mulberry32 } from '../src/game/war.js'
@@ -83,6 +83,21 @@ test('a battle starting ends any scene its fighters were in', () => {
   assert.deepEqual(out.end, [scene.id])
   assert.equal(out.start.length, 0)
   assert.equal(out.active.length, 0)
+})
+
+test('one fighter called to battle ends the whole scene, even a group that could go on without it', () => {
+  // A group of four that loses a bot to an ordinary job carries on with three; one that loses a bot
+  // to war does not, because a battle has started next to it and that outranks a chat.
+  const bots = crowd(12)
+  const rand = mulberry32(3)
+  for (const [kind, n] of [['group', 4], ['group', 5], ['play', 3], ['play', 4]]) {
+    const scene = makeScene(kind, bots.slice(0, n), 1000, rand)
+    const one = bots.map((b) => (b.id === scene.cast[1] ? { ...b, atWar: true } : b))
+    const out = planSocial({ now: 2000, bots: one, active: [scene], rand, ambientAt: Infinity })
+    assert.deepEqual(out.end, [scene.id], `${kind} of ${n}`)
+    assert.deepEqual(out.active, [])
+    for (const id of scene.cast) assert.ok(out.rest[id] >= 2000 + 30000, `${id} rests`)
+  }
 })
 
 // --- a participant leaving ---
@@ -335,6 +350,42 @@ test('after a battle, for a minute, the losers argue and the winners play', () =
   assert.deepEqual(log.find(({ now }) => now >= 1000 + MOOD_MS).out.moods, [])
 })
 
+test('an event that arrives while every slot is taken waits its turn, and gets the next free slot first', () => {
+  const bots = crowd(12)
+  const running = [makeScene('chat', bots.slice(0, 2), 0, mulberry32(1)), makeScene('chat', bots.slice(2, 4), 0, mulberry32(2))]
+  const first = planSocial({ now: 1000, bots, active: running, rand: mulberry32(1), events: [{ kind: 'archived', zone: 'repo', owner: 'home' }] })
+  assert.equal(first.start.length, 0, 'no slot yet')
+  assert.equal(first.pending.length, 1, 'but it is kept')
+  // The first chat ends inside the wait; the slot it frees goes to the heartbreak, not to an ambient scene.
+  const freed = Math.min(...running.map((s) => s.startedAt + s.durationMs))
+  assert.ok(freed - 1000 < EVENT_WAIT_MS)
+  const next = planSocial({ now: freed, bots, active: first.active, pending: first.pending, rand: mulberry32(1), ambientAt: 0 })
+  assert.equal(next.start[0].kind, 'heartbreak')
+  assert.deepEqual(next.pending, [])
+  // The same through the planner that carries the state.
+  const planner = new SocialPlanner({ seed: 4 })
+  planner.active = running
+  planner.ambientAt = Infinity
+  assert.equal(planner.tick({ now: 1000, bots, events: [{ kind: 'finished', id: bots[6].id }] }).start.length, 0)
+  planner.ambientAt = 0
+  const out = planner.tick({ now: freed, bots })
+  assert.equal(out.start[0].kind, 'play')
+  assert.equal(out.start[0].cast[0], bots[6].id)
+})
+
+test('an event left waiting too long is let go', () => {
+  assert.ok(EVENT_WAIT_MS >= 10000 && EVENT_WAIT_MS <= 20000)
+  const bots = crowd(12)
+  const running = [makeScene('chat', bots.slice(0, 2), 0, mulberry32(1)), makeScene('chat', bots.slice(2, 4), 0, mulberry32(2))]
+  const first = planSocial({ now: 1000, bots, active: running, rand: mulberry32(1), events: [{ kind: 'archived', zone: 'repo', owner: 'home' }] })
+  const quiet = { bots, rand: mulberry32(1), ambientAt: Infinity }
+  const still = planSocial({ ...quiet, now: 1000 + EVENT_WAIT_MS - 1, active: [], pending: first.pending })
+  assert.equal(still.start.length, 1, 'just in time')
+  const late = planSocial({ ...quiet, now: 1000 + EVENT_WAIT_MS, active: [], pending: first.pending })
+  assert.equal(late.start.length, 0)
+  assert.deepEqual(late.pending, [])
+})
+
 test('event scenes still obey the limits', () => {
   const bots = crowd(12)
   const busy = [makeScene('chat', bots.slice(0, 2), 0, mulberry32(1)), makeScene('chat', bots.slice(2, 4), 0, mulberry32(2))]
@@ -480,6 +531,44 @@ test('play at chase: they run round together and jump now and then, cheering', (
   assert.ok(actions.has('run') && actions.has('jump'))
   const id = s.cast[0]
   assert.ok(dist(s.steps(3000)[id].goal, s.steps(5000)[id].goal) > 1, 'the goal moves round the circle')
+})
+
+test('nobody hands the turn, the ball or a look to a bot that has left', () => {
+  const ring = crowd(5).map((b, i) => ({ ...b, pos: { x: Math.cos(i) * 4, z: Math.sin(i) * 4 } }))
+  const scenes = []
+  for (let seed = 1; scenes.length < 12; seed++) {
+    scenes.push(makeScene('group', ring.slice(0, 4 + (seed % 2)), 0, mulberry32(seed)))
+    scenes.push(makeScene('play', ring.slice(0, 3 + (seed % 2)), 0, mulberry32(seed)))
+  }
+  for (const scene of scenes) {
+    const gone = [scene.cast[1]]
+    const left = { ...scene, gone }
+    let turns = 0
+    for (let t = 0; t <= scene.durationMs; t += 50) {
+      const parts = partsAt(left, t)
+      assert.ok(!(gone[0] in parts))
+      for (const [id, s] of Object.entries(parts)) {
+        assert.notEqual(s.face, gone[0], `${scene.kind}/${scene.variant ?? ''} ${id} looks at the one who left at ${t}`)
+        if (s.action === 'talk' || s.action === 'kick' || s.emote === 'music') turns++
+      }
+      if (scene.kind === 'group' && t >= 1500 && t < scene.durationMs - 1200) {
+        assert.equal(Object.values(parts).filter((s) => s.action === 'talk').length, 1, `someone present speaks at ${t}`)
+      }
+      if (scene.variant === 'chase' && t >= 1500 && t < scene.durationMs - 1200) {
+        assert.equal(Object.values(parts).filter((s) => s.emote === 'music').length, 1, `someone present sings at ${t}`)
+      }
+    }
+    assert.ok(turns > 0)
+    if (scene.variant === 'ball') {
+      const passes = scene.passesFor(gone)
+      assert.ok(passes.length >= 3)
+      for (let k = 0; k < passes.length; k++) {
+        assert.ok(!gone.includes(passes[k].from) && !gone.includes(passes[k].to), 'no pass to or from an empty spot')
+        if (k) assert.equal(passes[k].from, passes[k - 1].to)
+      }
+      assert.deepEqual(scene.passesFor([]), scene.passes)
+    }
+  }
 })
 
 // --- determinism ---
