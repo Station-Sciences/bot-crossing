@@ -75,6 +75,32 @@ export function validateSnapshot(json) {
   }
 }
 
+/**
+ * The body as text, or null once it passes `max` bytes. Read as a stream and cut off there, so a
+ * friend who sends forever costs us `max` bytes rather than everything until the timeout.
+ */
+async function readCapped(res, max) {
+  if (Number(res.headers.get('content-length')) > max) {
+    res.body?.cancel().catch(() => {})
+    return null
+  }
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const chunks = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > max) {
+      reader.cancel().catch(() => {})
+      return null
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
 export function createNeighborFetcher({ fetchImpl = globalThis.fetch, timeoutMs = 2000, now = Date.now } = {}) {
   /** id → { snapshot, lastSeenAt }: the last time each friend answered properly. */
   const cache = new Map()
@@ -102,17 +128,23 @@ export function createNeighborFetcher({ fetchImpl = globalThis.fetch, timeoutMs 
 
     let res
     try {
-      res = await fetchImpl(url, { headers: { Authorization: `Bearer ${n.key}` }, signal: AbortSignal.timeout(timeoutMs) })
+      // Never follow a redirect: a friend could point us at our own /api/neighbors, which a
+      // server-side fetch passes as local, and the two would call each other until one fell over.
+      res = await fetchImpl(url, {
+        headers: { Authorization: `Bearer ${n.key}` },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(timeoutMs),
+      })
     } catch {
       return keep('away')
     }
     if (res.status === 401) return keep('bad-key')
-    if (!res.ok) return keep('away')
+    if (!res.ok) return keep('away') // 3xx included, and the opaque redirect a browser-style fetch gives back
 
     let json
     try {
-      const text = await res.text()
-      if (text.length > MAX_BODY) return keep('away')
+      const text = await readCapped(res, MAX_BODY)
+      if (text === null) return keep('away')
       json = JSON.parse(text)
     } catch {
       return keep('away')

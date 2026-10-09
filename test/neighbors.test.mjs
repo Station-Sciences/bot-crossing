@@ -169,3 +169,55 @@ test('/api/neighbors fetches every saved friend', async () => {
     })
   })
 })
+
+// ── a friend that misbehaves on the wire ─────────────────────────────────────
+
+/** Settles with 'hung' if the fetcher has not answered by then, so a stuck read fails the test. */
+const within = (ms, p) => Promise.race([p, new Promise((r) => setTimeout(() => r(['hung']), ms))])
+
+test('a redirect is not followed, so a friend cannot point us back at ourselves', async () => {
+  await withFriend(async ({ url: second, friend: target }) => {
+    let hits = 0
+    target.reply = (req, res) => { hits++; res.end(JSON.stringify(goodSnapshot())) }
+    await withFriend(async ({ url, friend }) => {
+      friend.reply = (req, res) => { res.writeHead(302, { Location: `${second}${SHARE_PATH}` }); res.end() }
+      const [r] = await createNeighborFetcher().refresh([{ id: 'nb_1', url, key: KEY }])
+      assert.equal(r.status, 'unreachable')
+      assert.equal(r.snapshot, null)
+      assert.equal(hits, 0)
+    })
+  })
+})
+
+test('a body that says it is too big is refused before it is read', async () => {
+  await withFriend(async ({ url, friend }) => {
+    friend.reply = (req, res) => { res.writeHead(200, { 'Content-Length': 2_000_001 }); res.write('{') } // and then nothing
+    const [r] = await within(1000, createNeighborFetcher({ timeoutMs: 10_000 }).refresh([{ id: 'nb_1', url, key: KEY }]))
+    assert.equal(r.status, 'unreachable')
+  })
+})
+
+test('the size cap counts bytes, not characters', async () => {
+  await withFriend(async ({ url, friend }) => {
+    // Well under the cap in characters, three times over it in bytes.
+    friend.reply = (req, res) => res.end(JSON.stringify(goodSnapshot({ pad: '€'.repeat(1_000_000) })))
+    const [r] = await createNeighborFetcher({ timeoutMs: 10_000 }).refresh([{ id: 'nb_1', url, key: KEY }])
+    assert.equal(r.status, 'unreachable')
+  })
+})
+
+test('a body that never ends is cut off at the cap, not buffered until the timeout', async () => {
+  await withFriend(async ({ url, friend }) => {
+    friend.reply = (req, res) => {
+      res.writeHead(200)
+      const chunk = 'x'.repeat(64 * 1024)
+      const pump = () => {
+        while (!res.destroyed && res.write(chunk));
+        if (!res.destroyed) res.once('drain', pump)
+      }
+      pump()
+    }
+    const [r] = await within(3000, createNeighborFetcher({ timeoutMs: 30_000 }).refresh([{ id: 'nb_1', url, key: KEY }]))
+    assert.equal(r.status, 'unreachable')
+  })
+})
