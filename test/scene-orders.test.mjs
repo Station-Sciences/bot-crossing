@@ -79,7 +79,8 @@ test('the same action keeps its clock; arriving sticks while the goal stays put'
 test('walking to a spot is sticky; a chase never stops while its goal runs on', () => {
   const walk = cleanStep(step({ action: 'walk' }))
   assert.equal(sceneArrival(walk, 5), true)
-  assert.equal(sceneArrival(walk, 0.5), false, 'there')
+  assert.equal(sceneArrival(walk, 0.45), true, 'not quite there: a pair talks from their spots, not a pace short of them')
+  assert.equal(sceneArrival(walk, 0.25), false, 'there')
   assert.equal(sceneArrival(walk, 1.2), false, 'nudged by a neighbour, it holds its ground')
   assert.equal(sceneArrival(walk, 3), true, 'shoved well off it, it walks back')
 

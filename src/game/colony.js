@@ -34,6 +34,7 @@ import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
 import { statusFor } from './status.js'
 import { WarDirector } from './war-director.js'
+import { SocialDirector } from './social-director.js'
 
 export { statusFor }
 
@@ -179,7 +180,7 @@ export class Colony {
     this.reflections = new SceneryReflections({
       scene, renderer, settings, sky: this.sky, astronauts: this.astronauts,
       excluded: () => [this.labelGroup, this.indicators.mesh, this.particles.points,
-        this.fauna.group, this.grass?.mesh],
+        this.fauna.group, this.grass?.mesh, this.social?.emotes.mesh, this.social?.group],
     })
     /** Set by whoever owns the speakers: (name, x, y, z) for a sound the world just made. */
     this.onSound = null
@@ -187,6 +188,8 @@ export class Colony {
     this.astronauts.setNavigation(this.nav)
     /** War mode's battle, if one is on: a show staged with the idle bots, on top of everything else. */
     this.war = new WarDirector(this)
+    /** Idle bots' social life: chats, arguments, comfort and games, staged on this screen only. */
+    this.social = new SocialDirector(this)
 
     this.plotGroup = new THREE.Group()
     this.labelGroup = new THREE.Group()
@@ -503,6 +506,7 @@ export class Colony {
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set(), neighbors = []) {
     const now = Date.now()
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
+    const neighborsBefore = this.neighborThreads
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
     const byProject = new Map()
@@ -638,7 +642,12 @@ export class Colony {
       if (!seenBuildings.has(id)) this._removeBuilding(id, entry)
     }
 
+    const before = this.threads
     this.threads = new Map(live.map((t) => [t.id, t]))
+    // Threads that left — archived, or gone from a friend's snapshot — can leave a repo-mate sad.
+    this.social.noteThreads({
+      before, after: this.threads, scan: threads, archivedIds, neighborsBefore, neighborsAfter: this.neighborThreads,
+    })
     this.urgentPlots = urgent
     this.activePlots = active
     this._rebuildNavigation()
@@ -1308,10 +1317,14 @@ export class Colony {
     this._growBuildings(dt)
     // Orders first, so a fighter acts on this frame's phase rather than the last one's. The battle
     // runs on the wall clock: it is the one clock both screens share.
-    this.war.update(dt, Date.now())
+    const now = Date.now()
+    this.war.update(dt, now)
+    // After the battle, so a bot just called to fight is never handed a scene step on the same frame.
+    this.social.update(now)
     this.astronauts.update(dt, elapsed)
     this.astronauts.updateRings(elapsed)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))
+    this.social.draw(dt, elapsed, now)
     this._emit(dt, elapsed)
     this._emitMotes(dt, night)
     this.particles.ambient(dt, this.camera, this.planet, night, (x, z) => this.surfaceAt(x, z))
@@ -1539,6 +1552,7 @@ export class Colony {
   dispose() {
     for (const id of [...this.neighborShips.keys()]) this._removeNeighborShip(id)
     this.war.dispose()
+    this.social.dispose()
     this.reflections.dispose()
     this.sky.dispose()
     this.fauna.dispose()

@@ -135,7 +135,10 @@ export class Emotes {
            // Beside the head, not above it: the status badge owns the space overhead. The
            // shift is in view space for the same reason the badge's lift is: it has to scale
            // with the bubble, not with the world, or it would crowd the helmet when zoomed out.
-           mvPosition.x += scale * 0.95;
+           // Far enough that the bubble's near edge clears a badge's: half a badge (0.063) plus
+           // half a bubble (0.0425) is 1.24 bubbles. A bot only emotes while idle, and idle carries
+           // no badge, but one called away mid-scene gets its badge back while its bubble shrinks.
+           mvPosition.x += scale * 1.25;
            mvPosition.y += scale * 0.5;
            mvPosition.xy += position.xy * scale;
            gl_Position = projectionMatrix * mvPosition;`

@@ -1,5 +1,4 @@
 import { ACTIONS, EMOTES, EXPRESSIONS } from '../game/social.js'
-import { stepArrival } from './war-orders.js'
 
 /**
  * Scene orders for a bot: the part of its social life that is a rule rather than a picture.
@@ -77,6 +76,15 @@ export function nextStep(held, clean) {
 
 /** Close enough to a moving goal to stop chasing it. Small, and never sticky: see below. */
 const CHASE_ARRIVE = 0.45
+/**
+ * Close enough to a scene spot to call it reached, and how far off it a bot has to be shoved
+ * before it walks back. Much tighter than a battle's 0.7: two bots coming at a chat from
+ * opposite sides each stopped 0.7 short and talked from nearly 3 apart (1.5 meant), which reads
+ * as two strangers. Still clear of the crowd's spacing (1.15): a comforter whose spot is 0.9
+ * beside its friend is held off at about 1.15, 0.25 from its spot, so it is never left shoving.
+ */
+const SPOT_ARRIVE = 0.3
+const SPOT_REJOIN = 1.2
 
 /**
  * Whether the bot should travel this frame, given how far its goal is. Walking to a spot is
@@ -90,7 +98,10 @@ export function sceneArrival(step, dist) {
     step.arrived = true
     return false
   }
-  if (step.action !== 'run') return stepArrival(step, dist)
+  if (step.action !== 'run') {
+    step.arrived = step.arrived ? dist <= SPOT_REJOIN : dist <= SPOT_ARRIVE
+    return !step.arrived
+  }
   step.arrived = dist <= CHASE_ARRIVE
   return !step.arrived
 }

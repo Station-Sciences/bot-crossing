@@ -1484,10 +1484,13 @@ function syncWar(now = Date.now()) {
 function countResult({ battle, side, neighborId, plan }) {
   // A friend removed since: no tally entry for someone who is gone, and no toast naming their address.
   if (!isFriend(state.neighbors, neighborId) || state.war?.seen?.includes(battle.id)) return
-  const result = recordResult(state.war, { battle, side, neighborId }, plan || planBattle(battle))
+  const planned = plan || planBattle(battle)
+  const result = recordResult(state.war, { battle, side, neighborId }, planned)
   if (!result) return
   state.war = result.war
   queueSave()
+  // On screen only: the losers sulk and bicker for a minute, the winners play. Nothing is saved.
+  colony.social.noteWarResult({ won: result.won, enemyId: neighborId, endedAt: battle.startedAt + planned.durationMs })
   hud.toast(resultText(friendName(neighborId), result))
   // The record is on their ship's sign, which is drawn with the roster.
   applyThreads(threads)
