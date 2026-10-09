@@ -128,3 +128,26 @@ test('the name falls back to the one passed in, then to Neighbor', () => {
   assert.equal(buildSnapshot({ threads: [], state: noName, now: NOW, name: 'jjt' }).name, 'jjt')
   assert.equal(buildSnapshot({ threads: [], state: noName, now: NOW }).name, 'Neighbor')
 })
+
+test('a project shares only its last folder name, never a path', () => {
+  // What disambiguateProjects makes of two repos called foo, and of a path with nothing to trim.
+  const threads = [
+    secretThread(1, { project: '1/foo' }),
+    secretThread(2, { project: '2/foo' }),
+    secretThread(3, { project: 'c:/x/api' }),
+    secretThread(4, { project: 'C:\\Users\\x\\web' }),
+  ]
+  const plots = { '1/foo': [[0, 0]], '2/foo': [[1, 1]], 'c:/x/api': [[2, 2]], 'C:\\Users\\x\\web': [[3, 3]] }
+  const snap = buildSnapshot({ threads, state: baseState({ plots }), now: NOW })
+  const names = snap.projects.map((p) => p.name)
+  for (const n of [...names, ...snap.threads.map((t) => t.project)]) {
+    assert.doesNotMatch(n, /[\\/]|^[A-Za-z]:/, n)
+  }
+  assert.deepEqual(snap.projects, [
+    { name: 'foo', cells: [[0, 0]] },
+    { name: 'foo (2)', cells: [[1, 1]] },
+    { name: 'api', cells: [[2, 2]] },
+    { name: 'web', cells: [[3, 3]] },
+  ])
+  assert.deepEqual(snap.threads.map((t) => t.project), ['foo', 'foo (2)', 'api', 'web'])
+})

@@ -34,10 +34,29 @@ export function sizeBucket(bytes) {
 
 const toMinute = (t) => Math.floor((Number(t) || 0) / 60000) * 60000
 
-export function toShared(thread, key) {
+/**
+ * Project name → the name a friend sees. Two repos with one name come back from the scan as
+ * `1/foo` and `2/foo`, or as a whole path when nothing shorter tells them apart; only the last
+ * folder name leaves the machine, and a clash is numbered in a fixed order instead.
+ */
+function sharedProjectNames(names) {
+  const out = new Map()
+  const used = new Set()
+  for (const name of [...names].sort((a, b) => a.localeCompare(b))) {
+    const last = String(name).split(/[\\/]/).filter(Boolean).pop() || ''
+    const base = /^[A-Za-z]:$/.test(last) || !last ? 'unknown' : last // a bare drive is still a path
+    let label = base
+    for (let i = 2; used.has(label); i++) label = `${base} (${i})`
+    used.add(label)
+    out.set(name, label)
+  }
+  return out
+}
+
+export function toShared(thread, key, project = thread.project) {
   return {
     id: sharedId(key, thread.id),
-    project: String(thread.project || 'unknown'),
+    project: String(project || 'unknown'),
     harness: String(thread.harness || ''),
     harnessName: String(thread.harnessName || ''),
     running: thread.running === true,
@@ -88,11 +107,13 @@ export function buildSnapshot({ threads, state, now = Date.now(), name = '' }) {
 
   const plots = state.plots || {}
   const names = [...byProject.keys()].sort((a, b) => a.localeCompare(b))
+  const shared = sharedProjectNames(names)
   return {
     v: SHARE_VERSION,
     name: String(state.sharing?.name || name || 'Neighbor').slice(0, 40),
     generatedAt: now,
-    projects: names.map((n) => ({ name: n, cells: cleanCells(plots[n]) })),
-    threads: names.flatMap((n) => byProject.get(n).map((t) => toShared(t, key))),
+    // Layouts are saved under the full name, so they are looked up by it before it is shortened.
+    projects: names.map((n) => ({ name: shared.get(n), cells: cleanCells(plots[n]) })),
+    threads: names.flatMap((n) => byProject.get(n).map((t) => toShared(t, key, shared.get(n)))),
   }
 }
