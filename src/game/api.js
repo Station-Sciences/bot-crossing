@@ -16,6 +16,12 @@ const post = (url, payload) =>
 
 export const fetchThreads = () => req('/api/threads')
 
+/** Every saved friend, fetched by our own server — the page never talks to another machine. */
+export const fetchNeighbors = () => req('/api/neighbors')
+
+/** Whether the share port is open, and the address a friend would reach it on. */
+export const fetchSharing = () => req('/api/sharing')
+
 /**
  * The colony file, and the base every later save is measured against.
  *

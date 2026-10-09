@@ -1,0 +1,85 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {
+  NEIGHBOR_CAP, addNeighbor, describeNeighbor, hydrateNeighbors, neighborThreadId,
+  newShareKey, parseShareLink, removeNeighbor, shareLink,
+} from '../src/game/neighbors.js'
+
+test('a share link round-trips', () => {
+  const key = newShareKey()
+  assert.match(key, /^[0-9a-f]{32}$/)
+  const link = shareLink({ lanAddress: '192.168.1.42', port: 5275, key })
+  assert.equal(link, `http://192.168.1.42:5275/#k=${key}`)
+  assert.deepEqual(parseShareLink(`  ${link}  `), { url: 'http://192.168.1.42:5275', key })
+})
+
+test('anything that is not a share link is refused', () => {
+  for (const bad of ['', 'hello', 'http://x:5275/', 'http://x:5275/#k=short', `ftp://x/#k=${'a'.repeat(32)}`, `http://x/#k=${'G'.repeat(32)}`]) {
+    assert.equal(parseShareLink(bad), null, bad)
+  }
+})
+
+test('no link without an address, a port and a key', () => {
+  assert.equal(shareLink({ lanAddress: '', port: 5275, key: 'k' }), '')
+})
+
+test('adding takes the lowest free slot and refuses duplicates and a seventh', () => {
+  const link = (i) => `http://10.0.0.${i}:5275/#k=${'a'.repeat(32)}`
+  let list = []
+  for (let i = 0; i < 3; i++) list = addNeighbor(list, link(i), { now: 1000 + i }).list
+  assert.deepEqual(list.map((n) => n.slot), [0, 1, 2])
+  list = removeNeighbor(list, list[1].id)
+  const next = addNeighbor(list, link(9), { now: 2000 })
+  assert.equal(next.entry.slot, 1)
+  assert.match(addNeighbor(next.list, link(0), { now: 3000 }).error, /Already/)
+  let full = next.list
+  for (let i = 10; full.length < NEIGHBOR_CAP; i++) full = addNeighbor(full, link(i), { now: 4000 + i }).list
+  assert.match(addNeighbor(full, link(99), { now: 9999 }).error, /Six/)
+  assert.match(addNeighbor([], 'nope').error, /share link/)
+})
+
+const thread = (n, extra = {}) => ({
+  id: `n:000000000000000${n}`, project: 'bot-crossing', harness: 'claude-code', harnessName: 'Claude Code',
+  running: true, unread: false, hasError: false, prState: '', lastActivityAt: 5, createdAt: n, sizeBucket: 12, isErrand: false,
+  ...extra,
+})
+const snapshot = {
+  v: 1, name: 'Mark', generatedAt: 1,
+  projects: [{ name: 'bot-crossing', cells: [[0, 0]] }],
+  threads: [thread(1), thread(2, { isErrand: true, sizeBucket: 0 })],
+}
+
+test("an online friend's threads come through namespaced and unopenable", () => {
+  const [n] = hydrateNeighbors([{ id: 'nb_1', slot: 2 }], [{ id: 'nb_1', status: 'online', lastSeenAt: 9, snapshot }])
+  assert.equal(n.slot, 2)
+  assert.equal(n.online, true)
+  assert.equal(n.threads.length, 2)
+  const t = n.threads[0]
+  assert.equal(t.id, neighborThreadId('nb_1', 'n:0000000000000001'))
+  assert.equal(t.sizeBytes, 4096)
+  assert.equal(t.canOpen, false)
+  assert.equal(t.running, true)
+  assert.deepEqual(t.neighbor, { id: 'nb_1', name: 'Mark' })
+})
+
+test("an away friend's bots are all asleep, and their errands are gone", () => {
+  const [n] = hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'away', lastSeenAt: 9, snapshot }])
+  assert.equal(n.online, false)
+  assert.equal(n.threads.length, 1)
+  assert.equal(n.threads[0].running, false)
+  assert.equal(n.threads[0].lastActivityAt, 0)
+})
+
+test('a friend with nothing to draw is left out', () => {
+  assert.deepEqual(hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'unreachable', lastSeenAt: 0, snapshot: null }]), [])
+  assert.deepEqual(hydrateNeighbors([{ id: 'nb_1', slot: 0 }], []), [])
+})
+
+test('each status reads as a sentence', () => {
+  const now = 10 * 60000
+  assert.equal(describeNeighbor('online', now, now), 'here now')
+  assert.equal(describeNeighbor('away', now - 12 * 60000, now), 'away · last seen 12m ago')
+  assert.equal(describeNeighbor('bad-key', 0, now), 'link no longer valid')
+  assert.equal(describeNeighbor('needs-update', 0, now), 'needs an update')
+  assert.equal(describeNeighbor('unreachable', 0, now), 'not reached yet')
+})
