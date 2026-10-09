@@ -148,5 +148,6 @@ export function mergeState(base, local, remote) {
     settings: l.settings && typeof l.settings === 'object' ? l.settings : r.settings ?? null,
     sharing: mergeWhole(b.sharing, l.sharing, r.sharing) ?? null,
     neighbors: mergeById(b.neighbors, l.neighbors, r.neighbors),
+    war: mergeWhole(b.war, l.war, r.war) ?? null,
   }
 }

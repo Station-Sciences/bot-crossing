@@ -16,6 +16,7 @@ import {
 import { createShareService, pickLanAddress } from './share.mjs'
 import { buildSnapshot } from './share-snapshot.mjs'
 import { createNeighborFetcher } from './neighbors.mjs'
+import { cleanBattle } from '../src/game/war.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = process.env.BOT_CROSSING_DATA || path.join(here, '..', 'data')
@@ -64,6 +65,7 @@ const emptyState = () => ({
   settings: null,
   sharing: { enabled: false, key: '', name: '' },
   neighbors: [],
+  war: asWar(null),
   updatedAt: 0,
 })
 
@@ -96,6 +98,23 @@ function asNeighbors(v) {
     .slice(0, 6)
 }
 
+/** Peace unless the file says otherwise; the tally is whole-number counts per friend and `seen` is a short memory of battles already settled. */
+function asWar(v) {
+  const o = asObject(v)
+  const count = (n) => (Number.isInteger(n) && n > 0 ? n : 0)
+  const tally = {}
+  for (const [id, t] of Object.entries(asObject(o.tally))) {
+    if (!t || typeof t !== 'object' || Array.isArray(t)) continue
+    tally[id] = { won: count(t.won), lost: count(t.lost) }
+  }
+  return {
+    enabled: o.enabled === true,
+    battle: cleanBattle(o.battle, { allowLocal: true }),
+    tally,
+    seen: asArray(o.seen).filter((s) => typeof s === 'string').slice(0, 50),
+  }
+}
+
 async function readState() {
   try {
     const raw = migrate(JSON.parse(await fsp.readFile(STATE_FILE, 'utf8')))
@@ -111,6 +130,7 @@ async function readState() {
       settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : null,
       sharing: asSharing(raw.sharing),
       neighbors: asNeighbors(raw.neighbors),
+      war: asWar(raw.war),
       updatedAt: Number(raw.updatedAt) || 0,
     }
   } catch {
@@ -148,6 +168,7 @@ async function writeState(next) {
     settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
     sharing: asSharing(next.sharing),
     neighbors: asNeighbors(next.neighbors),
+    war: asWar(next.war),
     updatedAt: Date.now(),
   }
   await fsp.mkdir(DATA_DIR, { recursive: true })

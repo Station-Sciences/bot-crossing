@@ -5,7 +5,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  CHEER_MS, FIGHT_MS, MARCH_MS, MAX_FIGHTERS, battleLive, canFight, downAt, newBattle,
+  CHEER_MS, cleanBattle, FIGHT_MS, MARCH_MS, MAX_FIGHTERS, battleLive, canFight, downAt, newBattle,
   phaseAt, planBattle, scoreAt, vehiclesFor, warTag,
 } from '../src/game/war.js'
 
@@ -96,4 +96,16 @@ test('a new battle carries what the snapshot needs, and stays live until it has 
   assert.equal(battleLive(b, end + 29_000), true)
   assert.equal(battleLive(b, end + 31_000), false)
   assert.equal(battleLive(null, 0), false)
+})
+
+test('cleanBattle keeps a good battle and refuses any bad field', () => {
+  const good = { id: 'war_abc_1', target: 'a'.repeat(16), seed: 7, startedAt: 5, attackers: 3, defenders: 30 }
+  assert.deepEqual(cleanBattle({ ...good, extra: 1, targetNeighborId: 'nb_1' }), good)
+  assert.deepEqual(cleanBattle({ ...good, targetNeighborId: 'nb_1' }, { allowLocal: true }), { ...good, targetNeighborId: 'nb_1' })
+  for (const bad of [
+    null, 'x', [], { ...good, id: 'x' }, { ...good, target: 'a'.repeat(15) }, { ...good, seed: 2 ** 32 },
+    { ...good, seed: 1.5 }, { ...good, startedAt: '5' }, { ...good, attackers: 0 }, { ...good, defenders: 31 },
+  ]) {
+    assert.equal(cleanBattle(bad), null, JSON.stringify(bad))
+  }
 })

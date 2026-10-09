@@ -221,3 +221,34 @@ test('a body that never ends is cut off at the cap, not buffered until the timeo
     assert.equal(r.status, 'unreachable')
   })
 })
+
+// ── war ──────────────────────────────────────────────────────────────────────
+
+const BATTLE = { id: 'war_k_1', target: 'a'.repeat(16), seed: 9, startedAt: 5, attackers: 4, defenders: 5 }
+
+test('a good battle and warReady pass, and anything else about them is dropped', () => {
+  const out = validateSnapshot(goodSnapshot({ warReady: true, battle: { ...BATTLE, targetNeighborId: 'nb_1' } }))
+  assert.equal(out.ok, true)
+  assert.equal(out.snapshot.warReady, true)
+  assert.deepEqual(out.snapshot.battle, BATTLE)
+  const bare = validateSnapshot(goodSnapshot())
+  assert.equal(bare.snapshot.warReady, false)
+  assert.equal(bare.snapshot.battle, null)
+})
+
+test('a malformed battle is null while the rest of the snapshot is still accepted', () => {
+  for (const bad of [
+    { ...BATTLE, id: 'nope' }, { ...BATTLE, target: 'a'.repeat(15) }, { ...BATTLE, seed: 2 ** 32 },
+    { ...BATTLE, attackers: 0 }, { ...BATTLE, attackers: 31 }, { ...BATTLE, defenders: 0 }, { ...BATTLE, startedAt: '5' },
+  ]) {
+    const out = validateSnapshot(goodSnapshot({ warReady: true, battle: bad }))
+    assert.equal(out.ok, true)
+    assert.equal(out.snapshot.battle, null, JSON.stringify(bad))
+    assert.equal(out.snapshot.threads.length, 1)
+  }
+})
+
+test('warReady must be a real boolean', () => {
+  assert.equal(validateSnapshot(goodSnapshot({ warReady: 'true' })).snapshot.warReady, false)
+  assert.equal(validateSnapshot(goodSnapshot({ warReady: 1 })).snapshot.warReady, false)
+})

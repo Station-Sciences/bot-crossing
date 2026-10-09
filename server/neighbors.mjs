@@ -8,6 +8,7 @@
  * status the settings row can show rather than as an error the poll has to survive.
  */
 import { SHARE_PATH } from './share.mjs'
+import { cleanBattle } from '../src/game/war.js'
 
 const MAX_PROJECTS = 200
 const MAX_THREADS = 500
@@ -71,7 +72,8 @@ export function validateSnapshot(json) {
 
   return {
     ok: true,
-    snapshot: { v: 1, name: str(json.name).slice(0, 40) || 'Neighbor', generatedAt: num(json.generatedAt), projects, threads },
+    snapshot: { v: 1, name: str(json.name).slice(0, 40) || 'Neighbor', generatedAt: num(json.generatedAt),
+      warReady: json.warReady === true, battle: cleanBattle(json.battle), projects, threads },
   }
 }
 

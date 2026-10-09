@@ -120,3 +120,13 @@ test('each status reads as a sentence', () => {
   assert.equal(describeNeighbor('needs-update', 0, now), 'needs an update')
   assert.equal(describeNeighbor('unreachable', 0, now), 'not reached yet')
 })
+
+test('war readiness and an announced battle pass through to the page, and default to none', () => {
+  const battle = { id: 'war_k_1', target: 'a'.repeat(16), seed: 9, startedAt: 5, attackers: 4, defenders: 5 }
+  const [on] = hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'online', lastSeenAt: 9, snapshot: { ...snapshot, warReady: true, battle } }])
+  assert.equal(on.warReady, true)
+  assert.deepEqual(on.battle, battle)
+  const [off] = hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'online', lastSeenAt: 9, snapshot }])
+  assert.equal(off.warReady, false)
+  assert.equal(off.battle, null)
+})

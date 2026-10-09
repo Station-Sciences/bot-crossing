@@ -10,6 +10,7 @@ import crypto from 'node:crypto'
 import { withErrands } from '../src/game/errands.js'
 import { liveThreadsForColony } from '../src/game/hidden-projects.js'
 import { allSleeping } from '../src/game/status.js'
+import { battleLive, cleanBattle } from '../src/game/war.js'
 
 export const SHARE_VERSION = 1
 
@@ -114,6 +115,10 @@ export function buildSnapshot({ threads, state, now = Date.now(), name = '' }) {
     generatedAt: now,
     // Layouts are saved under the full name, so they are looked up by it before it is shortened.
     projects: names.map((n) => ({ name: shared.get(n), cells: cleanCells(plots[n]) })),
+    // Whether a friend may pick a fight with us, and what we are fighting now. Who we are fighting is
+    // left out on purpose: the target is only a tag, so other friends cannot read a name from it.
+    warReady: state.war?.enabled === true,
+    battle: battleLive(state.war?.battle, now) ? cleanBattle(state.war.battle) : null,
     threads: names.flatMap((n) => byProject.get(n).map((t) => toShared(t, key, shared.get(n)))),
   }
 }

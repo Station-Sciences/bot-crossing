@@ -131,3 +131,22 @@ export function battleLive(battle, now = Date.now()) {
   if (!battle) return false
   return now < battle.startedAt + planBattle(battle).durationMs + LINGER_MS
 }
+
+/**
+ * A battle as it may be believed: from a friend's snapshot, or from our own colony file. Every field
+ * is checked, and a battle with any bad one is no battle — a half-trusted seed or head count would
+ * make the two screens disagree, which is the one thing this feature must not do. Our own file also
+ * keeps who we are attacking (`allowLocal`); that never goes into a snapshot.
+ */
+export function cleanBattle(b, { allowLocal = false } = {}) {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return null
+  const headCount = (n) => Number.isInteger(n) && n >= 1 && n <= MAX_FIGHTERS
+  if (typeof b.id !== 'string' || !/^war_[0-9a-z_]{1,40}$/.test(b.id)) return null
+  if (typeof b.target !== 'string' || !/^[0-9a-f]{16}$/.test(b.target)) return null
+  if (!Number.isInteger(b.seed) || b.seed < 0 || b.seed > 4294967295) return null
+  if (typeof b.startedAt !== 'number' || !Number.isFinite(b.startedAt)) return null
+  if (!headCount(b.attackers) || !headCount(b.defenders)) return null
+  const out = { id: b.id, target: b.target, seed: b.seed, startedAt: b.startedAt, attackers: b.attackers, defenders: b.defenders }
+  if (allowLocal && typeof b.targetNeighborId === 'string' && b.targetNeighborId) out.targetNeighborId = b.targetNeighborId.slice(0, 80)
+  return out
+}

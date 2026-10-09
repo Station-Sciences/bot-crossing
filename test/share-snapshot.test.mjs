@@ -151,3 +151,24 @@ test('a project shares only its last folder name, never a path', () => {
   ])
   assert.deepEqual(snap.threads.map((t) => t.project), ['foo', 'foo (2)', 'api', 'web'])
 })
+
+// ── war ──────────────────────────────────────────────────────────────────────
+
+const WAR = { id: 'war_k_1', target: 'a'.repeat(16), seed: 9, startedAt: NOW, attackers: 4, defenders: 5, targetNeighborId: 'nb_SECRET' }
+
+test('warReady mirrors the toggle, and there is no battle at peace', () => {
+  const off = buildSnapshot({ threads: [], state: baseState(), now: NOW })
+  assert.equal(off.warReady, false)
+  assert.equal(off.battle, null)
+  const on = buildSnapshot({ threads: [], state: baseState({ war: { enabled: true, battle: null } }), now: NOW })
+  assert.equal(on.warReady, true)
+})
+
+test('a battle is announced while live and gone after it has lingered, and never names its target', () => {
+  const state = baseState({ war: { enabled: true, battle: WAR } })
+  const live = buildSnapshot({ threads: [], state, now: NOW + 1000 })
+  assert.deepEqual(live.battle, { id: WAR.id, target: WAR.target, seed: 9, startedAt: NOW, attackers: 4, defenders: 5 })
+  assert.doesNotMatch(JSON.stringify(live), /SECRET|targetNeighborId/)
+  const later = buildSnapshot({ threads: [], state, now: NOW + 10 * 60_000 })
+  assert.equal(later.battle, null)
+})
