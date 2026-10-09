@@ -1569,3 +1569,9 @@ kbd {
   }
 }
 .bot-crossing-canvas { cursor: grab; }
+
+/* A neighbour's bot: who and what, and nothing to press. */
+.thread-pop.readonly .pair,
+.thread-pop.readonly .progress {
+  display: none;
+}

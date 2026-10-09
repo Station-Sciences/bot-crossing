@@ -697,8 +697,14 @@ export class Hud {
     // On a phone the card docks above the sheet's peek, so the sheet drops to make room.
     if (this.isPhone()) this.toggleSheet(false)
 
-    this.$('.thread-pop .title').textContent = thread.title || 'Untitled thread'
-    const status = STATUS_LABEL[agent.status] || agent.status
+    // A friend's bot says whose it is and what it is up to, and offers nothing to press.
+    const neighbor = thread.neighbor || null
+    card.classList.toggle('readonly', Boolean(neighbor))
+    this.$('.thread-pop .title').textContent = neighbor
+      ? `${neighbor.name} · ${thread.project}`
+      : thread.title || 'Untitled thread'
+    const status =
+      neighbor && agent.status === 'waiting' ? `Waiting on ${neighbor.name}` : STATUS_LABEL[agent.status] || agent.status
     const meta = this.$('.thread-pop .meta')
     const bits = [
       `<span class="tag"><i class="swatch" style="background:${hex(agent.trim.getHex())}"></i>${escapeHtml(status)}</span>`,

@@ -17,6 +17,7 @@ import { shorelinePoints } from './world/planet.js'
 import { shipPosition } from './world/plots.js'
 import {
   fetchThreads,
+  fetchNeighbors,
   fetchState,
   saveState,
   openThread,
@@ -26,6 +27,7 @@ import {
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 import { withErrands } from './game/errands.js'
 import { canGrab } from './agents/carry.js'
+import { hydrateNeighbors } from './game/neighbors.js'
 
 /**
  * Boot and the outer game loop.
@@ -62,7 +64,7 @@ engine.setPlanetGrade(PLANETS[settings.get('planet')]?.grade)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
+let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, sharing: { enabled: false, key: '', name: '' }, neighbors: [] }
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -75,6 +77,8 @@ let hoverId = null
 let statusCursor = 0
 let pendingSave = 0
 const hoverGround = new THREE.Vector3()
+/** What our server last fetched from each friend — `GET /api/neighbors`. */
+let neighborResults = []
 
 // ── actions the HUD can trigger ────────────────────────────────────────────────────────
 
@@ -128,7 +132,7 @@ const actions = {
   /** Fly to the next astronaut in a given state, cycling through them on repeat presses. */
   focusStatus: (status) => {
     const key = status === 'agents' ? null : status
-    const pool = colony.astronauts.agents.filter((a) => (key ? a.status === key : true))
+    const pool = colony.astronauts.agents.filter((a) => !a.neighbor && (key ? a.status === key : true))
     if (!pool.length) {
       hud.hint(key ? `Nobody is ${(STATUS_LABEL[key] || key).toLowerCase()} right now` : 'No bots on the surface')
       return
@@ -292,7 +296,7 @@ const actions = {
   // The card's bar is about the *thread*, not about how much of its building has risen —
   // those were the same number while construction was drawn by burying the structure.
   progressFor: (id) => {
-    const thread = threads.find((t) => t.id === id)
+    const thread = threads.find((t) => t.id === id) || colony.neighborThreads.get(id)
     return thread ? transcriptProgress(thread) : 0
   },
 }
@@ -336,7 +340,7 @@ function select(id, { fly = false } = {}) {
     ambience.play(`select-${n}`, { x: agent.pos.x, y: agent.pos.y + 0.8, z: agent.pos.z, gain: 0.9 })
   }
   // Picking somebody is also picking the zone they are standing on: the sidebar follows.
-  if (thread?.project && colony.plots.has(thread.project)) selectedProject = thread.project
+  if (!thread?.neighbor && thread?.project && colony.plots.has(thread.project)) selectedProject = thread.project
   syncProject()
   if (fly) {
     rig.focus(new THREE.Vector3(agent.pos.x, 0, agent.pos.z), { distance: Math.min(rig.desiredDistance, 26) })
@@ -765,11 +769,11 @@ engine.canvas.addEventListener('pointerdown', (e) => {
   const agent = colony.pick(p.x, p.y, p.aspect)
   if (agent) {
     // Held, it picks up; let go early and it was a selection all along.
-    if (!canGrab(agent)) return
+    if (!canGrab(agent) || agent.neighbor) return
     drag.candidateAgent = agent
   } else {
     const plot = plotUnder(e, p)
-    if (!plot) return
+    if (!plot || plot.neighbor) return
     drag.candidate = plot.name
   }
   drag.startX = e.clientX
@@ -832,7 +836,12 @@ engine.canvas.addEventListener('pointerup', (e) => {
   // opens that repo's sidebar, and bare ground closes that too.
   if (selectedId) select(null, {})
   const plot = plotUnder(e, p)
-  if (plot) selectProject(plot.name, {})
+  if (plot?.neighbor) {
+    // A friend's zone has no folder here and nothing to do to it — say whose it is and stop.
+    let bots = 0
+    for (const t of colony.neighborThreads.values()) if (t.neighbor.id === plot.neighbor.id && t.project === plot.name) bots++
+    hud.hint(`${plot.neighbor.name} · ${plot.name} · ${bots} bot${bots === 1 ? '' : 's'}`)
+  } else if (plot) selectProject(plot.name, {})
   else actions.closeProject()
 })
 
@@ -992,7 +1001,8 @@ function applyThreads(list) {
   }
   if (firstSeen) queueSave()
 
-  const stats = colony.setThreads(list, archivedSet, hiddenSet, known)
+  const stats = colony.setThreads(list, archivedSet, hiddenSet, known, hydrateNeighbors(state.neighbors, neighborResults))
+  rig.setWorldLimit(colony.worldReach())
   hud.setStats(stats)
   chimeForNewWaiting(list, archivedSet, hiddenSet)
 
@@ -1058,7 +1068,14 @@ async function poll() {
   if (polling) return
   polling = true
   try {
-    const res = await fetchThreads()
+    // Friends ride the same clock as your own threads. A failed neighbour fetch keeps what we
+    // had: their settlement going quiet is the server's call, made per friend.
+    const wantNeighbors = (state.neighbors || []).length > 0
+    const [res, nb] = await Promise.all([
+      fetchThreads(),
+      wantNeighbors ? fetchNeighbors().catch(() => null) : Promise.resolve({ neighbors: [] }),
+    ])
+    if (nb) neighborResults = nb.neighbors || []
     applyThreads(res.threads || [])
     hud.removeBoot()
   } catch (err) {
