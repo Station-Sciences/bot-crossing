@@ -24,6 +24,8 @@ import { MOOD_MS, SCENE_MS, SocialPlanner, canSocialise, makeScene, near, partsA
 
 /** How often the planner is asked what has changed. Steps are applied every frame regardless. */
 export const PLAN_EVERY_MS = 250
+/** How long after a run stops working its bot may still go off to play when it reaches idle. */
+export const FINISH_WINDOW_MS = 10 * 60 * 1000
 
 /**
  * The zone a thread lives in, named as its plot is: a home repo's plot is called by the repo, a
@@ -52,17 +54,26 @@ export function plannerBot(agent, zone = null) {
 }
 
 /**
- * Runs that just finished: a bot whose thread was `working` when last seen and is `idle` now. Only
- * that step counts — a run that ends waiting on you has something to say first, and is not off to
- * play. Returns the events and the statuses to compare against next time; a bot seen for the first
- * time is only remembered, since nothing about it has changed yet.
+ * Runs that just finished: a bot that reaches `idle` whose last status other than `waiting` was
+ * `working`, and that stopped working no more than FINISH_WINDOW_MS ago. A run usually ends on
+ * waiting — unread until you look — and only goes idle once you have read it, so the wait between
+ * is looked through; a run that stopped stuck, or a bot that was never working, is not a run
+ * finishing, and one read ten minutes on is old news.
+ *
+ * `before` is what the last look returned, per bot: its status, its last status other than
+ * waiting, and when it stopped working. Returns the events and the same to compare against next
+ * time; a bot seen for the first time is only remembered, since nothing about it has changed yet.
  */
-export function statusEvents(before, agents) {
+export function statusEvents(before, agents, now = Date.now()) {
   const seen = new Map()
   const events = []
   for (const a of agents) {
-    seen.set(a.id, a.status)
-    if (before.get(a.id) === 'working' && a.status === 'idle') events.push({ kind: 'finished', id: a.id })
+    const was = before.get(a.id)
+    const last = a.status === 'waiting' ? (was?.last ?? null) : a.status
+    const leftAt = was?.status === 'working' && a.status !== 'working' ? now : (was?.leftAt ?? null)
+    seen.set(a.id, { status: a.status, last, leftAt })
+    const finished = was && was.status !== 'idle' && a.status === 'idle' && was.last === 'working'
+    if (finished && leftAt != null && now - leftAt <= FINISH_WINDOW_MS) events.push({ kind: 'finished', id: a.id })
   }
   return { events, seen }
 }
@@ -263,7 +274,7 @@ export class SocialDirector {
     colony.scene.add(this.group)
     /** Events since the planner last looked. */
     this.events = []
-    /** Every bot's status as last seen, for spotting a run that just finished. */
+    /** Every bot's status as last seen (see `statusEvents`), for spotting a run that just finished. */
     this.statuses = new Map()
     /** Bots getting up off the ground after their scene ended under them: id → until (ms). */
     this.standing = new Map()
@@ -328,7 +339,7 @@ export class SocialDirector {
       this.planAt = now
       // Statuses only change when a scan lands, seconds apart, so a look per planning step
       // misses no run that finishes.
-      const seen = statusEvents(this.statuses, astronauts.agents)
+      const seen = statusEvents(this.statuses, astronauts.agents, now)
       this.statuses = seen.seen
       this.events.push(...seen.events)
       const before = new Map(this.planner.active.map((s) => [s.id, s]))

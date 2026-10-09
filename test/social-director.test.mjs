@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  BALL, ballAt, departureEvents, kickArc, plannerBot, sceneShift, shiftStep, statusEvents, warEvents, zoneOfThread,
+  BALL, FINISH_WINDOW_MS, ballAt, departureEvents, kickArc, plannerBot, sceneShift, shiftStep, statusEvents, warEvents, zoneOfThread,
 } from '../src/game/social-director.js'
 import { hydrateNeighbors } from '../src/game/neighbors.js'
 import { MOOD_MS, makeScene } from '../src/game/social.js'
@@ -50,15 +50,35 @@ test('an idle bot that is not out on its feet is away: it would refuse every ste
 })
 
 test('a run that finishes (working to idle) is an event; nothing else is', () => {
-  const first = statusEvents(new Map(), [agent('a', 'working'), agent('b', 'idle'), agent('c', 'working'), agent('d', 'sleeping')])
+  const t0 = 1_000_000
+  const first = statusEvents(new Map(), [agent('a', 'working'), agent('b', 'idle'), agent('c', 'working'), agent('d', 'sleeping')], t0)
   assert.deepEqual(first.events, [], 'a bot seen for the first time has not changed')
-  const next = statusEvents(first.seen, [agent('a', 'idle'), agent('b', 'idle'), agent('c', 'waiting'), agent('d', 'idle'), agent('e', 'idle')])
+  const next = statusEvents(first.seen, [agent('a', 'idle'), agent('b', 'idle'), agent('c', 'blocked'), agent('d', 'idle'), agent('e', 'idle')], t0 + 1000)
   assert.deepEqual(next.events, [{ kind: 'finished', id: 'a' }])
-  assert.equal(next.seen.get('c'), 'waiting')
-  // Waiting on you first, then read: that is not a run just finished.
-  assert.deepEqual(statusEvents(next.seen, [agent('c', 'idle')]).events, [])
+  assert.equal(next.seen.get('c').status, 'blocked')
+  // Stuck, then sorted out: the run did not finish, it broke.
+  assert.deepEqual(statusEvents(next.seen, [agent('c', 'idle')], t0 + 2000).events, [])
   // And the same step is only reported once.
-  assert.deepEqual(statusEvents(next.seen, [agent('a', 'idle')]).events, [])
+  assert.deepEqual(statusEvents(next.seen, [agent('a', 'idle')], t0 + 2000).events, [])
+})
+
+test('a run that ends waiting on you still finished, once you have read it, if that is within ten minutes', () => {
+  assert.equal(FINISH_WINDOW_MS, 10 * 60 * 1000)
+  const t0 = 1_000_000
+  const working = statusEvents(new Map(), [agent('a', 'working'), agent('b', 'working')], t0)
+  const unread = statusEvents(working.seen, [agent('a', 'waiting'), agent('b', 'waiting')], t0 + 1000)
+  assert.deepEqual(unread.events, [])
+  // Still unread on the next scans: the clock runs from when it stopped working, not from the last scan.
+  const still = statusEvents(unread.seen, [agent('a', 'waiting'), agent('b', 'waiting')], t0 + 5 * 60 * 1000)
+  assert.deepEqual(still.events, [])
+  const read = statusEvents(still.seen, [agent('a', 'idle')], t0 + 1000 + FINISH_WINDOW_MS)
+  assert.deepEqual(read.events, [{ kind: 'finished', id: 'a' }], 'read within ten minutes')
+  const late = statusEvents(still.seen, [agent('b', 'idle')], t0 + 1000 + FINISH_WINDOW_MS + 1)
+  assert.deepEqual(late.events, [], 'read after ten minutes: old news')
+  // Waiting with no run before it is not a run finishing either.
+  const idle = statusEvents(new Map(), [agent('c', 'idle')], t0)
+  const asked = statusEvents(idle.seen, [agent('c', 'waiting')], t0 + 1000)
+  assert.deepEqual(statusEvents(asked.seen, [agent('c', 'idle')], t0 + 2000).events, [])
 })
 
 test('a home thread that is archived, or vanishes from the scan, is a heartbreak for its repo', () => {
