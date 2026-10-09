@@ -38,6 +38,22 @@ export function attackBlocker({ secure, enabled, sharing, result, name, homeFigh
   return ''
 }
 
+/** Whether this id is still on our list of friends: a battle with someone we removed counts for nothing. */
+export function isFriend(neighbors, id) {
+  return Boolean(id) && (neighbors || []).some((n) => n.id === id)
+}
+
+/**
+ * What to do with the battle we started: leave it `live`, settle it once it is `over`, or — when
+ * its target has been removed from our friends — `called-off`, uncounted, since there is nobody
+ * left to put the result against or name in a toast.
+ */
+export function ownBattleFate(own, neighbors, now = Date.now()) {
+  if (!own) return null
+  if (!isFriend(neighbors, own.targetNeighborId)) return 'called-off'
+  return battleLive(own, now) ? 'live' : 'over'
+}
+
 /**
  * Whether a friend's snapshot says they are in a battle: one they started, or — as a bare
  * `warBusy`, since the battle itself is in the attacker's snapshot — one they are defending.
@@ -49,21 +65,41 @@ export function friendInBattle(snapshot, now = Date.now()) {
 /**
  * The friend whose snapshot says they are attacking us, if any. `tagFor(battleId)` is our own tag
  * for that battle — salted per battle, so there is no single tag to look for — or nothing while it
- * is still being hashed. A battle we are already showing keeps its place over a newer one;
- * otherwise the one that started first wins. A battle claiming to start more than a minute from now
- * is a clock we cannot trust, and is ignored.
+ * is still being hashed. A battle we are already showing (`current`, `{ neighborId, battle }`)
+ * keeps its place over a newer one; otherwise the one that started first wins. A battle claiming
+ * to start more than a minute from now is a clock we cannot trust, and is ignored.
+ *
+ * Everything else here is about a friend who does not play fair, since all of this is read off
+ * their snapshot:
+ * - The battle on screen keeps the numbers it had when we first saw it. The same id with a new
+ *   seed, start or head count is not believed — otherwise moving `startedAt` forward every poll
+ *   would hold the banner up, and our Attack button off, for ever.
+ * - A battle already counted (`seen`) is not shown again, so it cannot come back for a second toast.
+ * - A friend's battle that starts before their last one ended (`endedAt[friendId]`) is ignored:
+ *   one already over, under a fresh id every poll, would otherwise be a fresh loss every poll.
  */
-export function incomingBattle(friends, tagFor, now = Date.now(), currentId = null) {
+export function incomingBattle(friends, tagFor, now = Date.now(), { current = null, seen = [], endedAt = {} } = {}) {
   if (typeof tagFor !== 'function') return null
   const aimedAtUs = (b) => {
     const tag = tagFor(b.id)
     return Boolean(tag) && b.target === tag
   }
-  const hits = (friends || []).filter(
-    (f) => f.battle && aimedAtUs(f.battle) && battleLive(f.battle, now) && f.battle.startedAt <= now + FUTURE_SLACK_MS
-  )
+  const isCurrent = (f) => Boolean(current) && f.id === current.neighborId && f.battle.id === current.battle.id
+  const believable = (f) => {
+    if (isCurrent(f)) return true
+    if (current && f.battle.id === current.battle.id) return false // the same id from someone else
+    if ((seen || []).includes(f.battle.id)) return false
+    const ended = endedAt?.[f.id]
+    return !(Number.isFinite(ended) && f.battle.startedAt < ended)
+  }
+  const hits = (friends || [])
+    .filter((f) => f.battle)
+    .map((f) => (isCurrent(f) ? { ...f, battle: current.battle } : f))
+    .filter(
+      (f) => believable(f) && aimedAtUs(f.battle) && battleLive(f.battle, now) && f.battle.startedAt <= now + FUTURE_SLACK_MS
+    )
   if (!hits.length) return null
-  const kept = currentId && hits.find((f) => f.battle.id === currentId)
+  const kept = hits.find(isCurrent)
   const pick = kept || hits.reduce((a, b) => (b.battle.startedAt < a.battle.startedAt ? b : a))
   return { neighborId: pick.id, name: pick.name, battle: pick.battle }
 }

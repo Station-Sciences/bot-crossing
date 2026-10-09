@@ -7,7 +7,7 @@ import assert from 'node:assert/strict'
 import { MARCH_MS, battleLive, planBattle } from '../src/game/war.js'
 import {
   FUTURE_SLACK_MS, SEEN_CAP, attackBlocker, bannerPhase, clock, formatRecord, friendFighters, friendInBattle,
-  incomingBattle, recordResult, resultText,
+  incomingBattle, isFriend, ownBattleFate, recordResult, resultText,
 } from '../src/game/war-page.js'
 
 const ready = {
@@ -103,7 +103,67 @@ test('the battle being shown keeps its place; otherwise the earliest wins', () =
     { id: 'nb_2', battle: battle({ id: 'war_early', startedAt: 1_000_000 }) },
   ]
   assert.equal(incomingBattle(friends, ours('aaaaaaaaaaaaaaaa'), now).battle.id, 'war_early')
-  assert.equal(incomingBattle(friends, ours('aaaaaaaaaaaaaaaa'), now, 'war_late').battle.id, 'war_late')
+  const current = { neighborId: 'nb_1', battle: friends[0].battle }
+  assert.equal(incomingBattle(friends, ours('aaaaaaaaaaaaaaaa'), now, { current }).battle.id, 'war_late')
+})
+
+test('a battle already counted is not shown again, unless it is the one on screen', () => {
+  const now = 1_000_000 + 5000
+  const b = battle()
+  const friends = [{ id: 'nb_1', battle: b }]
+  assert.equal(incomingBattle(friends, ours(b.target), now, { seen: ['war_a'] }), null)
+  const current = { neighborId: 'nb_1', battle: b }
+  assert.equal(incomingBattle(friends, ours(b.target), now, { seen: ['war_a'], current }).battle, b)
+})
+
+test('a battle rewritten under the same id is ignored: the first one seen keeps its numbers, and ends', () => {
+  const first = battle()
+  const end = first.startedAt + planBattle(first).durationMs + 30000
+  const current = { neighborId: 'nb_1', battle: first }
+  for (const change of [{ startedAt: first.startedAt + 20_000 }, { seed: 6 }, { attackers: 9 }, { defenders: 1 }]) {
+    const rewritten = { ...first, ...change }
+    const friends = [{ id: 'nb_1', name: 'Mark', battle: rewritten }]
+    const hit = incomingBattle(friends, ours(first.target), first.startedAt + 5000, { current })
+    assert.equal(hit.battle, first, JSON.stringify(change))
+    // Pushing startedAt forward every poll does not keep it on screen past the first one's end.
+    const late = { ...first, startedAt: end }
+    assert.equal(incomingBattle([{ id: 'nb_1', battle: late }], ours(first.target), end + 1, { current }), null)
+  }
+  // The same id from a different friend is a different battle, and not the one we are showing.
+  const copy = [{ id: 'nb_2', name: 'Sue', battle: { ...first, seed: 6 } }]
+  assert.equal(incomingBattle(copy, ours(first.target), first.startedAt + 5000, { current }), null)
+})
+
+test("a friend's battles that start before their last one ended are ignored, so a loss cannot be flooded", () => {
+  const first = battle()
+  const endedAt = { nb_1: first.startedAt + planBattle(first).durationMs }
+  const now = endedAt.nb_1 + 10_000
+  // Already over when it arrives, under a fresh id, every poll: one loss, not one per poll.
+  const flood = battle({ id: 'war_flood', startedAt: endedAt.nb_1 - 5000 })
+  assert.equal(incomingBattle([{ id: 'nb_1', battle: flood }], ours(flood.target), now, { endedAt }), null)
+  const next = battle({ id: 'war_next', startedAt: endedAt.nb_1 + 1000 })
+  assert.equal(incomingBattle([{ id: 'nb_1', battle: next }], ours(next.target), now, { endedAt }).battle, next)
+  // Only that friend: another friend's battle is judged on its own.
+  assert.equal(incomingBattle([{ id: 'nb_2', battle: flood }], ours(flood.target), now, { endedAt }).battle, flood)
+})
+
+test('a friend is still a friend only while they are on the list', () => {
+  const neighbors = [{ id: 'nb_1' }, { id: 'nb_2' }]
+  assert.equal(isFriend(neighbors, 'nb_1'), true)
+  assert.equal(isFriend(neighbors, 'nb_9'), false)
+  assert.equal(isFriend(neighbors, undefined), false)
+  assert.equal(isFriend(undefined, 'nb_1'), false)
+})
+
+test('our own battle is called off when its target is removed, settled once over, and otherwise left alone', () => {
+  const own = { ...battle(), targetNeighborId: 'nb_1' }
+  const end = own.startedAt + planBattle(own).durationMs + 30000
+  assert.equal(ownBattleFate(null, [{ id: 'nb_1' }], own.startedAt), null)
+  assert.equal(ownBattleFate(own, [{ id: 'nb_1' }], own.startedAt + 1000), 'live')
+  assert.equal(ownBattleFate(own, [{ id: 'nb_1' }], end + 1), 'over')
+  // Removed mid-battle, or after it ended: nobody to count it against, so no tally and no toast.
+  assert.equal(ownBattleFate(own, [{ id: 'nb_2' }], own.startedAt + 1000), 'called-off')
+  assert.equal(ownBattleFate(own, [], end + 1), 'called-off')
 })
 
 test('a result is counted once, from the side we were on', () => {

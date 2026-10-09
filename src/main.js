@@ -32,7 +32,8 @@ import { NEIGHBOR_CAP, addNeighbor, hydrateNeighbors, newShareKey, removeNeighbo
 import { LINGER_MS, battleLive, newBattle, planBattle, scoreAt, warTag } from './game/war.js'
 import { eligibleFighters } from './game/war-director.js'
 import {
-  attackBlocker, bannerPhase, formatRecord, friendFighters, friendInBattle, incomingBattle, recordResult, resultText,
+  attackBlocker, bannerPhase, formatRecord, friendFighters, friendInBattle, incomingBattle, isFriend, ownBattleFate,
+  recordResult, resultText,
 } from './game/war-page.js'
 
 /**
@@ -108,6 +109,12 @@ const warSecure = Boolean(globalThis.crypto?.subtle)
 let warTagFor = { key: null, byId: new Map() }
 /** The battle on screen — `{ battle, side, neighborId, plan }` — or null. */
 let warNow = null
+/**
+ * When each friend's last battle on us ended, by friend id. A battle of theirs that starts before
+ * it is ignored, so a friend cannot announce an already-finished battle under a fresh id every poll
+ * and hand us a loss each time. Memory is enough: `seen` still stops a recount after a reload.
+ */
+const warEndedAt = Object.create(null)
 let attacking = false
 let lastWarSync = 0
 
@@ -405,6 +412,7 @@ const actions = {
     neighborResults = neighborResults.filter((r) => r.id !== id)
     await saveNow()
     applyThreads(threads)
+    syncWar() // a battle with them stops now, uncounted, rather than on the next tick
     hud.setNeighbors(neighborModel())
   },
 
@@ -1400,10 +1408,12 @@ function syncWar(now = Date.now()) {
   lastWarSync = now
   refreshWarTags()
   const own = state.war?.battle
+  const fate = ownBattleFate(own, state.neighbors, now)
   // Our own battle, gone past its linger, leaves the file. Counted first in case this page was
   // closed through its end: the plan is the same whenever it is run, so the result still stands.
-  if (own && !battleLive(own, now)) {
-    countResult({ battle: own, side: 'attack', neighborId: own.targetNeighborId })
+  // One on a friend we have since removed just leaves, uncounted.
+  if (fate === 'over') countResult({ battle: own, side: 'attack', neighborId: own.targetNeighborId })
+  if (fate === 'over' || fate === 'called-off') {
     state.war = { ...state.war, battle: null }
     queueSave()
   }
@@ -1414,8 +1424,13 @@ function syncWar(now = Date.now()) {
     next = { battle: b, side: 'attack', neighborId: b.targetNeighborId }
   } else if (state.war?.enabled && warTagFor.key) {
     // One battle at a time: we only look for an attack on us while we are not attacking anyone.
-    const tagFor = (id) => warTagFor.byId.get(id)
-    const hit = incomingBattle(hydrated, tagFor, now, warNow?.side === 'defend' ? warNow.battle.id : null)
+    // `hydrated` can trail a removal by a frame, so friends are checked against the list itself.
+    const friends = hydrated.filter((f) => isFriend(state.neighbors, f.id))
+    const hit = incomingBattle(friends, (id) => warTagFor.byId.get(id), now, {
+      current: warNow?.side === 'defend' ? warNow : null,
+      seen: state.war?.seen,
+      endedAt: warEndedAt,
+    })
     if (hit) next = { battle: hit.battle, side: 'defend', neighborId: hit.neighborId }
   }
 
@@ -1428,7 +1443,7 @@ function syncWar(now = Date.now()) {
     }
     return
   }
-  if (warNow?.battle.id !== next.battle.id || warNow.side !== next.side) {
+  if (warNow?.battle.id !== next.battle.id || warNow.side !== next.side || warNow.neighborId !== next.neighborId) {
     warNow = { ...next, plan: planBattle(next.battle) }
     if (next.side === 'defend') {
       // The battle is in the attacker's snapshot, not ours: say in ours that we are busy until it
@@ -1441,18 +1456,22 @@ function syncWar(now = Date.now()) {
     }
     hud.setNeighbors(neighborModel())
   }
-  colony.setBattle(next.battle, { side: next.side, enemyNeighborId: next.neighborId })
+  // From here on, only `warNow`: the battle as first seen, which its plan was made from. The
+  // colony, the banner and the score all run off the same numbers, whatever the snapshot says now.
+  const { battle, side, neighborId, plan } = warNow
+  colony.setBattle(battle, { side, enemyNeighborId: neighborId })
 
-  const view = bannerPhase(warNow.plan, next.battle.startedAt, now)
+  const view = bannerPhase(plan, battle.startedAt, now)
   if (!view) {
     hud.setBattleBanner(null)
+    if (side === 'defend') warEndedAt[neighborId] = Math.max(warEndedAt[neighborId] || 0, battle.startedAt + plan.durationMs)
     countResult(warNow)
     return
   }
   hud.setBattleBanner({
-    side: next.side,
-    name: friendName(next.neighborId),
-    score: scoreAt(warNow.plan, next.battle.startedAt, now),
+    side,
+    name: friendName(neighborId),
+    score: scoreAt(plan, battle.startedAt, now),
     label: view.label,
   })
 }
@@ -1463,7 +1482,8 @@ function syncWar(now = Date.now()) {
  * rather than re-planning first.
  */
 function countResult({ battle, side, neighborId, plan }) {
-  if (!neighborId || state.war?.seen?.includes(battle.id)) return
+  // A friend removed since: no tally entry for someone who is gone, and no toast naming their address.
+  if (!isFriend(state.neighbors, neighborId) || state.war?.seen?.includes(battle.id)) return
   const result = recordResult(state.war, { battle, side, neighborId }, plan || planBattle(battle))
   if (!result) return
   state.war = result.war
