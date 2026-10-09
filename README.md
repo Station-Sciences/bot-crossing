@@ -152,6 +152,28 @@ Zone names follow the same rule: a plot shows its name only while somebody there
 waiting or stuck. Everything else is nameless until you point at it. The plate itself is just
 text over a soft halo with a small accent dot — no panel, no outline.
 
+### Social life
+
+Idle bots have a social life. Two wander over to each other and chat, or three to five gather in a
+ring and take turns talking. Two argue, stomp, and walk off in opposite directions. One sits down
+heartbroken and the nearest idle bot comes over to comfort it until it stands up cheered. A few kick a
+ball about or play chase. Small bubbles beside their heads say what is going on: 💬 💢 💔 💧 ❤️ ⚽ 🎵.
+
+Some of it just happens, so the colony never stands still. The rest is set off by your threads:
+
+- **Archiving a thread** leaves one of its repo-mates heartbroken. The same happens when a thread
+  disappears from a friend's colony.
+- **A run that finishes** (working → idle) sends that bot off to play with a repo-mate.
+- **After a war battle**, for a minute, the losing side's bots sulk and argue and the winners play.
+
+Only idle bots take part. A bot that is working, waiting on you, stuck, celebrating or asleep is
+never pulled in, and if a bot's thread wakes up mid-scene, it leaves straight away and goes back
+to work. Fighting in a battle always comes first. None of it looks like a status: there is no
+badge, no red eyes and no error face, and anger has its own grumpy face.
+
+Nothing about it is saved or shared. Your friends' bots join in on your screen only, and their
+screen runs its own. Turn it off under Settings → View → *Bot social life*.
+
 ## Getting about
 
 Bots route rather than drift. Buildings and the landing pad are rasterised into a
