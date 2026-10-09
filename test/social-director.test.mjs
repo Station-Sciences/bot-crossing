@@ -8,6 +8,7 @@ import assert from 'node:assert/strict'
 import {
   BALL, ballAt, departureEvents, kickArc, plannerBot, sceneShift, shiftStep, statusEvents, warEvents, zoneOfThread,
 } from '../src/game/social-director.js'
+import { hydrateNeighbors } from '../src/game/neighbors.js'
 import { MOOD_MS, makeScene } from '../src/game/social.js'
 import { mulberry32 } from '../src/game/war.js'
 
@@ -87,17 +88,68 @@ test('one heartbreak per repo, however many of its threads go at once', () => {
   assert.deepEqual(events, [{ kind: 'archived', zone: 'x', owner: 'home' }])
 })
 
-test('a friend\'s thread that drops out of their set is theirs to mourn; a friend going entirely is not', () => {
-  const neighborsBefore = byId([friendThread('nb:1', 'mark', 'shop'), friendThread('nb:2', 'mark', 'shop'), friendThread('nb:3', 'sue', 'blog')])
+test('a friend\'s thread that drops out of what they share is theirs to mourn; a friend going entirely is not', () => {
+  const shop = (nid, ...ids) => [nid, new Map(ids.map((id) => [`nb:${nid}:${id}`, 'shop']))]
+  const friendsBefore = new Map([shop('mark', 1, 2), shop('sue', 1)])
   // Mark loses one thread and keeps one; Sue's whole settlement goes (removed, or offline).
-  const neighborsAfter = byId([friendThread('nb:2', 'mark', 'shop')])
-  assert.deepEqual(departureEvents({ neighborsBefore, neighborsAfter }), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark' }])
+  const friendsAfter = new Map([shop('mark', 2)])
+  assert.deepEqual(departureEvents({ friendsBefore, friendsAfter }), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark' }])
   // Home threads and friends' are kept apart even with the same repo name.
   const both = departureEvents({
     before: byId([thread('a', 'shop')]), after: new Map(), scan: [],
-    neighborsBefore, neighborsAfter,
+    friendsBefore, friendsAfter,
   })
   assert.deepEqual(both.map((e) => e.owner), ['home', 'mark'])
+})
+
+/** What a friend shares, as their snapshot carries it. */
+const sharedThread = (n, extra = {}) => ({
+  id: `n:${String(n).padStart(16, '0')}`, project: 'shop', harness: 'claude-code', harnessName: 'Claude Code',
+  running: false, unread: false, hasError: false, prState: '', lastActivityAt: 5, createdAt: n, sizeBucket: 12, isErrand: false,
+  ...extra,
+})
+/** One poll of Mark's settlement, hydrated the way the page does it. */
+const markPoll = (threads, { status = 'online', now = 10_000_000 } = {}) => hydrateNeighbors(
+  [{ id: 'mark', slot: 0 }],
+  [{ id: 'mark', status, lastSeenAt: 9, snapshot: { v: 1, name: 'Mark', generatedAt: 1, projects: [{ name: 'shop', cells: [[0, 0]] }], threads } }],
+  now,
+)
+const friendsOf = (hydrated) => new Map(hydrated.map((n) => [n.id, n.shared]))
+const leaving = (a, b) => departureEvents({ friendsBefore: friendsOf(a), friendsAfter: friendsOf(b) })
+
+test('a friend\'s errand ending is no loss, nor is their settlement going offline', () => {
+  const errand = sharedThread(9, { isErrand: true, running: true })
+  const before = markPoll([sharedThread(1), sharedThread(2), errand])
+  assert.equal(before[0].shared.size, 2, 'the errand is not among what they share')
+  assert.deepEqual(leaving(before, markPoll([sharedThread(1), sharedThread(2)])), [])
+  // Away: their errands are dropped from the map, but nothing they share has gone.
+  assert.deepEqual(leaving(before, markPoll([sharedThread(1), sharedThread(2), errand], { status: 'away' })), [])
+})
+
+test('a friend\'s thread that only drops out of the threads drawn has not gone anywhere', () => {
+  const now = 10_000_000
+  // Seventy shared, sixty drawn, ranked by how recently each was active: the next poll re-ranks them.
+  const all = (fresh) => Array.from({ length: 70 }, (_, i) => sharedThread(i + 1, { lastActivityAt: fresh(i) ? now - 1000 : now - 3_600_000 - i }))
+  const first = markPoll(all((i) => i < 60), { now })
+  const second = markPoll(all((i) => i >= 10), { now })
+  assert.equal(first[0].shared.size, 70, 'every shared thread is known, drawn or not')
+  const drawn = (h) => new Set(h[0].threads.map((t) => t.id))
+  assert.ok([...drawn(first)].some((id) => !drawn(second).has(id)), 'the drawn set changed')
+  assert.deepEqual(leaving(first, second), [])
+})
+
+test('a friend who rotates their key changes every id at once: a reset, not a storm of heartbreaks', () => {
+  const before = markPoll([1, 2, 3, 4].map((n) => sharedThread(n)))
+  const rotated = markPoll([11, 12, 13, 14].map((n) => sharedThread(n)))
+  assert.deepEqual(leaving(before, rotated), [])
+  // Losing more than half in one poll reads the same way; half or fewer is real.
+  assert.deepEqual(leaving(before, markPoll([sharedThread(1)])), [])
+  assert.deepEqual(leaving(before, markPoll([sharedThread(1), sharedThread(2)])), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark' }])
+})
+
+test('a friend\'s thread really leaving is one heartbreak', () => {
+  const before = markPoll([1, 2, 3, 4].map((n) => sharedThread(n)))
+  assert.deepEqual(leaving(before, markPoll([1, 2, 4].map((n) => sharedThread(n)))), [{ kind: 'archived', zone: 'nb:mark/shop', owner: 'mark' }])
 })
 
 test('a battle\'s result: home and the friend it fought, opposite ways round, while it is fresh', () => {
@@ -255,3 +307,4 @@ test('a step is moved with its scene: goal and faced point, but not a faced bot'
   assert.deepEqual(shiftStep({ goal: { x: 1, z: 1 }, face: null, action: 'walk' }, off, westOfWall).goal, { x: 3, z: 0 })
   assert.equal(shiftStep(undefined, off), undefined)
 })
+

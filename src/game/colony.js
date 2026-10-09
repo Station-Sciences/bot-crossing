@@ -154,6 +154,8 @@ export class Colony {
     this.neighborPlots = new Map()
     this.neighborShips = new Map()
     this.neighborThreads = new Map()
+    /** Every thread each friend shares, drawn or not (`hydrateNeighbors`), for telling one archived from one off the map. */
+    this.neighborShared = new Map()
     this.neighborOffsets = new Map()
     this.neighborSites = []
     this._neighborKnown = new Set()
@@ -506,7 +508,8 @@ export class Colony {
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set(), neighbors = []) {
     const now = Date.now()
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
-    const neighborsBefore = this.neighborThreads
+    const friendsBefore = this.neighborShared
+    this.neighborShared = new Map(neighbors.map((n) => [n.id, n.shared ?? new Map()]))
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
     const byProject = new Map()
@@ -646,7 +649,7 @@ export class Colony {
     this.threads = new Map(live.map((t) => [t.id, t]))
     // Threads that left — archived, or gone from a friend's snapshot — can leave a repo-mate sad.
     this.social.noteThreads({
-      before, after: this.threads, scan: threads, archivedIds, neighborsBefore, neighborsAfter: this.neighborThreads,
+      before, after: this.threads, scan: threads, archivedIds, friendsBefore, friendsAfter: this.neighborShared,
     })
     this.urgentPlots = urgent
     this.activePlots = active

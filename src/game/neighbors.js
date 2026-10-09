@@ -87,6 +87,10 @@ export function capNeighborThreads(threads, max, now = Date.now()) {
  * but every bot sits down: nothing running, nothing waiting, last active at the epoch — which
  * `statusFor` reads as asleep. Their errands go, because an errand is by definition running.
  * The cap ranks by what the friend last told us, so the same buildings stay up while they are away.
+ *
+ * `shared` is every thread they share that is not an errand, drawn or not: namespaced id → repo.
+ * It is what tells a thread they archived from one that only dropped out of the cap's sixty, which
+ * is re-ranked on every poll; an errand is left out because one ending is no loss.
  */
 export function hydrateNeighbors(saved, results, now = Date.now()) {
   const byId = new Map((results || []).map((r) => [r.id, r]))
@@ -108,6 +112,7 @@ export function hydrateNeighbors(saved, results, now = Date.now()) {
       warBusy: r.snapshot.warBusy === true,
       battle: r.snapshot.battle ?? null,
       projects: r.snapshot.projects,
+      shared: new Map(r.snapshot.threads.filter((t) => !t.isErrand).map((t) => [neighborThreadId(n.id, t.id), t.project])),
       threads: capNeighborThreads(r.snapshot.threads.filter((t) => online || !t.isErrand), NEIGHBOR_THREAD_CAP, now)
         .map((t) => ({
           id: neighborThreadId(n.id, t.id),
@@ -126,6 +131,8 @@ export function hydrateNeighbors(saved, results, now = Date.now()) {
           archived: false,
           canOpen: false,
           ref: null,
+          // Their ids carry no `:errand:` as ours do, so the snapshot's word for it is kept.
+          errand: t.isErrand === true,
           neighbor: who,
         })),
     })

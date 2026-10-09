@@ -75,13 +75,18 @@ export function statusEvents(before, agents) {
  * when it was archived, or vanished from the scan altogether. One that is still scanned but was
  * hidden, or folded away as dormant, has not gone anywhere — it is only off the map.
  *
- * Friends (`neighbors`, their threads before and after): a thread counts when it disappears from a
- * friend's set while that friend still has others. A friend whose whole settlement goes — removed,
- * or offline — has not had a thread archived.
+ * Friends (`friendsBefore`/`friendsAfter`, each friend's `shared` from `hydrateNeighbors`: every
+ * thread they share, drawn or not, by id → repo): a thread counts when it disappears from what a
+ * friend shares while that friend still shares something. Only the drawn sixty are on the map, and
+ * those are re-ranked on every poll, so a thread that merely dropped out of them has gone nowhere.
+ * A friend whose whole settlement goes — removed, or offline — has not had a thread archived; nor
+ * has one who lost more than half of theirs in one poll, which is a reset — a new key changes
+ * every id at once — not a clear-out to grieve thread by thread.
  *
- * Errands never count: a subagent ending is the ordinary end of an errand, not a loss.
+ * Errands never count: a subagent ending is the ordinary end of an errand, not a loss. A friend's
+ * are not in `shared` at all.
  */
-export function departureEvents({ before = new Map(), after = new Map(), scan = [], archivedIds = new Set(), neighborsBefore = new Map(), neighborsAfter = new Map() }) {
+export function departureEvents({ before = new Map(), after = new Map(), scan = [], archivedIds = new Set(), friendsBefore = new Map(), friendsAfter = new Map() }) {
   const events = []
   const zones = new Set()
   const add = (owner, zone) => {
@@ -97,10 +102,12 @@ export function departureEvents({ before = new Map(), after = new Map(), scan = 
     const now = scanned.get(id)
     if (!now || now.archived || archived.has(id)) add('home', zoneOfThread(thread))
   }
-  const friendsLeft = new Set([...neighborsAfter.values()].map((t) => t.neighbor?.id))
-  for (const [id, thread] of neighborsBefore) {
-    if (neighborsAfter.has(id) || isErrandId(id) || !thread.neighbor) continue
-    if (friendsLeft.has(thread.neighbor.id)) add(thread.neighbor.id, zoneOfThread(thread))
+  for (const [friend, was] of friendsBefore) {
+    const is = friendsAfter.get(friend)
+    if (!was || !is?.size) continue
+    const gone = [...was].filter(([id]) => !is.has(id))
+    if (gone.length * 2 > was.size) continue
+    for (const [, project] of gone) add(friend, zoneOfThread({ project, neighbor: { id: friend } }))
   }
   return events
 }
@@ -290,7 +297,8 @@ export class SocialDirector {
 
   /**
    * The colony's roster just changed: anything that left is an event. Called from `setThreads`
-   * with the live threads before and after, the whole scan and the archive list.
+   * with the live threads before and after, the whole scan, the archive list and what each friend
+   * shares.
    */
   noteThreads(change) {
     if (!this.enabled) return

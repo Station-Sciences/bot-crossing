@@ -107,6 +107,17 @@ test('a friend sharing hundreds of threads is drawn with at most the cap', () =>
   assert.equal(n.threads.length, NEIGHBOR_THREAD_CAP)
 })
 
+test("a friend's threads say which are errands, and everything they share is known past the cap", () => {
+  const [n] = hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'online', lastSeenAt: 9, snapshot }])
+  assert.deepEqual(n.threads.map((t) => t.errand), [false, true])
+  // Errands are not in it: one ending is the ordinary end of an errand.
+  assert.deepEqual([...n.shared], [[neighborThreadId('nb_1', 'n:0000000000000001'), 'bot-crossing']])
+  const many = Array.from({ length: 300 }, (_, i) => thread(1, { id: `n:${String(i).padStart(16, '0')}` }))
+  const [big] = hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'online', lastSeenAt: 9, snapshot: { ...snapshot, threads: many } }])
+  assert.equal(big.threads.length, NEIGHBOR_THREAD_CAP)
+  assert.equal(big.shared.size, 300)
+})
+
 test('a friend with nothing to draw is left out', () => {
   assert.deepEqual(hydrateNeighbors([{ id: 'nb_1', slot: 0 }], [{ id: 'nb_1', status: 'unreachable', lastSeenAt: 0, snapshot: null }]), [])
   assert.deepEqual(hydrateNeighbors([{ id: 'nb_1', slot: 0 }], []), [])
