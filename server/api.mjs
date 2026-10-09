@@ -193,16 +193,39 @@ const sharing = createShareService({
     const s = (await readState()).sharing
     return s.enabled ? s.key : ''
   },
-  snapshot: async () =>
+  snapshot: () => cachedSnapshot(),
+})
+
+/**
+ * Every friend asks every few seconds, and a snapshot is a full scan of every harness. One scan
+ * serves everybody who asks inside this window — the promise is kept rather than the result, so
+ * friends arriving together share a scan that is still running instead of each starting one.
+ */
+const SNAPSHOT_TTL_MS = 3000
+let snapshotCache = null
+
+function cachedSnapshot() {
+  const now = Date.now()
+  if (snapshotCache && now - snapshotCache.at < SNAPSHOT_TTL_MS) return snapshotCache.value
+  const value = (async () =>
     buildSnapshot({
       threads: await reconcileArchived(await scanThreads()),
       state: await readState(),
       name: defaultName(),
-    }),
-})
+    }))()
+  const entry = { at: now, value }
+  snapshotCache = entry
+  // A failed scan is not worth remembering: the next friend to ask should get a fresh try.
+  value.catch(() => {
+    if (snapshotCache === entry) snapshotCache = null
+  })
+  return value
+}
 
 /** Open or close the share port to match the colony file. Called at boot and after every save. */
 export async function syncSharing() {
+  // A save may have renamed us, rotated the key or hidden a repo: none of that waits out the cache.
+  snapshotCache = null
   const s = (await readState()).sharing
   await sharing.sync(Boolean(s.enabled && s.key))
 }

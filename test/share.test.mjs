@@ -150,6 +150,21 @@ test('the local API is not reachable through the share port', async () => {
   )
 })
 
+test('friends asking within a few seconds share one scan, and a save starts a fresh one', async () => {
+  await withEnv(shareEnv, () =>
+    withServer(async ({ call, put }) => {
+      await put({ sharing: { enabled: true, key: KEY, name: 'Mark' } })
+      const { port } = await (await call('/api/sharing')).json()
+      const get = async () => (await fetch(`http://127.0.0.1:${port}${SHARE_PATH}`, auth(KEY))).json()
+      const first = await get()
+      await new Promise((r) => setTimeout(r, 20))
+      assert.equal((await get()).generatedAt, first.generatedAt, 'served from the same scan')
+      await put({ sharing: { enabled: true, key: KEY, name: 'Marcus' } })
+      assert.equal((await get()).name, 'Marcus', 'a rename shows on the next request, not after the cache runs out')
+    })
+  )
+})
+
 // ── the address in the link ──────────────────────────────────────────────────
 
 const v4 = (address, internal = false) => ({ family: 'IPv4', address, internal })

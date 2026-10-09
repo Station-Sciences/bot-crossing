@@ -40,6 +40,11 @@ import { NEIGHBOR_CAP, addNeighbor, hydrateNeighbors, newShareKey, removeNeighbo
  */
 
 const POLL_MS = 15000
+/**
+ * Friends run on a shorter clock than your own scan. Their machine reads its threads afresh for
+ * every request, so this interval is how stale a friend's settlement can get.
+ */
+const NEIGHBOR_POLL_MS = 5000
 const app = document.getElementById('app')
 
 app.insertAdjacentHTML(
@@ -1178,6 +1183,26 @@ async function poll() {
 }
 
 /**
+ * Friends between full polls. Re-applies the threads already in hand rather than rescanning your
+ * own harnesses, so a friend's bot changing state shows up within seconds without your machine
+ * doing its own scan three times as often.
+ */
+let pollingNeighbors = false
+async function pollNeighbors() {
+  if (polling || pollingNeighbors || document.hidden || !(state.neighbors || []).length) return
+  pollingNeighbors = true
+  try {
+    const nb = await fetchNeighbors().catch(() => null)
+    if (!nb) return
+    neighborResults = nb.neighbors || []
+    applyThreads(threads)
+    hud.setNeighbors(neighborModel())
+  } finally {
+    pollingNeighbors = false
+  }
+}
+
+/**
  * Save now rather than in half a second: the share port follows the file, and the page asks about
  * it next. False when the save failed, so a caller can put its change back rather than carry on.
  */
@@ -1278,6 +1303,7 @@ async function boot() {
   refreshSharing()
   await poll()
   setInterval(poll, POLL_MS)
+  setInterval(pollNeighbors, NEIGHBOR_POLL_MS)
   window.addEventListener('focus', poll)
   // A tab that was hidden for an hour should catch up the moment it comes back.
   document.addEventListener('visibilitychange', () => {
