@@ -7,9 +7,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   eligibleFighters, fillSlots, weaponFor, battleGround, rankSpot, knockoutOrder, downSlots, nearest,
-  fighterOrders, tankSpot, heliSpot, homeSide, GUN_DEPTH, SWORD_DEPTH, TANK_DEPTH,
+  fighterOrders, tankSpot, heliSpot, homeSide, GUN_DEPTH, SWORD_DEPTH, TANK_DEPTH, WarDirector,
 } from '../src/game/war-director.js'
 import { MARCH_MS, planBattle } from '../src/game/war.js'
+import * as THREE from 'three'
 
 const bot = (id, status = 'idle', extra = {}) => ({ id, status, state: 'at-site', pos: { x: 0, z: 0 }, neighbor: null, ...extra })
 const friend = (id, status = 'idle', nid = 'mark') => bot(id, status, { neighbor: { id: nid, name: 'Mark' } })
@@ -23,6 +24,20 @@ test('home fighters are home bots that may fight, in id order; a friend\'s are o
   assert.deepEqual(eligibleFighters(agents, null), ['a', 'c'])
   assert.deepEqual(eligibleFighters(agents, 'mark'), ['nb:mark:1', 'nb:mark:2'])
   assert.deepEqual(eligibleFighters(agents, 'nobody'), [])
+})
+
+test('a bot still in the ship, on the ramp or in your hand is not given a part', () => {
+  // Every bot on the first roster after a page load is queued or spawning: none of them can take
+  // an order yet, so none of them may hold a slot — they join as they step out.
+  const agents = [
+    bot('a', 'idle', { state: 'queued' }), bot('b', 'sleeping', { state: 'spawning' }),
+    bot('c', 'idle', { state: 'held' }), bot('d', 'idle', { state: 'falling' }),
+    bot('e', 'idle', { state: 'walking' }), bot('f', 'sleeping'),
+    friend('nb:mark:1', 'idle'), friend('nb:mark:2', 'idle'),
+  ]
+  agents[6].state = 'spawning'
+  assert.deepEqual(eligibleFighters(agents, null), ['e', 'f'])
+  assert.deepEqual(eligibleFighters(agents, 'mark'), ['nb:mark:2'])
 })
 
 test('the first fill is the first `count` by id; after that a fighter keeps its slot', () => {
@@ -161,4 +176,73 @@ test('which side home is on', () => {
   assert.equal(homeSide('attack'), 'attack')
   assert.equal(homeSide('defend'), 'defend')
   assert.equal(homeSide('nonsense'), null)
+})
+
+/** Just enough of a colony for the director to run under node: a scene, the bots, the map. */
+function fakeColony(agents, sites, refuse = new Set()) {
+  const orders = new Map()
+  return {
+    orders,
+    scene: new THREE.Scene(),
+    neighborSites: sites,
+    homeReach: () => 20,
+    groundAt: () => 0,
+    _dustTint: new THREE.Color(),
+    particles: { enabled: false, tracer() {}, puff() {}, weld() {}, step() {} },
+    astronauts: {
+      agents,
+      byId: new Map(agents.map((a) => [a.id, a])),
+      setWarOrders(id, o) {
+        if (o === null || refuse.has(id)) {
+          orders.delete(id)
+          return o === null
+        }
+        orders.set(id, o)
+        return true
+      },
+      clearWarOrders() { orders.clear() },
+    },
+  }
+}
+
+test('the battle line is drawn once and holds while the neighbour settlement moves', () => {
+  const at = (x, z) => ({ x, y: 0, z })
+  const agents = [bot('h1', 'idle', { pos: at(0, 0) }), friend('nb:mark:1', 'idle', 'mark')]
+  agents[1].pos = at(100, 0)
+  const sites = [{ id: 'mark', x: 100, z: 0, r: 20 }]
+  const colony = fakeColony(agents, sites)
+  const war = new WarDirector(colony)
+  const startedAt = 1_000_000
+  war.setBattle({ id: 'war_a', seed: 3, startedAt, attackers: 1, defenders: 1 }, { side: 'attack', enemyNeighborId: 'mark' })
+  war.update(0.016, startedAt + 1000)
+  const first = { ...war.ground.point }
+  assert.ok(Math.abs(first.x - 74) < 1e-9)
+  sites[0] = { id: 'mark', x: 40, z: 90, r: 30 }
+  war.update(0.016, startedAt + 2000)
+  assert.deepEqual(war.ground.point, first, 'the line did not follow the reshuffle')
+  // A new battle draws its own line from where things are now.
+  war.setBattle({ id: 'war_b', seed: 3, startedAt, attackers: 1, defenders: 1 }, { side: 'attack', enemyNeighborId: 'mark' })
+  war.update(0.016, startedAt + 1000)
+  assert.notDeepEqual(war.ground.point, first)
+  war.dispose()
+})
+
+test('a fighter that turns its order down is not in the fight: nobody faces it', () => {
+  const at = (x, z) => ({ x, y: 0, z })
+  // Two attackers; the nearer one to the defender refuses its order this frame.
+  const agents = [
+    bot('h1', 'idle', { pos: at(60, 0) }), bot('h2', 'idle', { pos: at(40, 0) }),
+    friend('nb:mark:1', 'idle', 'mark'),
+  ]
+  agents[2].pos = at(80, 0)
+  const colony = fakeColony(agents, [{ id: 'mark', x: 100, z: 0, r: 20 }], new Set(['h1']))
+  const war = new WarDirector(colony)
+  const startedAt = 1_000_000
+  war.setBattle({ id: 'war_c', seed: 3, startedAt, attackers: 2, defenders: 1 }, { side: 'attack', enemyNeighborId: 'mark' })
+  war.update(0.016, startedAt + MARCH_MS + 100)
+  assert.equal(war.slots.attack[0], 'h1', 'it keeps its part for when it can play it')
+  const defender = colony.orders.get('nb:mark:1')
+  assert.equal(defender.action, 'fight')
+  assert.deepEqual(defender.face, { x: 40, z: 0 }, 'faces the bot that is fighting, not the one that refused')
+  war.dispose()
 })

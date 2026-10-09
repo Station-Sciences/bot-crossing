@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { createHelicopter, createTank, dispose } from '../world/arsenal.js'
-import { MARCH_MS, canFight, downAt, mulberry32, phaseAt, planBattle } from './war.js'
+import { mayObey } from '../agents/war-orders.js'
+import { MARCH_MS, downAt, mulberry32, phaseAt, planBattle } from './war.js'
 
 /**
  * The war director: turns a battle plan into a battle on screen.
@@ -47,12 +48,15 @@ export const homeSide = (side) => (SIDES.includes(side) ? side : null)
 const byId = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 
 /**
- * The bots that may fight for one colony: home's (`neighborId` null) or one friend's. A bot on
- * its way back into the ship because its thread was archived is leaving, not available.
+ * The bots that may fight for one colony: home's (`neighborId` null) or one friend's. The same
+ * test the bots themselves apply to an order — idle or asleep, and out on their feet — so a part
+ * is never handed to a bot still queued in the ship, coming down the ramp, in your hand or on its
+ * way home. On a page loaded mid-battle that is everyone at first; they join as they step out,
+ * rather than holding slots from inside the ship where the knockouts and the guns cannot reach them.
  */
 export function eligibleFighters(agents, neighborId) {
   return agents
-    .filter((a) => canFight(a.status) && a.state !== 'leaving' && (neighborId == null ? !a.neighbor : a.neighbor?.id === neighborId))
+    .filter((a) => mayObey(a) && (neighborId == null ? !a.neighbor : a.neighbor?.id === neighborId))
     .map((a) => a.id)
     .sort(byId)
 }
@@ -315,10 +319,12 @@ export class WarDirector {
   }
 
   /**
-   * The line, from wherever the two colonies are now. A friend whose settlement drops off the map
-   * mid-battle (their machine went away) leaves the line where it was last drawn.
+   * The line, drawn once per battle from where the two colonies are when it is first needed, then
+   * held: a neighbour's settlement reshuffling mid-battle must not drag both ranks across the map.
+   * Until the friend's settlement is on the map there is no line, and nothing is staged.
    */
   _ground() {
+    if (this.ground) return this.ground
     const site = this.colony.neighborSites.find((s) => s.id === this.enemyId)
     if (site) {
       const home = { x: 0, z: 0 }
@@ -363,15 +369,25 @@ export class WarDirector {
       })
     }
 
-    for (const side of SIDES) {
-      const foes = live[other(side)].filter((f) => f.standing).map((f) => f.agent.pos)
-      for (const f of live[side]) {
-        f.target = nearest(f.agent.pos, foes)
-        astronauts.setWarOrders(f.agent.id, fighterOrders({
-          phase, ground, side, slot: f.slot, n: this.plan.count[side], winner: this.plan.winner,
-          down: !f.standing, target: f.target,
-        }))
+    // A bot that turns its order down is not in the fight this frame: nothing aims at it and it
+    // fires at nothing. It keeps its slot, and is back the moment it takes an order again. Whoever
+    // had picked it as a target picks again — a second issue of the same order keeps its clock, so
+    // that costs nothing but the call, and only on a frame where somebody refused.
+    for (let pass = 0; pass < 2; pass++) {
+      let refused = false
+      for (const side of SIDES) {
+        const foes = live[other(side)].filter((f) => f.standing).map((f) => f.agent.pos)
+        for (const f of live[side]) {
+          f.target = nearest(f.agent.pos, foes)
+          f.obeys = astronauts.setWarOrders(f.agent.id, fighterOrders({
+            phase, ground, side, slot: f.slot, n: this.plan.count[side], winner: this.plan.winner,
+            down: !f.standing, target: f.target,
+          }))
+          if (!f.obeys) refused = true
+        }
       }
+      for (const side of SIDES) live[side] = live[side].filter((f) => f.obeys)
+      if (!refused) break
     }
 
     if (!this.vehicles.length) this._spawnVehicles()
