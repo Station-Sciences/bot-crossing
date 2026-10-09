@@ -30,6 +30,9 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
+import { statusFor } from './status.js'
+
+export { statusFor }
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -50,7 +53,6 @@ import { liveThreadsForColony } from './hidden-projects.js'
  * you have running.
  */
 
-const STALE_MS = 3 * 24 * 60 * 60 * 1000
 /** How wide an astronaut is, for the purpose of not fitting through gaps it should not. */
 const AGENT_RADIUS = 0.26
 /**
@@ -75,16 +77,6 @@ export const STATUS_LABEL = {
   sleeping: 'Dormant',
   spawning: 'Arriving',
   leaving: 'Heading home',
-}
-
-/** Thread → behaviour. First match wins, exactly like the board's auto-sort. */
-export function statusFor(thread, now = Date.now()) {
-  if (thread.hasError) return 'blocked'
-  if (thread.running) return 'working'
-  if (thread.prState === 'MERGED') return 'celebrating'
-  if (thread.unread) return 'waiting'
-  if (now - thread.lastActivityAt > STALE_MS) return 'sleeping'
-  return 'idle'
 }
 
 /**
