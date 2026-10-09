@@ -98,6 +98,25 @@ function mergeMap(base, local, remote) {
 }
 
 /**
+ * A value that only ever changes as a whole — `sharing` is a toggle, a key and a name that go
+ * together. Whichever tab changed it since the base wins; if neither did, the disk copy stands.
+ */
+function mergeWhole(base, local, remote) {
+  return sameValue(base, local) ? remote : local
+}
+
+/**
+ * `neighbors` is a list of records with ids. Merged as a map keyed on id, so a friend added in
+ * each tab survives and a friend removed in this tab stays removed, then back to a list in slot
+ * order so the file does not churn.
+ */
+function mergeById(base, local, remote) {
+  const byId = (list) => Object.fromEntries(asArray(list).filter((n) => n && n.id).map((n) => [n.id, n]))
+  const merged = mergeMap(byId(base), byId(local), byId(remote))
+  return Object.values(merged).sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0) || String(a.id).localeCompare(String(b.id)))
+}
+
+/**
  * Merge one colony state, field by field.
  *
  * `settings` is the deliberate exception: local wins, whole. It is a per-browser preference blob
@@ -127,5 +146,7 @@ export function mergeState(base, local, remote) {
     hiddenProjects: mergeSet(b.hiddenProjects, l.hiddenProjects, r.hiddenProjects),
     viewedAt: mergeMap(b.viewedAt, l.viewedAt, r.viewedAt),
     settings: l.settings && typeof l.settings === 'object' ? l.settings : r.settings ?? null,
+    sharing: mergeWhole(b.sharing, l.sharing, r.sharing) ?? null,
+    neighbors: mergeById(b.neighbors, l.neighbors, r.neighbors),
   }
 }

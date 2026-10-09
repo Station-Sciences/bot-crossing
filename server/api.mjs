@@ -59,11 +59,39 @@ const emptyState = () => ({
   hiddenProjects: [],
   viewedAt: {},
   settings: null,
+  sharing: { enabled: false, key: '', name: '' },
+  neighbors: [],
   updatedAt: 0,
 })
 
 const asObject = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {})
 const asArray = (v) => (Array.isArray(v) ? v : [])
+
+const KEY_HEX = /^[0-9a-f]{32}$/
+
+/** Sharing is off unless the file says otherwise, and a key that is not 32 hex chars is no key. */
+function asSharing(v) {
+  const o = asObject(v)
+  return {
+    enabled: o.enabled === true,
+    key: typeof o.key === 'string' && KEY_HEX.test(o.key) ? o.key : '',
+    name: typeof o.name === 'string' ? o.name.slice(0, 40) : '',
+  }
+}
+
+/** At most six friends, each with somewhere to fetch from and a slot to stand in. */
+function asNeighbors(v) {
+  return asArray(v)
+    .filter((n) => n && typeof n === 'object' && typeof n.id === 'string' && n.id && typeof n.url === 'string')
+    .map((n) => ({
+      id: n.id,
+      url: n.url,
+      key: typeof n.key === 'string' ? n.key : '',
+      slot: Number.isInteger(n.slot) ? n.slot : 0,
+      addedAt: Number(n.addedAt) || 0,
+    }))
+    .slice(0, 6)
+}
 
 async function readState() {
   try {
@@ -78,6 +106,8 @@ async function readState() {
       hiddenProjects: asArray(raw.hiddenProjects).map(String).filter(Boolean),
       viewedAt: asObject(raw.viewedAt),
       settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : null,
+      sharing: asSharing(raw.sharing),
+      neighbors: asNeighbors(raw.neighbors),
       updatedAt: Number(raw.updatedAt) || 0,
     }
   } catch {
@@ -113,6 +143,8 @@ async function writeState(next) {
     hiddenProjects: asArray(next.hiddenProjects).map(String).filter(Boolean),
     viewedAt: asObject(next.viewedAt),
     settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
+    sharing: asSharing(next.sharing),
+    neighbors: asNeighbors(next.neighbors),
     updatedAt: Date.now(),
   }
   await fsp.mkdir(DATA_DIR, { recursive: true })
