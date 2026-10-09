@@ -348,8 +348,8 @@ it on too, so both of you have to agree to it.
 
 - **Attack:** each friend in the sidebar's Neighbors list gets an *Attack* button. It works when
   you are sharing, the friend is online with war mode on, both sides have at least one free bot,
-  and you are not already in a battle. When it is greyed out, hover over it to see why. War
-  mode needs the page opened on `localhost`, not on a network address.
+  and neither you nor they are already in a battle. When it is greyed out, hover over it to see
+  why. War mode needs the page opened on `localhost`, not on a network address.
 - **Only idle and sleeping bots fight.** Bots that are working, waiting on you, stuck or celebrating never fight.
   If a fighter's thread wakes up mid-battle, it drops its weapon and goes back to work. Each side
   fields at most 30 bots. A big side brings tanks and helicopters.
@@ -357,7 +357,8 @@ it on too, so both of you have to agree to it.
   and walk home. The side with more bots standing at the end wins, and a tie goes to the defender.
   A banner at the top shows the score and the clock. Both screens show the same battle, with the
   same winner, score and timing, because both run the same rules on the same starting numbers.
-  The attacker's bots appear on your friend's screen only if they have added you as a neighbour.
+  Your friend sees the battle only if they have added you as a neighbour too. If they have not,
+  they see no battle at all and record no result: only your screen shows it and counts it.
 - **Nothing real changes.** A battle never touches a thread, a building or a zone. It is just a
   show on top of the colony.
 - **The tally:** each result is counted once. Your won–lost record against each friend appears on

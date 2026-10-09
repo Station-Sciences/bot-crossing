@@ -436,7 +436,10 @@ const actions = {
       // not a battle, and `newBattle` itself does not refuse one.
       const attackers = eligibleFighters(colony.astronauts.agents, null).length
       const defenders = friendFighters(hydrated.find((n) => n.id === id)?.threads)
-      if (attackers < 1 || defenders < 1) return
+      if (attackers < 1 || defenders < 1) {
+        hud.hint('Nobody free to fight right now — busy bots never fight')
+        return
+      }
       const battle = await newBattle({ targetNeighborId: id, targetKey: saved.key, attackers, defenders })
       const previous = state.war
       state.war = { ...(state.war || {}), battle }
@@ -1313,7 +1316,8 @@ function neighborModel() {
   const byId = new Map(neighborResults.map((r) => [r.id, r]))
   const noAddress = sharing.enabled && info?.listening && !info.lanAddress
   const homeFighters = eligibleFighters(colony.astronauts.agents, null).length
-  const busy = Boolean(warNow) || battleLive(war.battle)
+  const now = Date.now()
+  const busy = Boolean(warNow) || battleLive(war.battle, now)
   return {
     sharing: {
       enabled: Boolean(sharing.enabled),
@@ -1331,6 +1335,7 @@ function neighborModel() {
         result: r,
         name,
         busy,
+        friendBusy: battleLive(r?.snapshot?.battle, now),
         homeFighters,
         friendFighters: friendFighters(hydrated.find((h) => h.id === n.id)?.threads),
       })
@@ -1426,10 +1431,14 @@ function syncWar(now = Date.now()) {
   })
 }
 
-/** A finished battle into the tally — once per battle id, whichever tab or reload sees it end. */
-function countResult({ battle, side, neighborId }) {
-  if (!neighborId) return
-  const result = recordResult(state.war, { battle, side, neighborId }, planBattle(battle))
+/**
+ * A finished battle into the tally — once per battle id, whichever tab or reload sees it end. Runs
+ * on every war tick through the linger, so a battle already counted stops at the `seen` check
+ * rather than re-planning first.
+ */
+function countResult({ battle, side, neighborId, plan }) {
+  if (!neighborId || state.war?.seen?.includes(battle.id)) return
+  const result = recordResult(state.war, { battle, side, neighborId }, plan || planBattle(battle))
   if (!result) return
   state.war = result.war
   queueSave()

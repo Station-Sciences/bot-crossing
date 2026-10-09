@@ -4,7 +4,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { MARCH_MS, planBattle } from '../src/game/war.js'
+import { MARCH_MS, battleLive, planBattle } from '../src/game/war.js'
 import {
   FUTURE_SLACK_MS, SEEN_CAP, attackBlocker, bannerPhase, clock, formatRecord, friendFighters, incomingBattle,
   recordResult, resultText,
@@ -24,6 +24,8 @@ test('attack is on only when every condition holds', () => {
   assert.match(attackBlocker({ ...ready, result: undefined }), /not here/)
   assert.match(attackBlocker({ ...ready, result: { status: 'online', snapshot: {} } }), /has not turned on/)
   assert.match(attackBlocker({ ...ready, busy: true }), /already on/)
+  assert.equal(attackBlocker({ ...ready, friendBusy: true }), 'Mark is already in a battle')
+  assert.equal(attackBlocker({ ...ready, friendBusy: false }), '')
   assert.match(attackBlocker({ ...ready, homeFighters: 0 }), /None of your bots/)
   assert.match(attackBlocker({ ...ready, friendFighters: 0 }), /None of Mark/)
 })
@@ -36,6 +38,15 @@ test("a friend's fighters are the threads with nothing to say", () => {
 })
 
 const battle = (over = {}) => ({ id: 'war_a', target: 'aaaaaaaaaaaaaaaa', seed: 5, startedAt: 1_000_000, attackers: 4, defenders: 3, ...over })
+
+test('a friend whose own snapshot carries a live battle is busy; one long over is not', () => {
+  const b = battle()
+  const end = b.startedAt + planBattle(b).durationMs + 30000
+  const blocker = (now) => attackBlocker({ ...ready, friendBusy: battleLive(b, now) })
+  assert.match(blocker(b.startedAt + 1000), /Mark is already in a battle/)
+  assert.equal(blocker(end + 1), '')
+  assert.equal(attackBlocker({ ...ready, friendBusy: battleLive(null) }), '')
+})
 
 test('only a battle aimed at our tag is incoming', () => {
   const now = 1_000_000 + 5000

@@ -23,13 +23,16 @@ export function friendFighters(threads, now = Date.now()) {
  * Why the Attack button on a friend's row is off, or '' when it is on. Checked in the order a
  * person would fix them, so the reason shown is the first thing to do about it.
  */
-export function attackBlocker({ secure, enabled, sharing, result, name, homeFighters, friendFighters: theirs, busy }) {
+export function attackBlocker({ secure, enabled, sharing, result, name, homeFighters, friendFighters: theirs, busy, friendBusy }) {
   if (!secure) return 'War mode needs the page opened on localhost'
   if (!enabled) return 'Turn on war mode in Settings → Neighbors'
   if (!sharing) return `Turn on sharing so ${name} can see the battle`
   if (result?.status !== 'online') return `${name} is not here right now`
   if (result.snapshot?.warReady !== true) return `${name} has not turned on war mode`
   if (busy) return 'A battle is already on'
+  // One battle per person: a friend who is attacking someone else would never notice ours, and
+  // our screen would count a result theirs never saw.
+  if (friendBusy) return `${name} is already in a battle`
   if (!(homeFighters > 0)) return 'None of your bots are free — busy bots never fight'
   if (!(theirs > 0)) return `None of ${name}'s bots are free`
   return ''
