@@ -40,9 +40,11 @@ Three pieces, each with one job:
    sharing is on and answers exactly one request.
 2. **The neighbor fetcher** (`server/neighbors.mjs`) — your server polling your friends' share
    ports, validating what comes back, and keeping the last good copy of each.
-3. **Settlements** (`src/world/settlement.js`) — the part of today's `Colony` that is *one place*
-   (plots, buildings, ship, navigation grid, name plates), instantiable at an offset. Your colony
-   becomes settlement zero; each friend is another.
+3. **Neighbor plots in the one `Colony`** — a friend's zones, buildings, ship and bots live in
+   the existing `Colony`, tagged with their owner and placed on the same global hex lattice as
+   yours. Everything that is *about the ground* (decks, ground height, scatter, grass, island
+   shapes, navigation) iterates all plots; everything that is *about your threads* (layout save,
+   drag, hide, dormant fold, stats, sidebar repos) keeps iterating only your own.
 
 The page never talks to another machine. It asks its own server, through the same local-only
 guard (`isLocalRequest`, `server/api.mjs`) as everything else, so no CORS and no new attack
@@ -58,8 +60,8 @@ surface on `/api/*`.
 - stores it in `data/colony.json` under `sharing`,
 - shows a link to copy: `http://<lan-ip>:5275/#k=<key>`. The browser cannot discover the
   machine's LAN address, so a new local endpoint, `GET /api/sharing`, returns
-  `{ lanAddress, port, listening, error }` — the address being the first non-internal IPv4
-  from `os.networkInterfaces()`.
+  `{ lanAddress, port, listening, error, defaultName }` — the address being the first
+  non-internal IPv4 from `os.networkInterfaces()`, and `defaultName` the OS username.
 
 **Rotate key** generates a new key; the old one stops working on the next request.
 
@@ -140,7 +142,7 @@ Rules:
 
 ```json
 "sharing":   { "enabled": false, "key": "", "name": "" },
-"neighbors": [ { "id": "nb_1", "url": "http://192.168.1.42:5275", "key": "…", "label": "", "slot": 0, "addedAt": 0 } ]
+"neighbors": [ { "id": "nb_1", "url": "http://192.168.1.42:5275", "key": "…", "slot": 0, "addedAt": 0 } ]
 ```
 
 `mergeState` (`src/game/merge-state.js`) learns both: `sharing` is last-writer-wins as a
@@ -150,8 +152,8 @@ unit; `neighbors` merges by `id` like the other keyed collections.
 
 **Settings → Neighbors → Add neighbor** takes a pasted share link, splits it into `url` and
 `key` (from `#k=`), assigns the lowest free `slot` 0–5, and saves. Six is the cap; the button
-disables at six. Each row shows the friend's name (theirs, or a local `label` override), a
-status dot, *last seen …*, and **Remove**.
+disables at six. Each row shows the friend's name (from their snapshot), a status dot,
+*last seen …*, and **Remove**.
 
 ### The fetch
 
@@ -199,52 +201,56 @@ snapshot kept.
 - On **Archipelago** and **Aerie** the neighbor's cells are added to the island footprint, so
   each friend gets their own island or floating rock.
 
-### The `Settlement` split
+### Neighbor plots in the one `Colony`
 
-Today `Colony` (`src/game/colony.js`) owns both the world and the one place on it. This change
-extracts the place:
+*Amended while planning.* The first version of this spec extracted a `Settlement` class out of
+`Colony`. Reading the code showed that everything which has to work for a neighbor — decked
+cells, `groundAt`, scatter and grass clearing, the island footprints, the navigation obstacles
+— already iterates plots on one global hex lattice. So a neighbor's plots go into the existing
+`Colony`, tagged with their owner, and the home code path is left as it is. Same result on
+screen, far less risk to your own colony.
 
-| Moves to `Settlement` | Stays on `Colony` |
-| --- | --- |
-| `plots`, `plotOrder`, `plotCells`, `buildings`, labels | terrain, sky, water, fauna, grass, reflections |
-| `_syncPlots`, `_syncBuilding`, `_pickAccent`, `usedAccents` | `setThreads` entry point, settings, planet |
-| ship and its position | `groundAt` (now asks each settlement) |
-| navigation grid | the list of settlements |
+- `Colony` gains `neighborPlots` (Map, keyed `nb:<neighborId>/<repo>`), `neighborShips` (Map
+  neighbor id → `{ ship, label }`) and `neighborThreads` (Map thread id → thread). Home `plots`,
+  `plotOrder`, `plotCells` and `threads` stay home-only.
+- A `worldPlots` list (home plots then neighbor plots) replaces `plotOrder` wherever the
+  question is about the ground: `_footprintCells`, `_buildScatter`, `_buildGrass`,
+  `_plotFootprint`, `deckedCells`, `_rebuildNavigation`, `_updateLabels`, `_updatePlots`,
+  `plotAt`, `pickLabel`.
+- Each neighbor `Plot` carries `neighbor: { id, name }`; home plots carry nothing. Hit tests
+  return either, and the caller checks.
+- Neighbor cells are their own layout plus the placement offset; their ship stands on their
+  `SHIP_CELL` plus the same offset, facing their own zones (`Ship` gains a `facing` argument).
+- `Navigation` takes its half-width as a constructor argument and gains `resize(half)`; the
+  colony sizes it to cover every world plot.
+- Terrain flattening (`COLONY_RADIUS` in `src/world/planet.js`) gains a list of extra flat
+  discs, one per neighbor, through `setSettlementSites(sites)`. Craters skip them, the far-field
+  darkening is measured from the nearest one, and the ground and water planes grow to cover
+  the furthest one.
+- `WORLD_LIMIT` (`src/core/camera.js`) becomes `rig.setWorldLimit(r)`, set from the furthest
+  world plot. `resetView` still goes to your colony.
 
-A `Settlement` is constructed with an **axial origin** and an **owner** (`'home'` or a
-neighbor id). It converts its cells through `hexToWorld(q + oq, r + or)`, so everything keyed
-on `"q,r"` stays on one global lattice and the existing `deckedCells` / `groundAt` lookups
-keep working without collision.
-
-- The ship cell (`SHIP_CELL` in `src/world/plot-move.js`) becomes relative to the settlement
-  origin. `isConnected` and `layOut` take it as a parameter instead of reading the constant.
-- Navigation grids are per settlement, each its usual ±56 m around its own origin.
-- Terrain flattening (`COLONY_RADIUS` in `src/world/planet.js`) becomes a list of flat discs,
-  one per settlement origin. Craters and scatter avoid all of them.
-- `WORLD_LIMIT` (`src/core/camera.js`) becomes the furthest settlement's extent plus margin,
-  updated when settlements change. `resetView` still goes to your colony.
-- `GROUND_SIZE` grows if the furthest settlement would fall off the ground plane.
-
-Home is settlement zero and goes through exactly the same code. Hold-to-drag, archive, hide,
-open and new-session only ever act on the home settlement.
+Hold-to-drag, archive, hide, open and new-session only ever act on home plots and home threads.
 
 ### Bots
 
 - One `Astronauts` instance still draws every bot, so all bots stay one draw call.
-- Each roster entry carries `settlement`. Wherever the bot code reads `world.shipDoor`,
-  `world.groundAt` or the nav grid, it asks that bot's settlement instead.
+- Each neighbor roster entry carries `neighbor` and `doors` (its own ship's `shipDoor` /
+  `shipAirlock`). Wherever the bot code reads `world.shipDoor` or `world.shipAirlock`, it asks
+  the agent's own `doors` first. Ground height and navigation are shared, since the lattice is.
 - **Budget:** neighbor bots share the existing cap (`maxAgents`). Ranking puts every home bot
   ahead of every neighbor bot, so friends never push your own bots off the map.
 - The "started waiting on you" chime plays only for home bots.
 
 ### Interaction
 
-- Picking returns the owner along with the agent or plot. A neighbor's bot or zone opens a
-  **read-only card**: friend name, repo, state in words ("Working", "Waiting on Mark",
-  "Asleep"), harness name, "active 4 min ago". No Open, Viewed, Archive, Hide, New
-  conversation, Finder or Copy path. Not draggable.
-- A sign over each neighbor's ship shows their name, and `away · 12 min` when they are not
-  `online`.
+- A neighbor's bot opens a **read-only card**: friend name and repo as the title, state in
+  words ("Working", "Waiting on Mark", "Dormant"), harness name, "4m ago". No Open, Viewed or
+  Archive, no progress bar. Not draggable.
+- Clicking a neighbor's zone shows a hint line (`Mark · bot-crossing · 3 bots`) rather than
+  opening the repo sidebar, which is all about actions on your own folders.
+- A sign over each neighbor's ship shows their name, and `Mark · away` when they are not
+  `online`. The minutes live in the Settings row, not on the sign.
 - Sidebar gains a **Neighbors** section listing each friend with their status dot; clicking one
   flies the camera to their settlement.
 - `N` (next waiting bot) and `0` (reset view) only consider home.
@@ -253,7 +259,7 @@ open and new-session only ever act on the home settlement.
 
 | Situation | What happens |
 | --- | --- |
-| Friend's machine asleep / off Wi-Fi | Settlement stays, goes quiet: bots sit, lights dim, sign reads *away · N min* |
+| Friend's machine asleep / off Wi-Fi | Settlement stays, goes quiet: bots sit, sign reads *Mark · away*; Settings row says *last seen N min ago* |
 | Unreachable for 7 days while the server stays up | Settlement folds away like a dormant repo; slot kept; returns when reached. (After a restart nothing is held, so an unreachable friend has no settlement until reached — see §2) |
 | Key rotated / wrong | 401 → row shows *link no longer valid*; last snapshot shown as away |
 | Snapshot malformed or oversized | Rejected by `validateSnapshot`; treated as away |
@@ -277,8 +283,10 @@ All on the existing `node:test` suite (`npm test`) and `test/support/with-server
 - **Placement** (`test/neighbor-layout.test.mjs`): no overlap with home or between neighbors;
   direction fixed per slot; offset unchanged until a footprint grows into the gap, then moved
   outward along the same direction only; coast world uses landward directions only.
-- **Settlement split**: the existing suites (`colony-motion`, `plot-move`, `picking`,
+- **Home colony unchanged**: the existing suites (`colony-motion`, `plot-move`, `picking`,
   `occlusion`, `state`) pass unchanged — the home colony must behave identically.
+- **Redaction tests live in** `test/share-snapshot.test.mjs`, and the listener's in
+  `test/share.test.mjs`.
 - **State**: `sharing` and `neighbors` round-trip through `readState`/`writeState` and merge
   correctly in `mergeState` on a 409.
 - **End to end**: two instances on different `PORT`s and `BOT_CROSSING_SHARE_PORT`s with
