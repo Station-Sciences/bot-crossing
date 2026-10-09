@@ -123,7 +123,7 @@ A PR that adds a field to the share list is a PR about privacy and gets read as 
 
 ## The share port is the only thing that listens to other machines
 
-The API binds to loopback and refuses any page it did not serve. Sharing does not loosen that:
+The API binds to loopback by default and refuses any page it did not serve. Sharing does not loosen that:
 it opens a *second* `http.Server`, with its own handler, that answers `GET /share/v1/colony`
 with a Bearer key and nothing else. It exists only while sharing is on.
 

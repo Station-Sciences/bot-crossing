@@ -307,14 +307,19 @@ const actions = {
 
   /** On makes a key if there is none; off keeps it, so turning back on reuses the same link. */
   toggleSharing: async () => {
-    const current = state.sharing || { enabled: false, key: '', name: '' }
+    const previous = state.sharing
+    const current = previous || { enabled: false, key: '', name: '' }
     const enabled = !current.enabled
     state.sharing = {
       enabled,
       key: enabled && !/^[0-9a-f]{32}$/.test(current.key || '') ? newShareKey() : current.key || '',
       name: current.name || sharingInfo?.defaultName || '',
     }
-    await saveNow()
+    // The port follows the file, so a switch that did not save did not happen.
+    if (!(await saveNow())) {
+      state.sharing = previous
+      return
+    }
     await refreshSharing()
   },
 
@@ -326,8 +331,13 @@ const actions = {
 
   rotateShareKey: async () => {
     if (!state.sharing?.enabled) return
+    const previous = state.sharing
     state.sharing = { ...state.sharing, key: newShareKey() }
-    await saveNow()
+    // Unsaved, the old key is still the one being served; showing the new link would be a lie.
+    if (!(await saveNow())) {
+      state.sharing = previous
+      return
+    }
     await refreshSharing()
     hud.toast('New link made — the old one no longer works')
   },
@@ -350,8 +360,13 @@ const actions = {
       hud.toast(error, 'err')
       return false
     }
+    const previous = state.neighbors
     state.neighbors = list
-    await saveNow()
+    // The server fetches friends from the file, so one that did not save would never be reached.
+    if (!(await saveNow())) {
+      state.neighbors = previous
+      return false
+    }
     await poll() // reach them now rather than on the next tick
     hud.toast(updated ? 'Link updated' : 'Neighbor added — they appear once their machine answers')
     return true
@@ -1162,13 +1177,18 @@ async function poll() {
   }
 }
 
-/** Save now rather than in half a second: the share port follows the file, and the page asks about it next. */
+/**
+ * Save now rather than in half a second: the share port follows the file, and the page asks about
+ * it next. False when the save failed, so a caller can put its change back rather than carry on.
+ */
 async function saveNow() {
   clearTimeout(pendingSave)
   try {
     state = await saveState(state)
+    return true
   } catch (err) {
     hud.toast(err.message || 'Could not save the colony', 'err')
+    return false
   }
 }
 
@@ -1290,6 +1310,9 @@ settings.onChange((changed, scope) => {
   // rebuilt from the list rather than merely re-rendered.
   if (changed.has('hideDormant')) applyThreads(threads)
   if (changed.has('maxAgents')) applyThreads(threads)
+  // Friends sit on different sides of each world (only landward on Shoreline), so they move now
+  // rather than on the next poll.
+  if (changed.has('planet')) applyThreads(threads)
 })
 
 // ── frame ─────────────────────────────────────────────────────────────────────────────

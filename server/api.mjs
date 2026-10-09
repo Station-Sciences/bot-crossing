@@ -13,7 +13,7 @@ import {
   openThread as harnessOpenThread,
   scanThreads,
 } from './scan.mjs'
-import { createShareService } from './share.mjs'
+import { createShareService, pickLanAddress } from './share.mjs'
 import { buildSnapshot } from './share-snapshot.mjs'
 import { createNeighborFetcher } from './neighbors.mjs'
 
@@ -183,12 +183,7 @@ function defaultName() {
 
 /** The address a friend on the same Wi-Fi would type. The browser has no way to learn it. */
 function lanAddress() {
-  for (const addrs of Object.values(os.networkInterfaces())) {
-    for (const a of addrs || []) {
-      if (a && a.family === 'IPv4' && !a.internal && a.address) return a.address
-    }
-  }
-  return ''
+  return pickLanAddress(os.networkInterfaces())
 }
 
 const sharing = createShareService({

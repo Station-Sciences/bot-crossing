@@ -23,6 +23,25 @@ export function keysMatch(given, expected) {
   return a.length === b.length && crypto.timingSafeEqual(a, b)
 }
 
+const PRIVATE_V4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/
+const VIRTUAL = /vEthernet|WSL|Hyper-V|VirtualBox|VMware|docker|Loopback/i
+
+/**
+ * The address a friend on the same Wi-Fi would type, from `os.networkInterfaces()`. On Windows
+ * the first adapter listed is often WSL's or Hyper-V's, which nobody else can reach — so a home
+ * address on a real adapter first, then any home address, then whatever there is.
+ */
+export function pickLanAddress(interfaces) {
+  const all = Object.entries(interfaces || {}).flatMap(([name, addrs]) =>
+    (addrs || []).filter((a) => a && a.family === 'IPv4' && !a.internal && a.address).map((a) => ({ name, address: a.address })),
+  )
+  const pick =
+    all.find((a) => PRIVATE_V4.test(a.address) && !VIRTUAL.test(a.name)) ||
+    all.find((a) => PRIVATE_V4.test(a.address)) ||
+    all[0]
+  return pick?.address || ''
+}
+
 function bearer(req) {
   const m = /^Bearer\s+(\S+)$/i.exec(req.headers.authorization || '')
   return m ? m[1] : ''

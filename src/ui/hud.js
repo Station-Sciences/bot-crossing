@@ -828,7 +828,8 @@ export class Hud {
     if (thread.worktree) bits.push(`<span class="tag">⑂ ${escapeHtml(thread.worktree)}</span>`)
     if (thread.gitBranch) bits.push(`<span class="tag">${escapeHtml(thread.gitBranch)}</span>`)
     if (thread.model) bits.push(`<span class="tag">${escapeHtml(shortModel(thread.model))}</span>`)
-    bits.push(`<span>${ago(thread.lastActivityAt)}</span>`)
+    // An away friend's bots are hydrated as last active at the epoch, which is not "never".
+    bits.push(`<span>${neighbor && !thread.lastActivityAt ? 'away' : ago(thread.lastActivityAt)}</span>`)
     meta.innerHTML = bits.join('')
 
     const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)

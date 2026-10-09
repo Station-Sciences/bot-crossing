@@ -324,16 +324,21 @@ Friends on the same Wi-Fi can see each other's colonies as neighbouring settleme
 - **Share yours:** Settings → Neighbors → *Share my colony*. You get a link like
   `http://192.168.1.42:5275/#k=…` — give it to whoever you like. *New link* makes a fresh one and
   the old one stops working at once.
-- **Add a friend's:** paste their link into *Add neighbor*. Up to six; each gets their own side of
-  your colony and keeps it.
+- **Add a friend's:** paste their link into *Paste a friend's link* and press *Add*. Up to six;
+  each gets their own side of your colony and keeps it. On Shoreline the sea takes half the
+  horizon, so only the three landward sides are used and two friends can share one, the later
+  further out. If a friend makes a new link, paste it the same way and theirs is updated.
 
-A friend sees your repo names, how big each building is, and what each bot is doing — working,
-waiting, stuck, asleep. Never a thread title, a prompt, a folder path, a branch or a model.
-Archived threads and hidden repos stay off their map too.
+A friend sees the name on your ship's sign (your OS username until you type another under
+*Your name*), your repo names (just the last folder name), how big each building is, and what
+each bot is doing — working, waiting, stuck, asleep. Never a thread title, a prompt, a folder
+path, a branch or a model. Archived threads and hidden repos stay off their map too.
 
 Sharing opens a second, read-only port (5275; `BOT_CROSSING_SHARE_PORT` changes it) that answers
-one request and nothing else — see [DECISIONS.md](DECISIONS.md). The first time it opens, Windows
-asks whether Node may use the network: allow it on private networks, or friends cannot reach you.
+one request and nothing else — see [DECISIONS.md](DECISIONS.md). It listens on every interface so
+friends can reach it; `BOT_CROSSING_SHARE_HOST` binds it to one address instead. The first time it
+opens, Windows asks whether Node may use the network: allow it on private networks, or friends
+cannot reach you.
 
 ## Planets and light
 

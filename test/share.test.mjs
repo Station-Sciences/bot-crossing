@@ -5,7 +5,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { SHARE_PATH, createShareService, keysMatch } from '../server/share.mjs'
+import { SHARE_PATH, createShareService, keysMatch, pickLanAddress } from '../server/share.mjs'
 
 const KEY = 'abcdefabcdefabcdefabcdefabcdefab'
 
@@ -148,4 +148,24 @@ test('the local API is not reachable through the share port', async () => {
       }
     })
   )
+})
+
+// ── the address in the link ──────────────────────────────────────────────────
+
+const v4 = (address, internal = false) => ({ family: 'IPv4', address, internal })
+
+test("the link's address is the real network, not a virtual adapter that happens to come first", () => {
+  assert.equal(pickLanAddress({
+    'vEthernet (WSL)': [v4('172.20.16.1')],
+    'Loopback Pseudo-Interface 1': [v4('127.0.0.1', true)],
+    'Wi-Fi': [{ family: 'IPv6', address: 'fe80::1', internal: false }, v4('192.168.1.42')],
+  }), '192.168.1.42')
+  assert.equal(pickLanAddress({ docker0: [v4('172.17.0.1')], eth0: [v4('10.1.2.3')] }), '10.1.2.3')
+})
+
+test('a private address on a virtual adapter beats a public one, and a public one beats nothing', () => {
+  assert.equal(pickLanAddress({ eth0: [v4('203.0.113.5')], 'VirtualBox Host-Only': [v4('192.168.56.1')] }), '192.168.56.1')
+  assert.equal(pickLanAddress({ eth0: [v4('172.32.0.1')], eth1: [v4('203.0.113.5')] }), '172.32.0.1')
+  assert.equal(pickLanAddress({ lo: [v4('127.0.0.1', true)] }), '')
+  assert.equal(pickLanAddress({}), '')
 })

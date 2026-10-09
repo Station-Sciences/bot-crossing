@@ -1392,9 +1392,9 @@ export class Colony {
         }
       }
 
-      // The ramp notices anyone stepping on or off it.
+      // The ramp notices anyone stepping on or off it — a friend's bot uses their own ship's.
       if (agent.state === 'spawning' || (agent.state === 'leaving' && agent.scale < 0.6)) {
-        if (Math.random() < dt * 3) this.ship.ping()
+        if (Math.random() < dt * 3) (agent.neighbor ? this.neighborShips.get(agent.neighbor.id)?.ship : this.ship)?.ping()
       }
     }
   }
