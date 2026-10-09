@@ -60,6 +60,9 @@ test('a friend who is defending against someone else is busy too, though their o
   assert.equal(friendInBattle(undefined, now), false)
 })
 
+/** Our tag for every battle, as if one key hashed the same under every id — enough to test who is picked. */
+const ours = (tag) => () => tag
+
 test('only a battle aimed at our tag is incoming', () => {
   const now = 1_000_000 + 5000
   const friends = [
@@ -67,18 +70,30 @@ test('only a battle aimed at our tag is incoming', () => {
     { id: 'nb_2', name: 'Sue', battle: battle() },
     { id: 'nb_3', name: 'Al', battle: null },
   ]
-  assert.deepEqual(incomingBattle(friends, 'aaaaaaaaaaaaaaaa', now), { neighborId: 'nb_2', name: 'Sue', battle: friends[1].battle })
-  assert.equal(incomingBattle(friends, 'cccccccccccccccc', now), null)
+  assert.deepEqual(incomingBattle(friends, ours('aaaaaaaaaaaaaaaa'), now), { neighborId: 'nb_2', name: 'Sue', battle: friends[1].battle })
+  assert.equal(incomingBattle(friends, ours('cccccccccccccccc'), now), null)
+  assert.equal(incomingBattle(friends, ours(''), now), null)
   assert.equal(incomingBattle(friends, null, now), null)
+})
+
+test('our tag is looked up per battle id, since each battle salts it differently', () => {
+  const now = 1_000_000 + 5000
+  const friends = [
+    { id: 'nb_1', name: 'Mark', battle: battle({ id: 'war_m', target: '1111111111111111' }) },
+    { id: 'nb_2', name: 'Sue', battle: battle({ id: 'war_s', target: '2222222222222222' }) },
+  ]
+  const tags = { war_m: '9999999999999999', war_s: '2222222222222222' }
+  assert.equal(incomingBattle(friends, (id) => tags[id], now).neighborId, 'nb_2')
+  assert.equal(incomingBattle(friends, () => undefined, now), null)
 })
 
 test('an incoming battle that is long over, or a minute in the future, is ignored', () => {
   const b = battle()
   const end = b.startedAt + planBattle(b).durationMs + 30000
-  assert.equal(incomingBattle([{ id: 'nb_1', battle: b }], b.target, end + 1), null)
+  assert.equal(incomingBattle([{ id: 'nb_1', battle: b }], ours(b.target), end + 1), null)
   const far = battle({ startedAt: 2_000_000 })
-  assert.equal(incomingBattle([{ id: 'nb_1', battle: far }], far.target, far.startedAt - FUTURE_SLACK_MS - 1), null)
-  assert.ok(incomingBattle([{ id: 'nb_1', battle: far }], far.target, far.startedAt - FUTURE_SLACK_MS + 1000))
+  assert.equal(incomingBattle([{ id: 'nb_1', battle: far }], ours(far.target), far.startedAt - FUTURE_SLACK_MS - 1), null)
+  assert.ok(incomingBattle([{ id: 'nb_1', battle: far }], ours(far.target), far.startedAt - FUTURE_SLACK_MS + 1000))
 })
 
 test('the battle being shown keeps its place; otherwise the earliest wins', () => {
@@ -87,8 +102,8 @@ test('the battle being shown keeps its place; otherwise the earliest wins', () =
     { id: 'nb_1', battle: battle({ id: 'war_late', startedAt: 1_002_000 }) },
     { id: 'nb_2', battle: battle({ id: 'war_early', startedAt: 1_000_000 }) },
   ]
-  assert.equal(incomingBattle(friends, 'aaaaaaaaaaaaaaaa', now).battle.id, 'war_early')
-  assert.equal(incomingBattle(friends, 'aaaaaaaaaaaaaaaa', now, 'war_late').battle.id, 'war_late')
+  assert.equal(incomingBattle(friends, ours('aaaaaaaaaaaaaaaa'), now).battle.id, 'war_early')
+  assert.equal(incomingBattle(friends, ours('aaaaaaaaaaaaaaaa'), now, 'war_late').battle.id, 'war_late')
 })
 
 test('a result is counted once, from the side we were on', () => {

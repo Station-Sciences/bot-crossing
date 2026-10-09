@@ -4,6 +4,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import {
   CHEER_MS, cleanBattle, FIGHT_MS, MARCH_MS, MAX_FIGHTERS, battleLive, canFight, downAt, newBattle,
   phaseAt, planBattle, scoreAt, vehiclesFor, warTag,
@@ -80,17 +81,21 @@ test('the live score and who is down follow the clock', () => {
   assert.equal(downAt(p, first.side, s, MARCH_MS + first.t).has(first.index), true)
 })
 
-test('a target tag is 16 hex, stable per key, and different between keys', async () => {
-  const a = await warTag('a'.repeat(32))
+test('a target tag is 16 hex, stable for one battle and key, and different across battles and keys', async () => {
+  const a = await warTag('a'.repeat(32), 'war_k_1')
   assert.match(a, /^[0-9a-f]{16}$/)
-  assert.equal(await warTag('a'.repeat(32)), a)
-  assert.notEqual(await warTag('b'.repeat(32)), a)
+  assert.equal(a, createHash('sha256').update(`war:war_k_1:${'a'.repeat(32)}`).digest('hex').slice(0, 16))
+  assert.equal(await warTag('a'.repeat(32), 'war_k_1'), a)
+  assert.notEqual(await warTag('b'.repeat(32), 'war_k_1'), a)
+  // Salted by the battle: a friend who also holds this key cannot learn one tag and spot every
+  // later battle aimed at the same person.
+  assert.notEqual(await warTag('a'.repeat(32), 'war_k_2'), a)
 })
 
 test('a new battle carries what the snapshot needs, and stays live until it has lingered', async () => {
   const b = await newBattle({ targetNeighborId: 'nb_1', targetKey: 'c'.repeat(32), attackers: 5, defenders: 4, now: 1000, seed: 77 })
   assert.match(b.id, /^war_[0-9a-z_]{1,40}$/)
-  assert.equal(b.target, await warTag('c'.repeat(32)))
+  assert.equal(b.target, await warTag('c'.repeat(32), b.id))
   assert.deepEqual([b.seed, b.startedAt, b.attackers, b.defenders, b.targetNeighborId], [77, 1000, 5, 4, 'nb_1'])
   const end = 1000 + planBattle(b).durationMs
   assert.equal(battleLive(b, end + 29_000), true)

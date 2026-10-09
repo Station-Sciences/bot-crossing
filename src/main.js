@@ -100,8 +100,12 @@ let hydrated = []
  * and the page says so rather than throwing.
  */
 const warSecure = Boolean(globalThis.crypto?.subtle)
-/** Our own war tag, made once per share key: what a friend's battle names when it is aimed at us. */
-let warTagFor = { key: null, tag: '' }
+/**
+ * Our own war tag for each friend's battle, by battle id: what that battle names when it is aimed
+ * at us. The tag is salted per battle, so it is hashed once per battle (and again if our key
+ * changes), not once per poll. An id maps to '' while its hash is still on the way.
+ */
+let warTagFor = { key: null, byId: new Map() }
 /** The battle on screen — `{ battle, side, neighborId, plan }` — or null. */
 let warNow = null
 let attacking = false
@@ -1362,19 +1366,29 @@ function friendName(id) {
   return r?.snapshot?.name || (saved ? hostOf(saved.url) : 'Neighbor')
 }
 
-/** Hash our share key into the tag a friend's battle would carry — once per key, not once per poll. */
-function refreshWarTag() {
+/**
+ * Hash our share key into the tag each friend's battle would carry if it were aimed at us. Ids no
+ * friend announces any more are dropped, so the cache is never bigger than the battles on show.
+ */
+function refreshWarTags() {
   const key = state.sharing?.key || ''
-  if (!warSecure || key === warTagFor.key) return
-  warTagFor = { key, tag: '' }
+  if (!warSecure) return
+  if (key !== warTagFor.key) warTagFor = { key, byId: new Map() }
   if (!key) return
-  warTag(key)
-    .then((tag) => {
-      if (warTagFor.key === key) warTagFor.tag = tag
-    })
-    .catch(() => {
-      /* no tag, so no incoming battles: the colony carries on as if nobody attacked */
-    })
+  const ids = new Set(hydrated.map((f) => f.battle?.id).filter(Boolean))
+  for (const id of warTagFor.byId.keys()) if (!ids.has(id)) warTagFor.byId.delete(id)
+  const cache = warTagFor
+  for (const id of ids) {
+    if (cache.byId.has(id)) continue
+    cache.byId.set(id, '')
+    warTag(key, id)
+      .then((tag) => {
+        if (warTagFor === cache && cache.byId.has(id)) cache.byId.set(id, tag)
+      })
+      .catch(() => {
+        /* no tag, so this battle is not seen as ours: the colony carries on as if nobody attacked */
+      })
+  }
 }
 
 /**
@@ -1384,7 +1398,7 @@ function refreshWarTag() {
  */
 function syncWar(now = Date.now()) {
   lastWarSync = now
-  refreshWarTag()
+  refreshWarTags()
   const own = state.war?.battle
   // Our own battle, gone past its linger, leaves the file. Counted first in case this page was
   // closed through its end: the plan is the same whenever it is run, so the result still stands.
@@ -1398,9 +1412,10 @@ function syncWar(now = Date.now()) {
   if (state.war?.battle) {
     const b = state.war.battle
     next = { battle: b, side: 'attack', neighborId: b.targetNeighborId }
-  } else if (state.war?.enabled && warTagFor.tag) {
+  } else if (state.war?.enabled && warTagFor.key) {
     // One battle at a time: we only look for an attack on us while we are not attacking anyone.
-    const hit = incomingBattle(hydrated, warTagFor.tag, now, warNow?.side === 'defend' ? warNow.battle.id : null)
+    const tagFor = (id) => warTagFor.byId.get(id)
+    const hit = incomingBattle(hydrated, tagFor, now, warNow?.side === 'defend' ? warNow.battle.id : null)
     if (hit) next = { battle: hit.battle, side: 'defend', neighborId: hit.neighborId }
   }
 

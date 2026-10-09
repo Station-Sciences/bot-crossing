@@ -105,19 +105,22 @@ export function downAt(plan, side, startedAt, now) {
 
 /**
  * Who is being attacked, in a form only they can read: their own share key, hashed. Other friends
- * reading the attacker's snapshot see a tag, not a name.
+ * reading the attacker's snapshot see a tag, not a name. Salted with the battle id, so the tag is
+ * new every battle: a friend who also holds the defender's link could otherwise hash it once and
+ * spot every later attack on them, from anyone.
  */
-export async function warTag(key) {
-  const bytes = new TextEncoder().encode(`war:${key}`)
+export async function warTag(key, battleId) {
+  const bytes = new TextEncoder().encode(`war:${battleId}:${key}`)
   const digest = new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes))
   return [...digest.slice(0, 8)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 export async function newBattle({ targetNeighborId, targetKey, attackers, defenders, now = Date.now(), seed }) {
   const s = seed ?? globalThis.crypto.getRandomValues(new Uint32Array(1))[0]
+  const id = `war_${now.toString(36)}_${s.toString(36)}`
   return {
-    id: `war_${now.toString(36)}_${s.toString(36)}`,
-    target: await warTag(targetKey),
+    id,
+    target: await warTag(targetKey, id),
     seed: s,
     startedAt: now,
     attackers: fighters(attackers),

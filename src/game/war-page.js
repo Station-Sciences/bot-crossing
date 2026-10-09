@@ -47,14 +47,20 @@ export function friendInBattle(snapshot, now = Date.now()) {
 }
 
 /**
- * The friend whose snapshot says they are attacking us, if any. A battle we are already showing
- * keeps its place over a newer one; otherwise the one that started first wins. A battle claiming
- * to start more than a minute from now is a clock we cannot trust, and is ignored.
+ * The friend whose snapshot says they are attacking us, if any. `tagFor(battleId)` is our own tag
+ * for that battle — salted per battle, so there is no single tag to look for — or nothing while it
+ * is still being hashed. A battle we are already showing keeps its place over a newer one;
+ * otherwise the one that started first wins. A battle claiming to start more than a minute from now
+ * is a clock we cannot trust, and is ignored.
  */
-export function incomingBattle(friends, tag, now = Date.now(), currentId = null) {
-  if (!tag) return null
+export function incomingBattle(friends, tagFor, now = Date.now(), currentId = null) {
+  if (typeof tagFor !== 'function') return null
+  const aimedAtUs = (b) => {
+    const tag = tagFor(b.id)
+    return Boolean(tag) && b.target === tag
+  }
   const hits = (friends || []).filter(
-    (f) => f.battle && f.battle.target === tag && battleLive(f.battle, now) && f.battle.startedAt <= now + FUTURE_SLACK_MS
+    (f) => f.battle && aimedAtUs(f.battle) && battleLive(f.battle, now) && f.battle.startedAt <= now + FUTURE_SLACK_MS
   )
   if (!hits.length) return null
   const kept = currentId && hits.find((f) => f.battle.id === currentId)
