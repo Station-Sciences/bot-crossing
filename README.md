@@ -157,13 +157,16 @@ text over a soft halo with a small accent dot — no panel, no outline.
 Idle bots have a social life. Two wander over to each other and chat, or three to five gather in a
 ring and take turns talking. Two argue, stomp, and walk off in opposite directions. One sits down
 heartbroken and the nearest idle bot comes over to comfort it until it stands up cheered. A few kick a
-ball about or play chase. Small bubbles beside their heads say what is going on: 💬 💢 💔 💧 ❤️ ⚽ 🎵.
+ball about or play chase. Small bubbles beside their heads say what is going on: a chat bubble, an
+angry face, a broken heart, a tear, a heart, a ball and a music note.
 
 Some of it just happens, so the colony never stands still. The rest is set off by your threads:
 
-- **Archiving a thread** leaves one of its repo-mates heartbroken. The same happens when a thread
-  disappears from a friend's colony.
-- **A run that finishes** (working → idle) sends that bot off to play with a repo-mate.
+- **Archiving a thread** can leave one of its repo-mates heartbroken. The same can happen when a
+  thread disappears from what a friend shares — not when one of their errands ends, and not when a
+  new share key changes all their threads at once.
+- **A run that finishes** may send that bot off to play with a repo-mate: working → idle, or
+  working → waiting on you → idle, as long as you read it within ten minutes.
 - **After a war battle**, for a minute, the losing side's bots sulk and argue and the winners play.
 
 Only idle bots take part. A bot that is working, waiting on you, stuck, celebrating or asleep is

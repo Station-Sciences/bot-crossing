@@ -289,7 +289,7 @@ export class SocialDirector {
     this.colony = colony
     this.settings = colony.settings
     this.planner = new SocialPlanner()
-    this.emotes = new Emotes(colony.scene, colony.settings, MAX_AGENT_CAP)
+    this.emotes = new Emotes(colony.scene, MAX_AGENT_CAP)
     this.group = new THREE.Group()
     this.group.name = 'social'
     colony.scene.add(this.group)

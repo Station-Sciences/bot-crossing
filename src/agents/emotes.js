@@ -13,7 +13,7 @@ import {
 
 /**
  * The little bubbles bots pop up beside their heads when they socialise: a chat bubble, an
- * anger mark, a broken heart and so on.
+ * angry face, a broken heart and so on.
  *
  * Built the way the status badges are (one instanced, billboarded quad per bot, sampled from a
  * single atlas drawn out of icon paths, bent with the world), but smaller and pushed to the
@@ -69,8 +69,7 @@ export function popScale(k) {
 }
 
 export class Emotes {
-  constructor(scene, settings, capacity) {
-    this.settings = settings
+  constructor(scene, capacity) {
     this.capacity = capacity
     this.texture = buildEmoteAtlas(256)
     // Per agent: which emote it shows and how far through its pop it is (0..1).
@@ -205,6 +204,10 @@ export class Emotes {
     }
 
     this.mesh.count = n
+    // Nothing to draw: a count of nought already hides every instance, and what the buffers hold
+    // does not matter until something does. Most frames in a quiet colony end here, with no
+    // buffer copied up.
+    if (n === 0) return
     this.frames.needsUpdate = true
     this.centers.needsUpdate = true
     this.sizes.needsUpdate = true
