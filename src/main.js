@@ -345,7 +345,7 @@ const actions = {
   },
 
   addNeighbor: async (text) => {
-    const { list, error } = addNeighbor(state.neighbors || [], text)
+    const { list, error, updated } = addNeighbor(state.neighbors || [], text)
     if (error) {
       hud.toast(error, 'err')
       return false
@@ -353,7 +353,7 @@ const actions = {
     state.neighbors = list
     await saveNow()
     await poll() // reach them now rather than on the next tick
-    hud.toast('Neighbor added — they appear once their machine answers')
+    hud.toast(updated ? 'Link updated' : 'Neighbor added — they appear once their machine answers')
     return true
   },
 

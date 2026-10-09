@@ -30,12 +30,21 @@ export function parseShareLink(text) {
   return KEY_HEX.test(key) ? { url: url.origin, key } : null
 }
 
-/** Lowest free slot, so a friend added after a removal fills the side that came free. */
+/**
+ * Lowest free slot, so a friend added after a removal fills the side that came free. A friend
+ * already on the list who rotated their key is the same friend with a new link: the key is
+ * swapped in place, keeping their id and their side, and that works with the list full too.
+ */
 export function addNeighbor(list, text, { now = Date.now() } = {}) {
   const parsed = parseShareLink(text)
   if (!parsed) return { list, error: 'That does not look like a Bot Crossing share link' }
+  const known = list.find((n) => n.url === parsed.url)
+  if (known?.key === parsed.key) return { list, error: 'Already a neighbor' }
+  if (known) {
+    const entry = { ...known, key: parsed.key }
+    return { list: list.map((n) => (n === known ? entry : n)), entry, error: '', updated: true }
+  }
   if (list.length >= NEIGHBOR_CAP) return { list, error: 'Six neighbors is the most there is room for' }
-  if (list.some((n) => n.url === parsed.url)) return { list, error: 'Already a neighbor' }
   const taken = new Set(list.map((n) => n.slot))
   let slot = 0
   while (taken.has(slot)) slot++

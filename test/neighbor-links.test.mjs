@@ -38,6 +38,20 @@ test('adding takes the lowest free slot and refuses duplicates and a seventh', (
   assert.match(addNeighbor([], 'nope').error, /share link/)
 })
 
+test('re-adding a friend with a new key updates their link in place, even when the list is full', () => {
+  const link = (i, k) => `http://10.0.0.${i}:5275/#k=${k.repeat(32)}`
+  let list = []
+  for (let i = 0; i < NEIGHBOR_CAP; i++) list = addNeighbor(list, link(i, 'a'), { now: 1000 + i }).list
+  const before = list[2]
+  const out = addNeighbor(list, link(2, 'b'), { now: 9999 })
+  assert.equal(out.error, '')
+  assert.equal(out.updated, true)
+  assert.equal(out.list.length, NEIGHBOR_CAP)
+  assert.deepEqual(out.entry, { ...before, key: 'b'.repeat(32) })
+  assert.deepEqual(out.list[2], out.entry)
+  assert.match(addNeighbor(out.list, link(2, 'b'), { now: 10000 }).error, /Already/)
+})
+
 const thread = (n, extra = {}) => ({
   id: `n:000000000000000${n}`, project: 'bot-crossing', harness: 'claude-code', harnessName: 'Claude Code',
   running: true, unread: false, hasError: false, prState: '', lastActivityAt: 5, createdAt: n, sizeBucket: 12, isErrand: false,
