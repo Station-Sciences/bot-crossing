@@ -12,6 +12,8 @@ import { helmetGeometry, visorGeometry, screenGeometry } from './model.js'
 import { CARRY_LIFT, grab, carryTo, followCarry, release, homeRunFactor, isAirborne, startFall, fallStep, FLAIL_RATE, stepCarryPose, knockStep } from './carry.js'
 import { mayObey, cleanOrders, nextOrders, warGoal, stepArrival, warPace, warClip, warFace, HIT_LEN, HIT_PEAK } from './war-orders.js'
 import { createSword, createGun, dispose as disposeArmament } from '../world/arsenal.js'
+import { keepsScene, cleanStep, nextStep, sceneArrival, scenePace, sceneClip, sceneRate, sceneHop, faceTarget } from './scene-orders.js'
+import { EMOTE } from './emotes.js'
 
 /**
  * Every astronaut in the colony, batched into a fixed set of instanced draw calls.
@@ -191,6 +193,12 @@ export class Astronauts {
     this._color = new THREE.Color()
     this._wp = new THREE.Vector3()
     this._warGoal = new THREE.Vector3()
+    this._sceneGoal = new THREE.Vector3()
+    // Where a bot named as someone to look at is standing now, for a scene's `face`.
+    this._where = (id) => {
+      const other = this.byId.get(id)
+      return other && other.state !== 'gone' ? other.pos : null
+    }
     this._sep = new THREE.Vector3()
     this._pickBadge = new THREE.Vector3()
     this._pickLifted = new THREE.Vector3()
@@ -683,6 +691,10 @@ export class Astronauts {
       colorDirty: true,
       index: -1,
       walkAmp: 0,
+      // A social scene's current step for this bot, or null; and the bubble it shows (an
+      // EMOTE id, or -1 for none), read by the Emotes layer. See `setSceneOrders`.
+      scene: null,
+      emote: -1,
       screen: new THREE.Vector3(), // filled by the picker each frame
     }
     this._applyStatus(agent, entry.status)
@@ -731,6 +743,8 @@ export class Astronauts {
     agent.colorDirty = true
     // A thread that wakes up mid-battle drops everything and goes back to its job at once.
     if (agent.war && !mayObey({ status, state: agent.state })) this._endWar(agent)
+    // And one that stops being idle mid-chat leaves the scene that same frame.
+    if (agent.scene && !keepsScene({ status, state: agent.state, war: agent.war })) this._endScene(agent)
 
     if (status === 'leaving') {
       this._sendHome(agent)
@@ -820,11 +834,13 @@ export class Astronauts {
       return false
     }
     if (!agent.war) {
-      // Whatever it was in the middle of — a check, a wander — it puts down.
+      // Whatever it was in the middle of — a check, a wander, a chat — it puts down.
       agent.checkStart = -1
       agent.stuckFor = 0
       agent.pathVersion = -1
     }
+    // A battle outranks any scene: the fighter is out of it before it takes a step.
+    this._endScene(agent)
     agent.war = nextOrders(agent.war, clean)
     return true
   }
@@ -902,6 +918,122 @@ export class Astronauts {
     this._settle(agent, dt)
   }
 
+  // ── scene orders ────────────────────────────────────────────────────────────────────
+  //
+  // The social director casts idle bots in little scenes — a chat, an argument, a game — and
+  // hands each its current step every frame; this is where they listen. The same shape as
+  // battle orders and the same rules, stricter: only an idle bot out on its feet takes a step,
+  // a bot at war never does, and both are re-checked every frame (see `keepsScene`).
+
+  /**
+   * Give a bot its step in a scene, or take it away with `null`.
+   *
+   * `step` is `{ goal: {x, z} | null, face: {x, z} | id | null, action, emote, expression }`
+   * as `src/game/social.js` makes them: the bot travels to `goal` (running if the action is
+   * `run`, walking otherwise), then does `action` there, looking at `face` — a point, or a bot
+   * by id wherever it now stands — with `expression` on its screen and `emote` beside its
+   * head. Meant to be called every frame: an unchanged action keeps its clock, and a goal that
+   * moves (a chase) is simply followed. Returns whether the bot took the step — false for an
+   * unknown id, a malformed step, a bot at war, or one whose thread is not idle, in which case
+   * any step it held is gone too. Cleared, it walks back to its own site.
+   */
+  setSceneOrders(id, step) {
+    const agent = this.byId.get(id)
+    if (!agent) return false
+    if (step == null) {
+      this._endScene(agent)
+      return true
+    }
+    const clean = cleanStep(step)
+    if (!clean || !keepsScene(agent)) {
+      this._endScene(agent)
+      return false
+    }
+    if (!agent.scene) {
+      // As for a battle: whatever it was pottering about doing, it leaves.
+      agent.checkStart = -1
+      agent.stuckFor = 0
+      agent.pathVersion = -1
+    }
+    agent.scene = nextStep(agent.scene, clean)
+    agent.emote = clean.emote ? EMOTE[clean.emote] : -1
+    return true
+  }
+
+  /** The step a bot is on, or null. Its own copy: editing it changes nothing. */
+  sceneOrders(id) {
+    const step = this.byId.get(id)?.scene
+    if (!step) return null
+    const copy = (p) => (p && typeof p === 'object' ? { ...p } : p)
+    return { goal: copy(step.goal), face: copy(step.face), action: step.action, emote: step.emote, expression: step.expression, t: step.t }
+  }
+
+  /** Every scene over at once — social life switched off, or the page going away. */
+  clearSceneOrders() {
+    for (const agent of this.agents) this._endScene(agent)
+  }
+
+  /**
+   * The bubble a bot shows beside its head: an `EMOTE` id, or -1 for none. Shaped for the
+   * Emotes layer's `emoteFor(agent)`, e.g. `(a) => astronauts.emoteOf(a)`.
+   */
+  emoteOf(agent) {
+    return agent?.emote ?? -1
+  }
+
+  /** Out of the scene: back to its own site and its own life, as for the end of a battle. */
+  _endScene(agent) {
+    if (!agent.scene) return
+    agent.scene = null
+    agent.emote = -1
+    if (agent.state === 'at-site' || agent.state === 'walking') {
+      agent.state = 'walking'
+      agent.stateAge = 0
+      agent.stuckFor = 0
+      agent.pathVersion = -1
+    }
+  }
+
+  /**
+   * One frame of playing a part. Travelling is the bot's own walk, routing and settling,
+   * exactly as for a battle; what is particular to a scene is who it looks at and the little
+   * hop of a stomp, once it is there.
+   */
+  _sceneStep(agent, dt) {
+    const step = agent.scene
+    step.t += dt
+    agent.scale = Math.min(1, agent.scale + dt * 3)
+    // Still being dropped, or getting up off the floor after a battle: that finishes first.
+    if (isAirborne(agent) || agent.knock > 0.25) {
+      agent.vel.set(0, 0, 0)
+      agent.hop = THREE.MathUtils.damp(agent.hop, 0, 14, dt)
+      return
+    }
+    // Feet down, a dropped bot is no longer running home — the scene is where it is going —
+    // and a stomp's hop must not be mistaken for the end of a drop.
+    agent.homeRun = false
+
+    const goal = step.goal
+    const dist = goal ? Math.hypot(goal.x - agent.pos.x, goal.z - agent.pos.z) : null
+    if (sceneArrival(step, dist)) {
+      const target = this._sceneGoal.set(goal.x, 0, goal.z)
+      // A scene's goals are close by, and a chase's moves every frame: in plain sight it is
+      // walked at directly, rather than spending a route a frame on somewhere a step away.
+      const straight = !this.nav || this.nav.clearWalk(agent.pos.x, agent.pos.z, goal.x, goal.z)
+      const steer = straight ? this._wp.copy(target) : this._steerTarget(agent, this._wp, target)
+      const toward = this._v.set(steer.x - agent.pos.x, 0, steer.z - agent.pos.z)
+      this._walk(agent, toward, dist, dt, scenePace(step))
+      agent.hop = THREE.MathUtils.damp(agent.hop, 0, 10, dt)
+      return
+    }
+    // There: stop, turn to whoever it is talking to, and hold the spot.
+    agent.vel.set(0, 0, 0)
+    const face = faceTarget(step.face, agent.id, this._where)
+    if (face) this._faceToward(agent, face, dt)
+    agent.hop = sceneHop(step)
+    this._settle(agent, dt)
+  }
+
   // ── per-frame simulation ────────────────────────────────────────────────────────────
 
   update(dt, elapsed) {
@@ -923,10 +1055,12 @@ export class Astronauts {
       // Orders are re-checked every frame, not only when given: a thread can wake up, a bot
       // can be picked up or sent home, and none of that waits for the director to notice.
       if (agent.war && !mayObey(agent)) this._endWar(agent)
+      if (agent.scene && !keepsScene(agent)) this._endScene(agent)
       this._step(agent, dt, elapsed, anim)
       this._animate(agent, dt, anim)
       animateFace(agent, dt, anim)
       if (agent.war) agent.faceFrame = FACE[warFace(agent.war, elapsed)] ?? agent.faceFrame
+      else if (agent.scene?.expression) agent.faceFrame = FACE[agent.scene.expression] ?? agent.faceFrame
 
       if (agent.state === 'gone') {
         this.agents.splice(i, 1)
@@ -1019,6 +1153,7 @@ export class Astronauts {
     // Under battle orders the order says where to be and what to do there. Everything after
     // that — how fast it really went, turning, standing on the ground — is the same for both.
     if (agent.war) this._warStep(agent, dt)
+    else if (agent.scene) this._sceneStep(agent, dt)
     else this._ownStep(agent, dt, elapsed, anim)
     this._endStep(agent, fromX, fromZ, dt, elapsed, anim)
   }
@@ -1590,10 +1725,16 @@ export class Astronauts {
     // world slides past its feet, and the movement code is what keeps it from dawdling
     // just under the line.
     const speed = agent.groundSpeed || 0
+    const stride = speed > 0.12 ? (speed > WALK_SPEED * 1.25 ? 'run' : 'walk') : null
     let key
     if (agent.state === 'spawning') key = 'spawn'
     else if (isAirborne(agent)) key = 'run'
-    else if (agent.war) key = warClip(agent.war, speed > 0.12 ? (speed > WALK_SPEED * 1.25 ? 'run' : 'walk') : null, agent.clipKey)
+    else if (agent.war) key = warClip(agent.war, stride, agent.clipKey)
+    else if (agent.scene) {
+      // Whether the one-shot it is on has played out, so a jump or a stand-up is never cut off.
+      const now = rig.clips[agent.clipKey]
+      key = sceneClip(agent.scene, stride, agent.clipKey, !now || (!now.loop && agent.clipTime >= now.duration))
+    }
     else if (speed > 0.12) key = speed > WALK_SPEED * 1.25 ? 'run' : 'walk'
     else {
       switch (agent.status) {
@@ -1639,14 +1780,17 @@ export class Astronauts {
     if (!clip) return
 
     // Stride rate follows the ground, everything else runs at its authored speed — except a
-    // knockout's hit, slowed so its furthest recoil lands just as the bot starts to go over.
+    // knockout's hit, slowed so its furthest recoil lands just as the bot starts to go over,
+    // and a scene's leap on the run, quickened (see `sceneRate`).
     const rate = isAirborne(agent)
       ? FLAIL_RATE
       : key === 'walk' || key === 'run'
         ? THREE.MathUtils.clamp(speed / WALK_SPEED, 0.4, 2.1)
         : key === 'hit' && agent.war
           ? HIT_PEAK / HIT_LEN
-          : 1
+          : agent.scene
+            ? sceneRate(key, stride)
+            : 1
     agent.clipTime += dt * anim * rate
 
     // One-shots that hand over to a loop: sitting down to sitting, raising a gun to aiming it.

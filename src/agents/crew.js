@@ -69,6 +69,14 @@ const CLIP = {
   // the left come across to steady it. Brought up over a short one-shot, then held.
   aimUp: { name: 'Idle_A', loop: false, tweak: 'aimUp', frames: [0, 10] },
   aim: { name: 'Idle_A', loop: true, tweak: 'aim' },
+  // A social scene's gestures. Talking is the second idle with a hand brought up in front, the
+  // way someone explains; an angry stomp is the idle gone stiff, arms rammed down at its sides
+  // (the hop is the bot's, not the clip's); a kick swings the right leg up and out in front off
+  // a planted left, and puts it back down again — the run's stride was tried, and is a leap.
+  talk: { name: 'Idle_B', loop: true, tweak: 'talk' },
+  stomp: { name: 'Idle_A', loop: true, tweak: 'stomp' },
+  kick: { name: 'Idle_A', loop: false, tweak: 'kick', frames: [0, 8] },
+  kickBack: { name: 'Idle_A', loop: false, tweak: 'kickBack', frames: [0, 8] },
 }
 
 /**
@@ -101,12 +109,32 @@ export const TWEAKS = {
     'upperarm.l': { offset: [-0.54, 0.35, -1.25] },
     'lowerarm.l': { offset: [-0.1, 0, -0.12] },
   },
+  // Half of the aim's raise, with the elbow bent: the right hand comes up in front of the
+  // chest, where a speaker's hand goes. Found the same way, by the hand bone's position.
+  talk: {
+    'upperarm.r': { offset: [0.45, 0.08, 0.78] },
+    'lowerarm.r': { offset: [0.5, 0, 0.6] },
+  },
+  // Both arms pulled in straight against the sides, their idle sway mostly damped out: fists
+  // down, stiff with it.
+  stomp: {
+    'upperarm.r': { scale: 0.3, offset: [0.2, 0, 0.45] },
+    'upperarm.l': { scale: 0.3, offset: [0.2, 0, -0.45] },
+  },
 }
 // The raise and the lower are the held pose, ramped.
 const ramped = (pose, ramp) => Object.fromEntries(Object.entries(pose).map(([k, v]) => [k, { ...v, ramp }]))
 TWEAKS.phoneUp = ramped(TWEAKS.phone, 0.45)
 TWEAKS.phoneDown = ramped(TWEAKS.phone, -0.45)
 TWEAKS.aimUp = ramped(TWEAKS.aim, 0.3)
+// The kick's held pose — the right foot up at shin height in front, the body leant into it —
+// snapped up fast and let down a little slower. Found by the foot bone's position.
+const KICK = {
+  'upperleg.r': { offset: [-1.35, 0, 0] },
+  spine: { offset: [0.2, 0, 0] },
+}
+TWEAKS.kick = ramped(KICK, 0.12)
+TWEAKS.kickBack = ramped(KICK, -0.22)
 
 const plainName = (n) => n.replace(/[.\s_]/g, '').toLowerCase()
 
