@@ -11,6 +11,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { openInTerminal } from '../server/lib/terminal.mjs'
+import { wslTerminalArgs } from '../server/lib/wsl-terminal.mjs'
 import { withEnv, withPlatform, fakeExecutable } from './support/env.mjs'
 
 const ARGV = ['/bin/true', 'x']
@@ -86,4 +87,23 @@ test('a missing DISPLAY is a refusal on Linux and nothing at all on macOS', posi
     const onMac = await withPlatform('darwin', () => withEnv(headless, () => openInTerminal(ARGV, dir)))
     assert.equal(onMac.ok, true)
   })
+})
+
+// ── WSL: a Windows Terminal tab back into this distro ─────────────────────────
+
+test('under WSL the command reaches wt.exe as a WSL tab in its folder, inside a login shell', () => {
+  const argv = ['/home/me/.local/bin/claude', '--resume', 'abc']
+  const args = wslTerminalArgs(argv, '/home/me/repo', { distro: 'Ubuntu' })
+  assert.deepEqual(args.slice(0, 10), [
+    '-w', '0', 'new-tab', 'wsl.exe', '-d', 'Ubuntu', '--cd', '/home/me/repo', '-e', '/bin/bash',
+  ])
+  assert.equal(args[10], '-lic')
+  assert.equal(args[11], String.raw`'/home/me/.local/bin/claude' '--resume' 'abc'\; exec '/bin/bash' -l`)
+})
+
+test('under WSL a quote or semicolon in the command survives, a double quote is refused', () => {
+  const script = wslTerminalArgs(['/bin/echo', "it's; fine"], '/tmp', { distro: 'Ubuntu' }).at(-1)
+  assert.ok(script.startsWith(String.raw`'/bin/echo' 'it'\''s\; fine'`))
+  assert.equal(wslTerminalArgs(['/bin/echo', 'say "hi"'], '/tmp', { distro: 'Ubuntu' }), null)
+  assert.equal(wslTerminalArgs(['/bin/echo'], '/tmp', { distro: '' }), null)
 })
