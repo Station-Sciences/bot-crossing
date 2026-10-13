@@ -11,6 +11,7 @@ import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { findExecutable } from './fsutil.mjs'
 import { openInTerminalWindows } from './win-terminal.mjs'
+import { isWsl, openInTerminalWsl } from './wsl-terminal.mjs'
 
 /**
  * How each terminal wants "run this command in this directory". The command comes after the
@@ -162,6 +163,13 @@ export async function openInTerminal(argv, cwd) {
   if (!wellFormed || !path.isAbsolute(argv[0]) || typeof cwd !== 'string' || !path.isAbsolute(cwd)) {
     return { ok: false, error: 'Invalid launch command' }
   }
+  // Under WSL the terminal you actually use is Windows Terminal, not whatever X emulator WSLg can
+  // draw. A named terminal still wins; anything the WSL route cannot carry falls through below.
+  if (!process.env.BOT_CROSSING_TERMINAL && (await isWsl())) {
+    const opened = await openInTerminalWsl(argv, cwd)
+    if (opened) return opened
+  }
+
   // A macOS session always has a window server; only Linux can be headless in a way worth naming.
   if (process.platform === 'linux' && !(await hasDisplay())) {
     return { ok: false, error: 'No graphical display to open a terminal on' }
