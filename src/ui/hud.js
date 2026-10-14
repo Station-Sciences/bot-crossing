@@ -2,6 +2,7 @@ import { PRESETS, PLANETS_ORDER } from './hud-data.js'
 import { PLANETS } from '../world/planet.js'
 import { TIMES, systemTimeOfDay } from '../world/sky.js'
 import { STATUS_LABEL } from '../game/colony.js'
+import { searchThreads } from '../game/search.js'
 import { FACE, FRAME_COLS, FRAME_ROWS } from '../agents/faces.js'
 import { PLOT_PALETTE, hashString } from '../world/plots.js'
 
@@ -907,6 +908,88 @@ export class Hud {
       (extra ? `<br>${extra}` : '')
   }
 
+  /**
+   * Type-to-find over `threads` (one repo's). Arrows move, Enter picks, Esc or clicking
+   * away closes. `onPick(id)` is handed the chosen thread; the box closes first.
+   */
+  openSearch(threads, onPick) {
+    const box = this.$('.finder')
+    const input = this.$('.finder-input')
+    const list = this.$('.finder-list')
+    let shown = []
+    let at = 0
+
+    const paint = () => {
+      list.replaceChildren(
+        ...shown.slice(0, 8).map((t, i) => {
+          const row = document.createElement('div')
+          row.className = 'finder-row' + (i === at ? ' on' : '')
+          row.setAttribute('role', 'option')
+          const name = document.createElement('span')
+          name.className = 'finder-title'
+          name.textContent = t.title || 'Untitled thread'
+          const meta = document.createElement('span')
+          meta.className = 'finder-meta'
+          meta.textContent = [t.worktree, STATUS_LABEL[t.status] ?? t.status].filter(Boolean).join(' · ')
+          row.append(name, meta)
+          row.addEventListener('pointerdown', (e) => {
+            e.preventDefault()
+            pick(t)
+          })
+          return row
+        })
+      )
+      if (!shown.length) {
+        const none = document.createElement('div')
+        none.className = 'finder-none'
+        none.textContent = 'No matching threads'
+        list.append(none)
+      }
+    }
+    const refresh = () => {
+      shown = searchThreads(threads, input.value)
+      at = 0
+      paint()
+    }
+    const close = () => {
+      if (box.hidden) return
+      box.hidden = true
+      input.removeEventListener('input', refresh)
+      input.onkeydown = null
+      input.onblur = null
+    }
+    const pick = (t) => {
+      close()
+      onPick(t.id)
+    }
+    this._closeSearch = close
+
+    input.value = ''
+    input.addEventListener('input', refresh)
+    input.onkeydown = (e) => {
+      // Kept inside the field: the page's own keys must not run on what is being typed.
+      e.stopPropagation()
+      if (e.key === 'Escape') close()
+      else if (e.key === 'Enter' && shown[at]) pick(shown[at])
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const n = Math.min(shown.length, 8)
+        if (n) at = (at + (e.key === 'ArrowDown' ? 1 : n - 1)) % n
+        paint()
+      }
+    }
+    input.onblur = close
+    box.hidden = false
+    refresh()
+    input.focus()
+  }
+
+  closeSearch() {
+    const open = !this.$('.finder').hidden
+    this._closeSearch?.()
+    return open
+  }
+
   hint(text, ms = 3200) {
     const el = this.$('.hint-pill')
     el.textContent = text
@@ -1188,6 +1271,10 @@ const TEMPLATE = `
 <div class="toasts"></div>
 <div class="fps panel"></div>
 <div class="hint-pill panel"></div>
+<div class="finder panel" role="dialog" aria-label="Find a thread" hidden>
+  <input class="finder-input" type="text" spellcheck="false" autocomplete="off" placeholder="Find a thread in this repo…" aria-label="Find a thread" />
+  <div class="finder-list" role="listbox"></div>
+</div>
 
 <div class="help">
   <div class="sheet panel">
@@ -1214,6 +1301,7 @@ const TEMPLATE = `
         <div class="k"><span>Next crew</span><kbd>J</kbd> <kbd>⇧J</kbd></div>
         <div class="k"><span>Busiest crew</span><kbd>B</kbd> <kbd>⇧B</kbd></div>
         <div class="k"><span>Next repo</span><kbd>K</kbd></div>
+        <div class="k"><span>Find a thread in this repo</span><kbd>/</kbd> <kbd>F</kbd></div>
         <div class="k"><span>Open thread</span><kbd>Enter</kbd></div>
         <div class="k"><span>Mark viewed</span><kbd>V</kbd></div>
         <div class="k"><span>Rename</span><kbd>R</kbd></div>
