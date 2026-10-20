@@ -761,7 +761,7 @@ export class Hud {
       const b = document.createElement('button')
       b.type = 'button'
       b.className = `kin ${statusClass(who.status)}`
-      b.title = `${STATUS_LABEL[who.status] || who.status} — fly there (G walks the family)`
+      b.title = `${STATUS_LABEL[who.status] || who.status} — fly there (G walks the family, ⇧G its manager)`
       b.innerHTML = `<i class="pip"></i><span>${escapeHtml(who.title || 'Untitled thread')}</span>`
       b.addEventListener('click', () => this.actions.focusThread?.(who.id))
       return b
@@ -1236,7 +1236,8 @@ const TEMPLATE = `
       </div>
       <div>
         <div class="k"><span>Next needing you</span><kbd>N</kbd></div>
-        <div class="k"><span>Walk this bot's family</span><kbd>G</kbd> <kbd>⇧G</kbd></div>
+        <div class="k"><span>Walk this bot's family</span><kbd>G</kbd></div>
+        <div class="k"><span>Its family's manager</span><kbd>⇧G</kbd></div>
         <div class="k"><span>Open thread</span><kbd>Enter</kbd></div>
         <div class="k"><span>Mark viewed</span><kbd>V</kbd></div>
         <div class="k"><span>Archive</span><kbd>A</kbd></div>

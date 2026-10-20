@@ -163,9 +163,10 @@ const actions = {
 
   /**
    * Walk the selected thread's family: its manager, then the crew it sent out, oldest first.
-   * Shift walks it backwards. Only bots still on the surface are stops.
+   * With `toManager` (shift), go straight to the family's manager instead — from deep in a
+   * squad, the way back to whoever is running it. Only bots still on the surface are stops.
    */
-  focusFamily: ({ back = false } = {}) => {
+  focusFamily: ({ toManager = false } = {}) => {
     if (!selectedId) {
       hud.hint('Pick a bot first — G walks its family')
       return
@@ -180,9 +181,16 @@ const actions = {
       hud.hint('No family on the map for this thread')
       return
     }
-    const step = back ? -1 : 1
+    if (toManager) {
+      // The ring starts at the manager, unless the manager is walking home and was filtered out.
+      const manager = familyRing(families, selectedId)[0]
+      if (manager === selectedId) hud.hint('This is the manager')
+      else if (ring[0] === manager) select(manager, { fly: true })
+      else hud.hint('Its manager is not on the map')
+      return
+    }
     const at = ring.indexOf(selectedId)
-    select(ring[(at + step + ring.length) % ring.length], { fly: true })
+    select(ring[(at + 1) % ring.length], { fly: true })
   },
 
   /** What the card says about a thread's family: who started it, and who it started. */
@@ -905,7 +913,7 @@ window.addEventListener('keydown', (e) => {
       break
     case 'g':
     case 'G':
-      actions.focusFamily({ back: e.shiftKey })
+      actions.focusFamily({ toManager: e.shiftKey })
       break
     case 'Tab':
       e.preventDefault()
