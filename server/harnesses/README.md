@@ -101,6 +101,7 @@ what earns a repo its own zone, and `lastActivityAt` is what sorts the whole map
 | `source` | string | Free-form, for your own bookkeeping (the Claude adapter uses `desktop` / `cli`) |
 | `canOpen` | boolean | Whether this thread can be opened. The UI greys the button out |
 | `subagents` | array | Optional. Errands this thread has out *right now*: `{ id, task, lastActivityAt }`. Drawn as small companions at the parent's building — no zone, no badge, not counted. Omit it and nothing changes |
+| `spawnedBy` | string | Optional. The `id` of the thread that started this one as a session of its own — not a subagent, those are `subagents`. A thread with crew on the map is drawn as their manager. Omit it and nothing changes |
 | `ref` | object | **Opaque.** Whatever *you* need to find this thread again |
 
 ### About `ref`

@@ -44,6 +44,9 @@ export function withErrands(list) {
         // Not carried down: an errand is not itself a parent, and leaving the array on the copy
         // would make a second pass fan it out again.
         subagents: undefined,
+        // Nor the session that started the parent: the errand belongs to its parent, not to
+        // the parent's manager, and inheriting this would list it as that manager's crew.
+        spawnedBy: undefined,
         parentId: thread.id,
         lastActivityAt: sub.lastActivityAt ?? thread.lastActivityAt,
         // Busy by definition. Never unread — an errand is not the thing asking for you, its
