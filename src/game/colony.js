@@ -25,12 +25,13 @@ import { translateCells } from '../world/plot-move.js'
 import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
+import { Tethers } from '../agents/tethers.js'
 import { Indicators, BADGE } from '../agents/indicators.js'
 import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
-import { buildFamilies, crewSummary, isSupervising, squadColors } from './families.js'
+import { buildFamilies, crewSummary, familyRing, finishedTurns, isSupervising, squadColors } from './families.js'
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -158,6 +159,8 @@ export class Colony {
     this.ship = new Ship(scene, shipPosition())
     this.astronauts = new Astronauts(scene, settings)
     this.astronauts.world = this._world()
+    // Cables from managers to their crew — see agents/tethers.js.
+    this.tethers = new Tethers(scene)
     // Sized for the largest preset rather than the current one: unlike the astronaut meshes these
     // buffers are never rebuilt, so allocating against today's `maxAgents` means raising quality
     // later silently starves the badges — the one `?` that wants you being the thing that goes
@@ -608,6 +611,12 @@ export class Colony {
     this.threads = new Map(live.map((t) => [t.id, t]))
     this.families = families
     this.squads = squads
+
+    // A report runs up the cable of every crew member that finished a turn since the last poll.
+    for (const [manager, crew] of finishedTurns(families, this._statusBefore, statusById)) {
+      this.tethers.pulse(manager, crew)
+    }
+    this._statusBefore = statusById
     this.urgentPlots = urgent
     this.activePlots = active
     this._rebuildNavigation()
@@ -1050,6 +1059,27 @@ export class Colony {
 
   // ── per-frame ───────────────────────────────────────────────────────────────────────
 
+  /**
+   * The family in focus — under the cursor, or else selected — gets its cables. That is the
+   * family the bot belongs to as crew, and, for a middle manager, its own crew as well.
+   */
+  _updateTethers(dt) {
+    const focus = this.astronauts.hovered?.id ?? this.astronauts.selected?.id ?? null
+    const families = this.families
+    const wanted = []
+    if (focus && families) {
+      const ring = familyRing(families, focus)
+      for (const crew of ring.slice(1)) wanted.push([ring[0], crew])
+      if (ring[0] !== focus) for (const crew of families.crewOf.get(focus) || []) wanted.push([focus, crew])
+    }
+    this.tethers.update(
+      dt,
+      wanted,
+      (id, out) => this.astronauts.antennaTop(id, out),
+      (manager) => this.squads?.get(manager)
+    )
+  }
+
   update(dt, elapsed, focus) {
     if (focus) this.sky.setFocus(focus)
     const cycled = this.sky.update(dt, elapsed, this.camera)
@@ -1065,6 +1095,7 @@ export class Colony {
     this.astronauts.viewFrom.copy(this.camera.position)
     this.astronauts.update(dt, elapsed)
     this.astronauts.updateRings(elapsed)
+    this._updateTethers(dt)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))
     this._emit(dt, elapsed)
     this._emitMotes(dt, night)

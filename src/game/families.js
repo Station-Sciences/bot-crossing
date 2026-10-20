@@ -112,6 +112,21 @@ export function isSupervising(status, summary) {
 }
 
 /**
+ * Crew that finished a turn between two polls, as `[manager, crew]` pairs: working on the
+ * last one and not now — the moment its result goes back to the session that started it.
+ * `before` and `after` map ids to statuses. With no `before` (the first roster) nothing has
+ * finished: a reload is not a report.
+ */
+export function finishedTurns(families, before, after) {
+  if (!before || !families) return []
+  const out = []
+  for (const [crew, manager] of families.managerOf) {
+    if (before.get(crew) === 'working' && after.get(crew) !== 'working') out.push([manager, crew])
+  }
+  return out
+}
+
+/**
  * How a manager's crew is doing, for its card and its pose: how many are still building, how
  * many are stuck on you, and how many have stopped. `statusOf` maps an id to its status.
  */

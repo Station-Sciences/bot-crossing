@@ -7,7 +7,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { SQUAD_PALETTE, buildFamilies, crewSummary, familyRing, isManager, isSupervising, squadColors } from '../src/game/families.js'
+import {
+  SQUAD_PALETTE,
+  buildFamilies,
+  crewSummary,
+  familyRing,
+  finishedTurns,
+  isManager,
+  isSupervising,
+  squadColors,
+} from '../src/game/families.js'
 import { withErrands } from '../src/game/errands.js'
 
 const t = (id, spawnedBy, createdAt = 0) => ({ id, spawnedBy, createdAt })
@@ -86,6 +95,15 @@ test('a manager keeps its colour when a younger one turns up', () => {
   const after = squadColors(buildFamilies([t('old'), t('a', 'old'), t('young'), t('b', 'young')]), (id) => age[id])
   assert.equal(after.get('old'), before.get('old'))
   assert.notEqual(after.get('young'), after.get('old'))
+})
+
+test('a crew member that stops working sends a report to its manager, once', () => {
+  const f = buildFamilies([t('boss'), t('a', 'boss'), t('b', 'boss'), t('loner')])
+  const before = new Map([['a', 'working'], ['b', 'working'], ['loner', 'working'], ['boss', 'idle']])
+  const after = new Map([['a', 'waiting'], ['b', 'working'], ['loner', 'idle'], ['boss', 'working']])
+  assert.deepEqual(finishedTurns(f, before, after), [['boss', 'a']], 'only crew, and only the one that stopped')
+  assert.deepEqual(finishedTurns(f, after, after), [], 'a status that has not changed is not news')
+  assert.deepEqual(finishedTurns(f, undefined, after), [], 'nothing on the first roster')
 })
 
 test('an errand does not inherit its parent’s manager', () => {

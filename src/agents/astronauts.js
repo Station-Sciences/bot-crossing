@@ -1796,8 +1796,25 @@ export class Astronauts {
   }
 
   setHover(agent) {
+    this.hovered = agent || null
     this.hoverRing.visible = Boolean(agent)
     if (agent) this.hoverRing.position.set(agent.pos.x, agent.pos.y + 0.03, agent.pos.z)
+  }
+
+  /**
+   * The top of an astronaut's antenna — the mast's, for a manager — in world space, for anything
+   * that wants to run a line to it. Measured off the resting rig rather than the animated head:
+   * close enough to the light that the eye joins them, and steady while the head bobs.
+   * False when that astronaut is not standing on the map.
+   */
+  antennaTop(id, out) {
+    const agent = this.byId.get(id)
+    if (!agent || agent.state === 'gone' || agent.state === 'queued' || agent.scale < 0.3) return false
+    const R = P.helmetR
+    const above = P.antY - P.headUp + R * 0.57 + (agent.manager ? this.mastHeight : 0)
+    const height = ((this.headHeight || 0.75) + above * CREW_SCALE) * (agent.manager ? MANAGER_SCALE : 1)
+    out.set(agent.pos.x, agent.pos.y + height * agent.scale, agent.pos.z)
+    return true
   }
 
   setSelected(agent) {
