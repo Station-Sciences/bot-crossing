@@ -103,6 +103,36 @@ export function familyRing(families, id) {
 }
 
 /**
+ * The team key's next stop: the lead of the next team in the same repo, skipping the rest of
+ * the team `fromId` is on. A team is a family as far as it reaches into this repo — a manager
+ * and its crew — and a bot with no family is a team of its own, so every bot is reachable.
+ *
+ * `ids` is the repo's bots on the map, in the order teams are toured (oldest first, so the tour
+ * holds still between presses). A team's lead is its manager when the manager is in `ids`, and
+ * otherwise whichever of its crew comes first. With no `fromId`, or one not in `ids`, the first
+ * team's lead (or, going back, the last's). Null when there is no other team to go to.
+ */
+export function nextTeam(families, ids, fromId = null, { back = false } = {}) {
+  const here = new Set(ids)
+  const teamOf = (id) => familyRing(families, id)[0] ?? id
+  const teams = []
+  const leads = new Map()
+  for (const id of ids) {
+    const team = teamOf(id)
+    if (!leads.has(team)) {
+      teams.push(team)
+      leads.set(team, here.has(team) ? team : id)
+    }
+  }
+  if (!teams.length) return null
+  const from = here.has(fromId) ? teams.indexOf(teamOf(fromId)) : -1
+  if (from < 0) return leads.get(back ? teams[teams.length - 1] : teams[0])
+  if (teams.length < 2) return null
+  const step = back ? -1 : 1
+  return leads.get(teams[(from + step + teams.length) % teams.length])
+}
+
+/**
  * Whether a thread's astronaut stands supervising: it has crew, it has nothing of its own on
  * (idle — one that is working, or wants you, does that instead), and some of its crew are
  * still busy or waiting on you. A foreman whose crew have all stopped is just idle.

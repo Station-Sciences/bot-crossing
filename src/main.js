@@ -25,7 +25,7 @@ import {
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 import { withErrands } from './game/errands.js'
-import { buildFamilies, crewSummary, familyRing } from './game/families.js'
+import { buildFamilies, crewSummary, familyRing, nextTeam } from './game/families.js'
 
 /**
  * Boot and the outer game loop.
@@ -191,6 +191,30 @@ const actions = {
     }
     const at = ring.indexOf(selectedId)
     select(ring[(at + 1) % ring.length], { fly: true })
+  },
+
+  /**
+   * Step out of the selected bot's team to the next one in the same repo — the open one, or
+   * else the selected bot's — landing on its lead: its manager, or a bot on its own. Shift goes
+   * back. Teams come round in the order they were started, so repeated presses tour the repo.
+   */
+  focusTeam: ({ back = false } = {}) => {
+    const project = selectedProject ?? colony.threads.get(selectedId)?.project ?? null
+    if (!project) {
+      hud.hint('Open a repo or pick a bot first — T steps between its teams')
+      return
+    }
+    const ids = [...colony.threads.values()]
+      .filter((t) => t.project === project)
+      .filter((t) => {
+        const agent = colony.agentFor(t.id)
+        return agent && agent.state !== 'leaving' && agent.state !== 'gone'
+      })
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id))
+      .map((t) => t.id)
+    const id = nextTeam(families, ids, selectedId, { back })
+    if (id) select(id, { fly: true })
+    else hud.hint(`Only one team in ${project}`)
   },
 
   /** What the card says about a thread's family: who started it, and who it started. */
@@ -914,6 +938,10 @@ window.addEventListener('keydown', (e) => {
     case 'g':
     case 'G':
       actions.focusFamily({ toManager: e.shiftKey })
+      break
+    case 't':
+    case 'T':
+      actions.focusTeam({ back: e.shiftKey })
       break
     case 'Tab':
       e.preventDefault()

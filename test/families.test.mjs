@@ -18,6 +18,7 @@ import {
   finishedTurns,
   isManager,
   isSupervising,
+  nextTeam,
   squadColors,
 } from '../src/game/families.js'
 import { withErrands } from '../src/game/errands.js'
@@ -107,6 +108,19 @@ test('a crew member that stops working sends a report to its manager, once', () 
   assert.deepEqual(finishedTurns(f, before, after), [['boss', 'a']], 'only crew, and only the one that stopped')
   assert.deepEqual(finishedTurns(f, after, after), [], 'a status that has not changed is not news')
   assert.deepEqual(finishedTurns(f, undefined, after), [], 'nothing on the first roster')
+})
+
+test('T skips the rest of the current team and lands on the next team’s lead', () => {
+  const f = buildFamilies([t('boss'), t('a', 'boss'), t('b', 'boss'), t('loner'), t('far'), t('c', 'far')])
+  // `far` manages from another repo, so only its crew member `c` is here.
+  const ids = ['boss', 'a', 'b', 'loner', 'c']
+  assert.equal(nextTeam(f, ids, 'a'), 'loner', 'out of boss’s team, not to its next crew member')
+  assert.equal(nextTeam(f, ids, 'loner'), 'c', 'a team led from elsewhere is led here by its first crew')
+  assert.equal(nextTeam(f, ids, 'c'), 'boss', 'wraps, to the manager rather than its crew')
+  assert.equal(nextTeam(f, ids, 'boss', { back: true }), 'c')
+  assert.equal(nextTeam(f, ids, null), 'boss', 'nothing selected: the first team')
+  assert.equal(nextTeam(f, ids, 'elsewhere', { back: true }), 'c', 'a bot outside the repo starts from the end')
+  assert.equal(nextTeam(f, ['boss', 'a'], 'a'), null, 'one team only: nowhere else to go')
 })
 
 test('an errand does not inherit its parent’s manager', () => {

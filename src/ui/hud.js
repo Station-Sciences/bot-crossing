@@ -1238,6 +1238,7 @@ const TEMPLATE = `
         <div class="k"><span>Next needing you</span><kbd>N</kbd></div>
         <div class="k"><span>Walk this bot's family</span><kbd>G</kbd></div>
         <div class="k"><span>Its family's manager</span><kbd>⇧G</kbd></div>
+        <div class="k"><span>Next team in this repo</span><kbd>T</kbd> <kbd>⇧T</kbd></div>
         <div class="k"><span>Open thread</span><kbd>Enter</kbd></div>
         <div class="k"><span>Mark viewed</span><kbd>V</kbd></div>
         <div class="k"><span>Archive</span><kbd>A</kbd></div>
