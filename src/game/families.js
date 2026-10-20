@@ -16,6 +16,13 @@
 /** The statuses that mean a thread is waiting on you rather than working or resting. */
 const NEEDS_YOU = ['blocked', 'approval', 'waiting']
 
+/**
+ * Squad colours: a manager's pennant, and the backpacks of the crew it sent out. Picked to sit
+ * apart from the status colours the trims and lamps use — green, blue, red and amber all mean
+ * something already, so none of them is here.
+ */
+export const SQUAD_PALETTE = [0xff8a3d, 0xe05ab8, 0x3cc7d6, 0x9b6bff, 0xc6e04a, 0xff6f91]
+
 /** Children oldest first: the order they were sent out in, which is the order a ring visits them. */
 const byAge = (a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id)
 
@@ -40,6 +47,44 @@ export function buildFamilies(threads) {
   const crewOf = new Map()
   for (const [id, list] of crew) crewOf.set(id, list.sort(byAge).map((t) => t.id))
   return { crewOf, managerOf }
+}
+
+/**
+ * Each manager's colour, keyed by its id. A manager prefers the colour its id hashes to and
+ * takes the next free one along when that is taken, oldest manager first — so a colour, once a
+ * manager has it, survives a younger manager turning up. Colours repeat only once there are
+ * more managers on the map than colours.
+ */
+export function squadColors(families, createdAtOf = () => 0) {
+  const managers = [...(families?.crewOf.keys() || [])].sort(
+    (a, b) => (createdAtOf(a) || 0) - (createdAtOf(b) || 0) || a.localeCompare(b)
+  )
+  const out = new Map()
+  const taken = new Set()
+  for (const id of managers) {
+    const start = hashId(id) % SQUAD_PALETTE.length
+    let pick = start
+    for (let step = 0; step < SQUAD_PALETTE.length; step++) {
+      const i = (start + step) % SQUAD_PALETTE.length
+      if (!taken.has(i)) {
+        pick = i
+        break
+      }
+    }
+    if (taken.size >= SQUAD_PALETTE.length) taken.clear()
+    taken.add(pick)
+    out.set(id, SQUAD_PALETTE[pick])
+  }
+  return out
+}
+
+function hashId(str) {
+  let h = 2166136261
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
 }
 
 export const isManager = (families, id) => Boolean(families?.crewOf.get(id)?.length)

@@ -196,6 +196,9 @@ const actions = {
     const statuses = new Map(crew.map((c) => [c.id, c.status]))
     return {
       manager: managerId ? card(managerId) : null,
+      // Whose colour each line wears: the manager's squad for "Spawned by", its own for its crew.
+      managerColor: managerId ? (colony.squads?.get(managerId) ?? null) : null,
+      crewColor: colony.squads?.get(id) ?? null,
       crew,
       summary: crewSummary(families, id, (childId) => statuses.get(childId)),
     }
@@ -471,6 +474,9 @@ function syncProject() {
       lastActivityAt: thread.lastActivityAt,
       status: statusFor(thread, now),
       crew: families.crewOf.get(thread.id)?.length ?? 0,
+      // The squad colours, for the row's rule (crew) and its "Managing" line (manager).
+      squad: colony.squads?.get(families.managerOf.get(thread.id)) ?? null,
+      flag: colony.squads?.get(thread.id) ?? null,
       depth: 0,
     }))
     // Whoever wants something first, then most recently touched — the same order of

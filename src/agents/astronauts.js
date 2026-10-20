@@ -109,8 +109,13 @@ const CREW_SCALE = 0.56
  * distance; the pennant is the part that reads as "in charge" from across the colony.
  */
 const MANAGER_SCALE = 1.14
-/** The pennant's colour until squad colours exist: signal orange, nobody else wears it. */
+/** A pennant with no squad colour handed over — not something the colony does, but a default. */
 const PENNANT = 0xff8a3d
+/**
+ * How far a crew member's backpack goes toward its squad's colour. Not all the way: a pack in
+ * the full saturated colour reads as a second status light, and the suit is meant to stay quiet.
+ */
+const SQUAD_TINT = 0.7
 /** How long a supervisor watches its crew between looks at its clipboard, in seconds. */
 const SUPERVISE_GAP = [3.5, 7]
 
@@ -183,6 +188,7 @@ export class Astronauts {
     this._v = new THREE.Vector3()
     this._one = new THREE.Vector3(1, 1, 1)
     this._color = new THREE.Color()
+    this._squadColor = new THREE.Color()
     this._wp = new THREE.Vector3()
     this._sep = new THREE.Vector3()
     this._pickBadge = new THREE.Vector3()
@@ -607,6 +613,8 @@ export class Astronauts {
       supervising: Boolean(entry.supervising),
       crewIds: entry.crewIds || [],
       watching: null,
+      flag: entry.flag ?? null,
+      squad: entry.squad ?? null,
       site: entry.site ? entry.site.clone() : new THREE.Vector3(),
       // The thing being worked on, and where round it this astronaut is standing to do it.
       anchor: entry.anchor ? entry.anchor.clone() : null,
@@ -717,6 +725,12 @@ export class Astronauts {
     if (entry.anchor) (agent.anchor ||= new THREE.Vector3()).copy(entry.anchor)
     agent.manager = Boolean(entry.manager)
     agent.crewIds = entry.crewIds || []
+    agent.flag = entry.flag ?? null
+    // The pack colour is only written on dirty frames, so a squad change has to say so.
+    if ((entry.squad ?? null) !== agent.squad) {
+      agent.squad = entry.squad ?? null
+      agent.colorDirty = true
+    }
     if (Boolean(entry.supervising) !== agent.supervising) {
       agent.supervising = Boolean(entry.supervising)
       // A clipboard out when supervising ends is put away at once, and a phone check timed for
@@ -1612,7 +1626,7 @@ export class Astronauts {
           pennant.setMatrixAt(managers, child)
           // Every frame rather than on a dirty flag: a pennant's slot is its place among the
           // managers, which shifts whenever any manager comes or goes, not when this one does.
-          pennant.setColorAt(managers, this._color.setHex(PENNANT))
+          pennant.setColorAt(managers, this._color.setHex(agent.flag ?? PENNANT))
           managers++
           // Up the antenna's own axis, so the tip stays on the mast however the antenna leans.
           child.copy(mast).multiply(this._m4c.makeTranslation(0, this.mastHeight, 0))
@@ -1647,7 +1661,9 @@ export class Astronauts {
         crew?.setColorAt(i, c.setHex(agent.suit))
         helmet.setColorAt(i, c.setHex(agent.suit))
         antenna.setColorAt(i, c.setHex(agent.suit))
-        pack.setColorAt(i, c.setHex(agent.suit))
+        c.setHex(agent.suit)
+        if (agent.squad !== null) c.lerp(this._squadColor.setHex(agent.squad), SQUAD_TINT)
+        pack.setColorAt(i, c)
         face.setColorAt(i, agent.eye)
         staticDirty = true
       }

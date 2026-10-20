@@ -1161,7 +1161,7 @@ body {
 /* Crew sit under the manager that sent them out, indented with a rule down the left. */
 .side .thread.crew-row {
   margin-left: calc(var(--depth, 1) * 14px);
-  border-left: 1px solid var(--line-strong);
+  border-left: 2px solid var(--squad, var(--line-strong));
   border-radius: 0 10px 10px 0;
 }
 
@@ -1232,6 +1232,18 @@ body {
 .thread-pop .family .kin.approval { color: #e0b25a; }
 .thread-pop .family .kin.done { color: #e6c67f; }
 .thread-pop .family .kin.idle { color: #7c7b86; }
+
+/* A squad's colour, as worn on its manager's pennant and its crew's backpacks. */
+.side .thread .squad,
+.thread-pop .family .squad {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: 0;
+  flex: none;
+}
 
 .thread-pop .family .more {
   align-self: center;

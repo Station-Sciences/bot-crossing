@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildFamilies, crewSummary, familyRing, isManager, isSupervising } from '../src/game/families.js'
+import { SQUAD_PALETTE, buildFamilies, crewSummary, familyRing, isManager, isSupervising, squadColors } from '../src/game/families.js'
 import { withErrands } from '../src/game/errands.js'
 
 const t = (id, spawnedBy, createdAt = 0) => ({ id, spawnedBy, createdAt })
@@ -66,6 +66,26 @@ test('only an idle manager with crew still busy stands supervising', () => {
   assert.equal(isSupervising('working', busy), false, 'its own work comes first')
   assert.equal(isSupervising('waiting', busy), false, 'wanting you outranks watching')
   assert.equal(isSupervising('idle', null), false, 'no crew at all')
+})
+
+test('every manager gets a squad colour, and no two share one while colours last', () => {
+  const threads = []
+  for (let m = 0; m < SQUAD_PALETTE.length; m++) {
+    threads.push(t(`boss${m}`, undefined, m))
+    threads.push(t(`kid${m}`, `boss${m}`, 100 + m))
+  }
+  const colors = squadColors(buildFamilies(threads), (id) => threads.find((x) => x.id === id)?.createdAt)
+  assert.equal(colors.size, SQUAD_PALETTE.length)
+  assert.equal(new Set(colors.values()).size, SQUAD_PALETTE.length)
+  assert.equal(colors.has('kid0'), false, 'crew wear their manager’s colour; they have none of their own')
+})
+
+test('a manager keeps its colour when a younger one turns up', () => {
+  const age = { old: 1, young: 2 }
+  const before = squadColors(buildFamilies([t('old'), t('a', 'old')]), (id) => age[id])
+  const after = squadColors(buildFamilies([t('old'), t('a', 'old'), t('young'), t('b', 'young')]), (id) => age[id])
+  assert.equal(after.get('old'), before.get('old'))
+  assert.notEqual(after.get('young'), after.get('old'))
 })
 
 test('an errand does not inherit its parent’s manager', () => {

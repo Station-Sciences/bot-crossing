@@ -30,7 +30,7 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
-import { buildFamilies, crewSummary, isSupervising } from './families.js'
+import { buildFamilies, crewSummary, isSupervising, squadColors } from './families.js'
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -482,6 +482,8 @@ export class Colony {
     // knows whether it is a manager, and kept for the page — see game/families.js.
     const families = buildFamilies(live)
     const statusById = new Map(live.map((t) => [t.id, statusFor(t, now)]))
+    const createdAt = new Map(live.map((t) => [t.id, t.createdAt]))
+    const squads = squadColors(families, (id) => createdAt.get(id))
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
     const byProject = new Map()
@@ -582,6 +584,10 @@ export class Colony {
           status,
           manager: crewIds.length > 0,
           supervising: isSupervising(status, crew),
+          // Its own squad's colour, flown on its pennant; and the colour of the squad it is crew
+          // in, worn on its backpack. A middle manager has both, and they differ.
+          flag: squads.get(thread.id) ?? null,
+          squad: squads.get(families.managerOf.get(thread.id)) ?? null,
           crewIds,
           site: null, // assigned after all buildings have reached the navigation map
           // Where the work actually is. A working astronaut circles it rather than standing
@@ -601,6 +607,7 @@ export class Colony {
 
     this.threads = new Map(live.map((t) => [t.id, t]))
     this.families = families
+    this.squads = squads
     this.urgentPlots = urgent
     this.activePlots = active
     this._rebuildNavigation()

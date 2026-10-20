@@ -622,7 +622,9 @@ export class Hud {
     // you leave the panel open.
     const signature =
       `${project.name}~${project.path}~${project.accent}~${project.selectedId}~${Math.floor(Date.now() / 60000)}~` +
-      project.threads.map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}:${t.depth}:${t.crew}`).join('|')
+      project.threads
+        .map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}:${t.depth}:${t.crew}:${t.squad}:${t.flag}`)
+        .join('|')
     panel.classList.add('drilled')
     if (this._last.project === signature) return
     this._last.project = signature
@@ -655,6 +657,8 @@ export class Hud {
       b.className = `thread ${statusClass(t.status)}${t.depth ? ' crew-row' : ''}`
       // Nested by indent alone, capped so a deep chain cannot push titles out of the panel.
       if (t.depth) b.style.setProperty('--depth', String(Math.min(t.depth, 3)))
+      // The rule down the left wears the squad's colour, the same one on the crew's backpacks.
+      if (t.squad !== null && t.squad !== undefined) b.style.setProperty('--squad', hex(t.squad))
       b.setAttribute('aria-pressed', String(t.id === project.selectedId))
       b.title = STATUS_LABEL[t.status] || t.status
       b.innerHTML =
@@ -663,7 +667,9 @@ export class Hud {
         `<span class="when">${ago(t.lastActivityAt)}</span>` +
         (t.worktree || t.crew
           ? `<span class="wt">${[
-              t.crew ? `Managing ${t.crew}` : '',
+              t.crew
+                ? `${t.flag !== null && t.flag !== undefined ? `<i class="squad" style="background:${hex(t.flag)}"></i>` : ''}Managing ${t.crew}`
+                : '',
               t.worktree ? `⑂ ${escapeHtml(t.worktree)}` : '',
             ]
               .filter(Boolean)
@@ -760,19 +766,20 @@ export class Hud {
       b.addEventListener('click', () => this.actions.focusThread?.(who.id))
       return b
     }
-    const line = (label) => {
+    const line = (label, color) => {
       const row = document.createElement('div')
       row.className = 'kin-line'
-      row.innerHTML = `<span class="label">${label}</span>`
+      const swatch = color !== null && color !== undefined ? `<i class="squad" style="background:${hex(color)}"></i>` : ''
+      row.innerHTML = `${swatch}<span class="label">${label}</span>`
       box.appendChild(row)
       return row
     }
 
-    if (family.manager) line('Spawned by').appendChild(link(family.manager))
+    if (family.manager) line('Spawned by', family.managerColor).appendChild(link(family.manager))
     if (family.crew.length) {
       const { total, working, needsYou, done } = family.summary
       const parts = [working && `${working} working`, needsYou && `${needsYou} need you`, done && `${done} idle`]
-      line(`Managing ${total}${parts.some(Boolean) ? ` · ${parts.filter(Boolean).join(' · ')}` : ''}`)
+      line(`Managing ${total}${parts.some(Boolean) ? ` · ${parts.filter(Boolean).join(' · ')}` : ''}`, family.crewColor)
       const list = document.createElement('div')
       list.className = 'kin-list'
       for (const who of family.crew.slice(0, FAMILY_PEEK)) list.appendChild(link(who))
