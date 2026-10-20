@@ -23,6 +23,7 @@ import {
 } from '../world/plots.js'
 import { translateCells } from '../world/plot-move.js'
 import { createBuilding, buildingUniforms, Scaffolds } from '../world/buildings.js'
+import { SquadFlags } from '../world/flags.js'
 import { Ship } from '../world/ship.js'
 import { Astronauts } from '../agents/astronauts.js'
 import { Tethers } from '../agents/tethers.js'
@@ -31,7 +32,16 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
-import { buildFamilies, crewSummary, familyRing, finishedTurns, isSupervising, squadColors } from './families.js'
+import {
+  buildFamilies,
+  buildingKindFor,
+  crewFlags,
+  crewSummary,
+  familyRing,
+  finishedTurns,
+  isSupervising,
+  squadColors,
+} from './families.js'
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -161,6 +171,8 @@ export class Colony {
     this.astronauts.world = this._world()
     // Cables from managers to their crew — see agents/tethers.js.
     this.tethers = new Tethers(scene)
+    // A pennant beside every crew member's building, in its manager's colour — see world/flags.js.
+    this.squadFlags = new SquadFlags(scene, MAX_AGENT_CAP)
     // Sized for the largest preset rather than the current one: unlike the astronaut meshes these
     // buffers are never rebuilt, so allocating against today's `maxAgents` means raising quality
     // later silently starves the badges — the one `?` that wants you being the thing that goes
@@ -487,6 +499,7 @@ export class Colony {
     const statusById = new Map(live.map((t) => [t.id, statusFor(t, now)]))
     const createdAt = new Map(live.map((t) => [t.id, t.createdAt]))
     const squads = squadColors(families, (id) => createdAt.get(id))
+    const flags = crewFlags(families, squads)
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
     const byProject = new Map()
@@ -576,7 +589,12 @@ export class Colony {
         if (status === 'waiting' || status === 'blocked' || status === 'working') active.add(plot.id)
         stats.agents++
 
-        const building = this._syncBuilding(thread, plot, i)
+        const building = this._syncBuilding(thread, plot, i, buildingKindFor(families, thread.id))
+        // The colour this building's flag flies, or none. Kept on the entry so a flag whose
+        // link has just ended keeps its colour while it lowers, rather than going white.
+        const flag = flags.get(thread.id) ?? null
+        building.flag = flag !== null
+        if (flag !== null) building.flagColor = flag
         seenBuildings.add(thread.id)
 
         const crewIds = families.crewOf.get(thread.id) || []
@@ -742,22 +760,43 @@ export class Colony {
     return PLOT_PALETTE[start]
   }
 
-  _syncBuilding(thread, plot, index) {
+  /**
+   * `kind` is the building a thread is *owed* — a dispatch post for a manager — or null for
+   * whatever its id seeds. See `buildingKindFor` in game/families.js.
+   */
+  _syncBuilding(thread, plot, index, kind = null) {
     let entry = this.buildings.get(thread.id)
     // Whole, always. A building that has finished rising is a building you can see all of.
     const target = 1
 
     if (!entry) {
-      const mesh = createBuilding({ seed: hashString(thread.id), accent: plot.accent })
+      const mesh = createBuilding({ seed: hashString(thread.id), accent: plot.accent, kind })
       const pos = plot.worldSlot(index)
       mesh.position.copy(pos)
       mesh.rotation.y = ((hashString(thread.id) >>> 8) % 360) * (Math.PI / 180)
       // New buildings rise from nothing rather than appearing whole.
       mesh.userData.setProgress(0)
       this.worldGroup.add(mesh)
-      entry = { mesh, plot: plot.id, slot: index, progress: 0, target, retiring: false }
+      entry = { mesh, plot: plot.id, slot: index, progress: 0, target, retiring: false, kind }
       this.buildings.set(thread.id, entry)
     } else {
+      if (entry.kind !== kind) {
+        // Promoted to manager, or back down again. Only the mesh changes: the entry — its plot,
+        // its slot, its place in the map — is the thread's and stays exactly where it was, so
+        // nothing re-lays-out and no neighbour moves. The new building goes up from the deck
+        // where the old one stood, the same rise every building makes, and the old one is taken
+        // away in the same frame; the two never stand in one spot together.
+        const old = entry.mesh
+        const mesh = createBuilding({ seed: hashString(thread.id), accent: plot.accent, kind })
+        mesh.position.copy(old.position)
+        mesh.rotation.y = old.rotation.y
+        mesh.userData.setProgress(0)
+        this.worldGroup.add(mesh)
+        this._disposeBuildingMesh(old)
+        entry.mesh = mesh
+        entry.kind = kind
+        entry.progress = 0
+      }
       // Where this building belongs *now*. Comparing the world position rather than the
       // plot id and slot number is what catches a zone that was rebuilt underneath it: the
       // repo is the same and the slot is the same, but the ground moved, and a habitat left
@@ -782,12 +821,16 @@ export class Colony {
     entry.retiring = true
     entry.target = 0
     if (entry.progress <= 0.02) {
-      this.worldGroup.remove(entry.mesh)
-      entry.mesh.geometry.dispose()
-      entry.mesh.material.dispose()
-      entry.mesh.customDepthMaterial?.dispose()
+      this._disposeBuildingMesh(entry.mesh)
       this.buildings.delete(id)
     }
+  }
+
+  _disposeBuildingMesh(mesh) {
+    this.worldGroup.remove(mesh)
+    mesh.geometry.dispose()
+    mesh.material.dispose()
+    mesh.customDepthMaterial?.dispose()
   }
 
   /**
@@ -1114,6 +1157,7 @@ export class Colony {
     }))
     this._updatePlots(night, elapsed)
     this._updateScaffolds()
+    this._updateFlags(dt)
     this._updateLabels(dt)
     this.reflections.update(dt, focus || this.sky.focus, this.camera)
   }
@@ -1266,6 +1310,38 @@ export class Colony {
     for (const plot of this.plotOrder) plot.setNight(night, urgent?.has(plot.id) ?? false, elapsed)
   }
 
+  /**
+   * Every crew building's flag, placed fresh each frame from the building it stands by: the
+   * pole is at the building's edge, turned with it, and rides its rise and its sink — a flag
+   * still flying over a habitat that has packed itself into the ground reads as a bug. A link
+   * that ends lowers its flag over a second rather than snapping it out of the sky.
+   */
+  _updateFlags(dt) {
+    this.squadFlags.begin()
+    for (const entry of this.buildings.values()) {
+      const want = entry.flag && !entry.retiring ? 1 : 0
+      entry.flagAmount = THREE.MathUtils.damp(entry.flagAmount || 0, want, 4, dt)
+      if (entry.flagAmount < 0.01 && !want) {
+        entry.flagAmount = 0
+        continue
+      }
+      const mesh = entry.mesh
+      // Up only once the building is most of the way up, so it never stands beside a hole.
+      const grown = THREE.MathUtils.smoothstep(entry.progress, 0.35, 0.85)
+      const amount = entry.flagAmount * grown
+      // Off one front corner of the footprint, in the building's own frame — the same corner
+      // on every building, so a squad's flags line up as you look along a plot. Just inside
+      // the keep-out ring the navigation grid holds the crew to, so nobody walks through it.
+      const yaw = mesh.rotation.y
+      const r = (mesh.userData.footprint || 1.4) * 0.86
+      const a = yaw + Math.PI * 0.25
+      const x = mesh.position.x + Math.sin(a) * r
+      const z = mesh.position.z + Math.cos(a) * r
+      this.squadFlags.place(x, mesh.position.y, z, yaw, amount, entry.flagColor)
+    }
+    this.squadFlags.end()
+  }
+
   /** Which buildings have scaffolding up right now, and where its poles stand. */
   _scaffoldSites(includePlanned = false) {
     const sites = []
@@ -1334,6 +1410,7 @@ export class Colony {
     this.indicators.dispose()
     this.particles.dispose()
     this.scaffolds.dispose()
+    this.squadFlags.dispose()
     disposeTree(this.worldGroup)
     disposeTree(this.plotGroup)
     disposeTree(this.labelGroup)

@@ -141,3 +141,28 @@ export function crewSummary(families, id, statusOf) {
   }
   return out
 }
+
+/**
+ * The building kind a manager's plot slot gets: a dispatch post, the control tower its crew
+ * were sent out from. Everyone else — crew included — keeps whatever their id seeds, so a
+ * thread that stops managing gets its own old building back rather than a new random one.
+ */
+export const DISPATCH_KIND = 'dispatch'
+
+export const buildingKindFor = (families, id) => (isManager(families, id) ? DISPATCH_KIND : null)
+
+/**
+ * The flag each crew member's building flies: its manager's squad colour, keyed by the crew
+ * member's id. A middle manager flies its *manager's* colour here — the flag says whose squad
+ * the building is in, and its own squad's colour is already up on its astronaut's pennant. A
+ * manager with no colour yet (nothing should get here without one) flies nothing.
+ */
+export function crewFlags(families, squads) {
+  const out = new Map()
+  if (!families || !squads) return out
+  for (const [crew, manager] of families.managerOf) {
+    const colour = squads.get(manager)
+    if (colour != null) out.set(crew, colour)
+  }
+  return out
+}

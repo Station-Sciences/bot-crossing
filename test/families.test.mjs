@@ -8,8 +8,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  DISPATCH_KIND,
   SQUAD_PALETTE,
   buildFamilies,
+  buildingKindFor,
+  crewFlags,
   crewSummary,
   familyRing,
   finishedTurns,
@@ -109,4 +112,23 @@ test('a crew member that stops working sends a report to its manager, once', () 
 test('an errand does not inherit its parent’s manager', () => {
   const [, errand] = withErrands([{ id: 'p', spawnedBy: 'boss', subagents: [{ id: 's', task: 'look' }] }])
   assert.equal(errand.spawnedBy, undefined, 'or it would be listed as the manager’s crew')
+})
+
+test('a manager gets a dispatch post, and gives it back when its crew go home', () => {
+  const f = buildFamilies([t('boss'), t('a', 'boss')])
+  assert.equal(buildingKindFor(f, 'boss'), DISPATCH_KIND)
+  assert.equal(buildingKindFor(f, 'a'), null, 'crew keep the building their id seeds')
+  const after = buildFamilies([t('boss')])
+  assert.equal(buildingKindFor(after, 'boss'), null, 'nobody to dispatch: an ordinary building again')
+})
+
+test('crew buildings fly their manager\'s squad colour, a middle manager its own manager\'s', () => {
+  const f = buildFamilies([t('boss', null, 0), t('mid', 'boss', 10), t('leaf', 'mid', 20), t('loner')])
+  const squads = squadColors(f, (id) => ({ boss: 0, mid: 10 })[id])
+  const flags = crewFlags(f, squads)
+  assert.equal(flags.get('mid'), squads.get('boss'))
+  assert.equal(flags.get('leaf'), squads.get('mid'))
+  assert.equal(flags.has('boss'), false, 'a manager flies nothing on its building')
+  assert.equal(flags.has('loner'), false)
+  assert.equal(crewFlags(buildFamilies([t('mid'), t('leaf', 'mid')]), new Map()).size, 0, 'no colour, no flag')
 })

@@ -267,6 +267,38 @@ const KINDS = {
   },
 }
 
+/**
+ * Kinds that are only ever *given*, never rolled. Each one means something — a dispatch post
+ * is a manager's — so it must not turn up by chance on a thread that is not one, and adding it
+ * must not shift the roll: the random pool below is exactly the ten it always was, so every
+ * existing session keeps the building it had.
+ */
+const ASSIGNED = {
+  /**
+   * A manager's building: the control tower its crew were sent out from.
+   *
+   * The pack has no dish, antenna or radio mast, so the tower is put together out of what it
+   * does have. The tall lattice frame becomes the stilts, a whole base module rides on top of
+   * it as the cab, a rotorless turbine tower on the roof is the aerial, and a lamp beside it is
+   * the beacon — lit, unlike every other lamp in the colony, so a dispatch post reads after
+   * dark from right across the map.
+   * Nothing else in town puts a room up in the air, which is what makes it read as a tower
+   * rather than as one more tall thing.
+   */
+  dispatch(c, rand) {
+    c.add('structure_tall')
+    c.add(pick(rand, ['basemodule_A', 'basemodule_C']), { y: 2, ry: Math.floor(rand() * 4) * (Math.PI / 2) })
+    c.add('roofmodule_base', { y: 2 + DECK })
+    c.add('lights', { y: 2 + DECK + 0.1, x: -0.3, z: 0.3, s: 0.6, emissive: 0.6 })
+    // The radio mast: a turbine tower taken solo, without its rotor, is a bare pole with a
+    // housing at the top — which is all an aerial is from across a colony.
+    c.add('windturbine_tall', { solo: true, x: 0.35, y: 2 + DECK + 0.1, z: -0.3, s: 0.55 })
+    // A crate or two at the foot: the post is where the squad's kit is kept.
+    c.ring(pick(rand, ['containers_A', 'containers_C']), 2, 1.25, rand)
+    return 'Dispatch post'
+  },
+}
+
 const KIND_IDS = Object.keys(KINDS)
 
 // ── the reveal shader ─────────────────────────────────────────────────────────────────
@@ -460,16 +492,18 @@ function depthMaterial(uniforms) {
 
 /**
  * Build one structure. `seed` is derived from the thread id, so the same session always
- * gets the same building; `kind` can be forced, otherwise the seed picks it.
+ * gets the same building; `kind` can be forced — to one of the assigned kinds too, which the
+ * seed never picks — otherwise the seed picks it.
  *
  * Requires `loadKit()` to have resolved — boot awaits it before the first roster arrives.
  */
 export function createBuilding({ seed = 1, accent = 0xc96442, kind = null } = {}) {
   const rand = mulberry(seed)
-  const chosen = kind && KINDS[kind] ? kind : KIND_IDS[Math.floor(rand() * KIND_IDS.length)]
+  const recipes = { ...KINDS, ...ASSIGNED }
+  const chosen = kind && recipes[kind] ? kind : KIND_IDS[Math.floor(rand() * KIND_IDS.length)]
 
   const c = new Composer()
-  const label = KINDS[chosen](c, rand, accent)
+  const label = recipes[chosen](c, rand, accent)
   const geo = c.finish()
   let radius = 0
   const positions = geo.getAttribute('position')
