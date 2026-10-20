@@ -30,6 +30,7 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
+import { buildFamilies, crewSummary, isSupervising } from './families.js'
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -477,6 +478,10 @@ export class Colony {
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
     const now = Date.now()
     const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
+    // Who started whom among the threads on the map. Built before the roster so each astronaut
+    // knows whether it is a manager, and kept for the page — see game/families.js.
+    const families = buildFamilies(live)
+    const statusById = new Map(live.map((t) => [t.id, statusFor(t, now)]))
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
     const byProject = new Map()
@@ -569,10 +574,15 @@ export class Colony {
         const building = this._syncBuilding(thread, plot, i)
         seenBuildings.add(thread.id)
 
+        const crewIds = families.crewOf.get(thread.id) || []
+        const crew = crewIds.length ? crewSummary(families, thread.id, (id) => statusById.get(id)) : null
         roster.push({
           id: thread.id,
           thread,
           status,
+          manager: crewIds.length > 0,
+          supervising: isSupervising(status, crew),
+          crewIds,
           site: null, // assigned after all buildings have reached the navigation map
           // Where the work actually is. A working astronaut circles it rather than standing
           // at one spot, so it needs the building, not just a place to stand near it.
@@ -590,6 +600,7 @@ export class Colony {
     }
 
     this.threads = new Map(live.map((t) => [t.id, t]))
+    this.families = families
     this.urgentPlots = urgent
     this.activePlots = active
     this._rebuildNavigation()
@@ -1044,6 +1055,7 @@ export class Colony {
     this.ship.update(dt, elapsed, night)
 
     this._growBuildings(dt)
+    this.astronauts.viewFrom.copy(this.camera.position)
     this.astronauts.update(dt, elapsed)
     this.astronauts.updateRings(elapsed)
     this.indicators.update(this.astronauts.agents, elapsed, (a) => this._badgeFor(a))

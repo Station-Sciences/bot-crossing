@@ -27,6 +27,8 @@ const ROWS = 2
 
 /** Where the badge's bottom edge sits: a shade above the crown of the helmet. */
 const HEAD_CLEAR = 1.42
+/** A manager is drawn taller and has a mast on its antenna; its badge clears the pennant. */
+const MANAGER_CLEAR = 0.24
 
 export const BADGE = {
   none: -1,
@@ -216,7 +218,7 @@ export class Indicators {
       centers[n * 3] = agent.pos.x
       // Just clear of the helmet: the shader lifts the quad the rest of the way by its own
       // half-height, which is the part that has to change with the camera.
-      centers[n * 3 + 1] = agent.pos.y + HEAD_CLEAR + bob
+      centers[n * 3 + 1] = agent.pos.y + HEAD_CLEAR + (agent.manager ? MANAGER_CLEAR : 0) + bob
       centers[n * 3 + 2] = agent.pos.z
 
       frames[n * 2] = (badge % COLS) / COLS

@@ -58,6 +58,15 @@ export function familyRing(families, id) {
 }
 
 /**
+ * Whether a thread's astronaut stands supervising: it has crew, it has nothing of its own on
+ * (idle — one that is working, or wants you, does that instead), and some of its crew are
+ * still busy or waiting on you. A foreman whose crew have all stopped is just idle.
+ */
+export function isSupervising(status, summary) {
+  return status === 'idle' && Boolean(summary && summary.working + summary.needsYou > 0)
+}
+
+/**
  * How a manager's crew is doing, for its card and its pose: how many are still building, how
  * many are stuck on you, and how many have stopped. `statusOf` maps an id to its status.
  */

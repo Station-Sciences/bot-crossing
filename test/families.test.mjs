@@ -7,7 +7,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildFamilies, crewSummary, familyRing, isManager } from '../src/game/families.js'
+import { buildFamilies, crewSummary, familyRing, isManager, isSupervising } from '../src/game/families.js'
 import { withErrands } from '../src/game/errands.js'
 
 const t = (id, spawnedBy, createdAt = 0) => ({ id, spawnedBy, createdAt })
@@ -54,6 +54,18 @@ test('the crew summary sorts children into working, needing you, and stopped', (
   const f = buildFamilies([t('boss'), t('a', 'boss'), t('b', 'boss'), t('c', 'boss'), t('d', 'boss')])
   const status = { a: 'working', b: 'approval', c: 'idle', d: 'waiting' }
   assert.deepEqual(crewSummary(f, 'boss', (id) => status[id]), { total: 4, working: 1, needsYou: 2, done: 1 })
+})
+
+test('only an idle manager with crew still busy stands supervising', () => {
+  const busy = { total: 2, working: 1, needsYou: 0, done: 1 }
+  const asking = { total: 1, working: 0, needsYou: 1, done: 0 }
+  const quiet = { total: 2, working: 0, needsYou: 0, done: 2 }
+  assert.equal(isSupervising('idle', busy), true)
+  assert.equal(isSupervising('idle', asking), true, 'crew waiting on you are still out')
+  assert.equal(isSupervising('idle', quiet), false, 'nobody left to watch')
+  assert.equal(isSupervising('working', busy), false, 'its own work comes first')
+  assert.equal(isSupervising('waiting', busy), false, 'wanting you outranks watching')
+  assert.equal(isSupervising('idle', null), false, 'no crew at all')
 })
 
 test('an errand does not inherit its parent’s manager', () => {
