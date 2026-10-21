@@ -35,6 +35,7 @@ import { liveThreadsForColony } from './hidden-projects.js'
 import {
   buildFamilies,
   buildingKindFor,
+  crewAlerts,
   crewFlags,
   crewSummary,
   familyRing,
@@ -629,6 +630,9 @@ export class Colony {
     this.threads = new Map(live.map((t) => [t.id, t]))
     this.families = families
     this.squads = squads
+    // What each top manager would carry for its crew with crew alerts hidden. Kept whether the
+    // setting is on or not, so flipping it takes effect on the next frame rather than the next poll.
+    this.crewAlerts = crewAlerts(families, (id) => statusById.get(id))
 
     // A report runs up the cable of every crew member that finished a turn since the last poll.
     for (const [manager, crew] of finishedTurns(families, this._statusBefore, statusById)) {
@@ -1187,6 +1191,18 @@ export class Colony {
   }
 
   _badgeFor(agent) {
+    if (this.settings.get('hideCrewAlerts')) {
+      // Crew go quiet — even arriving and leaving — and whatever they need you for shows over
+      // the manager at the top of their chain instead, unless it has something of its own.
+      if (this.families?.managerOf.has(agent.id)) return BADGE.none
+      const own = this._ownBadge(agent)
+      const carried = this.crewAlerts?.get(agent.id)
+      return carried && (own === BADGE.none || own === BADGE.working || own === BADGE.done) ? BADGE_FOR[carried] : own
+    }
+    return this._ownBadge(agent)
+  }
+
+  _ownBadge(agent) {
     if (agent.state === 'spawning') return BADGE.spawning
     if (agent.state === 'leaving') return BADGE.leaving
     // A badge belongs to the *thread*, not to the spot: an astronaut that has to walk —

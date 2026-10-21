@@ -273,6 +273,11 @@ export class Hud {
       this._toggle('Return to isometric', 'autoFrame', 'Eases the angle back when you stop dragging.'),
       this._slider('Field of view', 'fov', 20, 60, 1, (v) => `${v}°`),
       this._toggle('Project labels', 'showLabels'),
+      this._toggle(
+        'Hide crew alerts',
+        'hideCrewAlerts',
+        'No badges over bots another session started. Whatever they need you for shows over their manager instead.'
+      ),
       this._toggle('Reduced motion', 'reducedMotion', 'Calms the bobbing and the camera easing.'),
       this._toggle('Show FPS', 'showFps')
     )

@@ -173,6 +173,31 @@ export function crewSummary(families, id, statusOf) {
 }
 
 /**
+ * The alert each top manager carries for its crew when crew alerts are hidden, keyed by the
+ * manager's id: the most urgent status anyone under it is on that needs you, in `NEEDS_YOU`
+ * order. "Under" reaches through middle managers — they are crew too, so their own badges are
+ * hidden as well, and an alert that stopped at one would never be seen. A manager whose crew
+ * want nothing from you is not in the map.
+ */
+export function crewAlerts(families, statusOf) {
+  const out = new Map()
+  for (const id of families?.managerOf.keys() || []) {
+    const i = NEEDS_YOU.indexOf(statusOf(id))
+    if (i < 0) continue
+    // Up to the top of the chain. The seen set is for a loop in the records, as above.
+    let top = families.managerOf.get(id)
+    const seen = new Set([id])
+    while (families.managerOf.has(top) && !seen.has(top)) {
+      seen.add(top)
+      top = families.managerOf.get(top)
+    }
+    const held = NEEDS_YOU.indexOf(out.get(top))
+    if (held < 0 || i < held) out.set(top, NEEDS_YOU[i])
+  }
+  return out
+}
+
+/**
  * The building kind a manager's plot slot gets: a dispatch post, the control tower its crew
  * were sent out from. Everyone else — crew included — keeps whatever their id seeds, so a
  * thread that stops managing gets its own old building back rather than a new random one.

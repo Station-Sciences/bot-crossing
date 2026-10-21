@@ -13,6 +13,7 @@ import {
   buildFamilies,
   buildingKindFor,
   crewFlags,
+  crewAlerts,
   crewSummary,
   familyRing,
   finishedTurns,
@@ -145,4 +146,15 @@ test('crew buildings fly their manager\'s squad colour, a middle manager its own
   assert.equal(flags.has('boss'), false, 'a manager flies nothing on its building')
   assert.equal(flags.has('loner'), false)
   assert.equal(crewFlags(buildFamilies([t('mid'), t('leaf', 'mid')]), new Map()).size, 0, 'no colour, no flag')
+})
+
+test('hidden crew alerts roll up to the top manager, most urgent first', () => {
+  const f = buildFamilies([t('boss'), t('a', 'boss'), t('b', 'boss'), t('mid', 'boss'), t('leaf', 'mid'), t('loner'), t('calm'), t('c', 'calm')])
+  const status = { a: 'waiting', b: 'working', leaf: 'blocked', loner: 'blocked', c: 'working', boss: 'idle' }
+  const alerts = crewAlerts(f, (id) => status[id])
+  assert.equal(alerts.get('boss'), 'blocked', 'a grandchild stuck reaches past the middle manager')
+  assert.equal(alerts.has('mid'), false, 'a middle manager is crew: its badge is hidden too')
+  assert.equal(alerts.has('loner'), false, 'a bot with no family keeps its own badge')
+  assert.equal(alerts.has('calm'), false, 'crew only working: nothing to carry')
+  assert.equal(crewAlerts(null, () => 'waiting').size, 0)
 })
