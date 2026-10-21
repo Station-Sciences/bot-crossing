@@ -130,7 +130,7 @@ const actions = {
   /** Fly to the next astronaut in a given state, cycling through them on repeat presses. */
   focusStatus: (status) => {
     const key = status === 'agents' ? null : status
-    const pool = colony.astronauts.agents.filter((a) => (key ? a.status === key : true))
+    const pool = colony.astronauts.agents.filter((a) => (key ? colony.alertStatusOf(a) === key : true))
     if (!pool.length) {
       hud.hint(key ? `Nobody is ${(STATUS_LABEL[key] || key).toLowerCase()} right now` : 'No bots on the surface')
       return

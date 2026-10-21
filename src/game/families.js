@@ -198,6 +198,17 @@ export function crewAlerts(families, statusOf) {
 }
 
 /**
+ * The status the jump keys go by for a bot when crew alerts are hidden, so they agree with the
+ * badges: crew that need you count as idle, and a manager carrying an alert for its crew counts
+ * as on it — unless it needs you for something of its own. `alerts` is `crewAlerts`.
+ */
+export function alertStatus(families, alerts, id, status) {
+  if (families?.managerOf.has(id)) return NEEDS_YOU.includes(status) ? 'idle' : status
+  const carried = alerts?.get(id)
+  return carried && !NEEDS_YOU.includes(status) ? carried : status
+}
+
+/**
  * The building kind a manager's plot slot gets: a dispatch post, the control tower its crew
  * were sent out from. Everyone else — crew included — keeps whatever their id seeds, so a
  * thread that stops managing gets its own old building back rather than a new random one.

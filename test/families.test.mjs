@@ -13,6 +13,7 @@ import {
   buildFamilies,
   buildingKindFor,
   crewFlags,
+  alertStatus,
   crewAlerts,
   crewSummary,
   familyRing,
@@ -157,4 +158,15 @@ test('hidden crew alerts roll up to the top manager, most urgent first', () => {
   assert.equal(alerts.has('loner'), false, 'a bot with no family keeps its own badge')
   assert.equal(alerts.has('calm'), false, 'crew only working: nothing to carry')
   assert.equal(crewAlerts(null, () => 'waiting').size, 0)
+})
+
+test('with crew alerts hidden, the jump keys see the manager needing you, not its crew', () => {
+  const f = buildFamilies([t('boss'), t('a', 'boss'), t('loner')])
+  const alerts = new Map([['boss', 'blocked']])
+  assert.equal(alertStatus(f, alerts, 'a', 'blocked'), 'idle')
+  assert.equal(alertStatus(f, alerts, 'a', 'working'), 'working', 'busy crew are still busy')
+  assert.equal(alertStatus(f, alerts, 'boss', 'idle'), 'blocked')
+  assert.equal(alertStatus(f, alerts, 'boss', 'working'), 'blocked')
+  assert.equal(alertStatus(f, alerts, 'boss', 'waiting'), 'waiting', 'its own alert comes first')
+  assert.equal(alertStatus(f, alerts, 'loner', 'waiting'), 'waiting')
 })
