@@ -131,12 +131,15 @@ thread can only ever be doing one thing. First match wins:
 
 | Signal | What the bot does | Badge |
 | --- | --- | --- |
-| Errored | Slumps, red eyes, fault light stutters | `!` |
+| Errored in the last 3 days | Slumps, red eyes, fault light stutters | `!` |
 | Running now | Hammers away at its building, sparks fly | `⚒` |
 | PR merged | Jumps, confetti, heart eyes | `✓` |
 | Unread | **Stops and waits on you** | `?` |
 | Nothing for 3 days | Sits down and sleeps, `z` bubbles | — |
 | Anything else | Potters around its plot | — |
+
+An error ages out on the same three-day clock as everything else. Without that, a run that
+failed a month ago would hold its bot at `!` forever and keep its whole repo from folding away.
 
 Only the states that want something from you get a badge. With most of a real thread list
 sitting quiet, a symbol over every bot buries the one `?` that actually matters.
@@ -771,7 +774,7 @@ the blade's shadow lags the blade.
 ## Keeping it local
 
 The server reads your agent transcripts and can ask the OS to open things, which makes it a
-more interesting target than a localhost toy usually is. Three things hold it in:
+more interesting target than a localhost toy usually is. Four things hold it in:
 
 - **It binds `127.0.0.1`.** Nothing outside the machine can reach it, unless you deliberately
   change that — see below.
@@ -783,6 +786,11 @@ more interesting target than a localhost toy usually is. Three things hold it in
   without this any page you happened to have open could POST here — spawning sessions, opening
   Finder windows, or overwriting the colony layout — even while unable to read the response.
   Requests from anywhere but this server's own page are refused.
+- **The built page says what it may do.** The page draws text it did not write: thread titles
+  are your prompts. Every place that text reaches the page escapes it, and `npm start` and
+  `npm run serve` add a Content-Security-Policy as the backstop for the day one does not. Only
+  the bundle's own script runs, the page cannot be framed, and it fetches nothing but this
+  server. `npm run dev` does not send the policy, because Vite injects styles for hot reload.
 
 The practical cost: a bare `curl` POST is refused too, since browsers always send `Origin` on
 POST and its absence means the caller is not the page. Add `-H 'Origin: http://localhost:5274'`
@@ -828,7 +836,8 @@ What it touches on disk, in full:
 | Sends | Nothing. No network calls, no telemetry, no account |
 
 `data/colony.json` holds the names and paths of the repos you work in, so it is gitignored —
-worth knowing before you copy one into an issue.
+worth knowing before you copy one into an issue. For the same reason it is written readable by
+your account only (`0600`), not by every account on the machine.
 
 ## Layout
 
