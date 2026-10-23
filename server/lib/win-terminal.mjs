@@ -1,7 +1,7 @@
 /**
  * Windows plumbing: how you put a command in a terminal window here.
  *
- * The counterpart to `openInTerminal` in `xdg.mjs`, and deliberately a separate file for the
+ * The counterpart to `openInTerminal` in `terminal.mjs`, and deliberately a separate file for the
  * same reason that one is: it is a page of platform trivia with nothing to do with HTTP, and
  * nothing in it knows about a particular harness. An adapter hands the server an argv; the
  * server decides whether a terminal is the right place for it.

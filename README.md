@@ -267,6 +267,11 @@ names that actually collide change, because the name is also the key your saved 
 stored under and disambiguating everything would move every plot on the map. A repo that has
 moved or gone since the last scan fails at the server rather than handing `open` a dead path.
 
+A linked git worktree stands on its repository's plot whichever harness made it: the checkout's
+own `.git` file names the repository, so a Codex worktree under `~/.codex/worktrees` lands on the
+same ground as the repo instead of a second plot beside it. The Claude desktop app's scratch
+sessions each live in a folder of their own, and share one plot called **Scratch**.
+
 Name plates are hit-tested in screen space rather than raycast: they are billboarded in the
 vertex shader, so a raycast would test the quad where it was authored rather than where it
 ended up. That test deliberately ignores whether the plate is currently faded in — pointing
@@ -837,7 +842,7 @@ BOT_CROSSING_TERMINAL=kitty npm start
 
 A name on `PATH` or an absolute path, and it has to be one whose flags are known — gnome-terminal, konsole, kitty, alacritty, ghostty, wezterm, foot, xterm and their relatives — since one that is not is skipped rather than guessed at.
 On macOS only a named terminal works; point it at a real binary rather than an `.app`.
-Windows is not supported yet.
+On Windows the variable is not read: a thread opens in Windows Terminal when it is installed, and in `cmd.exe` otherwise.
 
 What it touches on disk, in full:
 

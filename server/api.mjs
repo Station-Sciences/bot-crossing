@@ -130,7 +130,6 @@ async function writeState(next) {
 }
 
 /**
-/**
  * Hand a `harness://…` deep link, or a folder, to whatever opens things on this OS. The
  * opener gets an argument list, never a shell string.
  *
