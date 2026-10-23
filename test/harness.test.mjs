@@ -18,7 +18,7 @@ import codex from '../server/harnesses/codex.mjs'
 import claudeCode, { titleFromPrompt } from '../server/harnesses/claude-code.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
 import { schemeOf } from '../server/lib/xdg.mjs'
-import { withEnv, withPlatform, fakeExecutable } from './support/env.mjs'
+import { withEnv, withNoCli, withPlatform, fakeExecutable } from './support/env.mjs'
 
 // ── the contract ──────────────────────────────────────────────────────────────
 
@@ -103,13 +103,10 @@ test('codex offers `codex resume <id>` in the thread cwd alongside its deep link
 })
 
 test('codex with no CLI installed offers the deep link alone', posixOnly, async () => {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
-  try {
-    const opened = await withEnv({ PATH: dir }, () => codex.openThread({ sessionId: SESSION_ID }))
+  await withNoCli(async () => {
+    const opened = await codex.openThread({ sessionId: SESSION_ID })
     assert.deepEqual(opened, { ok: true, url: `codex://threads/${SESSION_ID}`, command: undefined })
-  } finally {
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  })
 })
 
 // ── a Codex install, faked on disk ────────────────────────────────────────────
@@ -282,6 +279,23 @@ test('findExecutable refuses junk, and refuses a directory that sits on PATH', a
   assert.equal(await findExecutable(null), null)
   assert.equal(await findExecutable('.'), null)
   assert.equal(await findExecutable('definitely-not-a-real-binary-xyz'), null)
+})
+
+test('BOT_CROSSING_CLI_DIRS stands in for every install dir an adapter names, and empty means PATH alone', async () => {
+  const installed = await fsp.mkdtemp(path.join(os.tmpdir(), 'install-dir-'))
+  const emptyPath = await fsp.mkdtemp(path.join(os.tmpdir(), 'empty-path-'))
+  try {
+    const cli = await fakeExecutable(installed, 'some-cli')
+    await withEnv({ PATH: emptyPath, BOT_CROSSING_CLI_DIRS: undefined }, async () => {
+      assert.equal(await findExecutable('some-cli', [installed]), cli.file, 'unset: the adapter\'s own dirs')
+    })
+    await withEnv({ PATH: emptyPath, BOT_CROSSING_CLI_DIRS: '' }, async () => {
+      assert.equal(await findExecutable('some-cli', [installed]), null, 'empty: a real install is not found')
+    })
+  } finally {
+    await fsp.rm(installed, { recursive: true, force: true })
+    await fsp.rm(emptyPath, { recursive: true, force: true })
+  }
 })
 
 // ── Cursor, faked on disk ─────────────────────────────────────────────────────
