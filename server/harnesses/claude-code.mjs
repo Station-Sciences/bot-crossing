@@ -240,6 +240,9 @@ function splitWorktree(cwd) {
  */
 const SCRATCH = /^(.*[\\/]scratch-workspaces)[\\/](?:[^\\/]+[\\/]){2}(scratch-[^\\/]+)[\\/]?$/
 
+/** The folder that plot stands on: the app's own, so nothing is started in it. */
+const SCRATCH_ROOT = /[\\/]scratch-workspaces[\\/]?$/
+
 function projectOf(cwd, originCwd) {
   const scratch = SCRATCH.exec(originCwd || cwd || '')
   if (scratch) return { projectPath: scratch[1], project: 'Scratch', worktree: scratch[2] }
@@ -804,6 +807,12 @@ async function openThread(ref) {
  * written: the desktop app just opens an empty session with that folder as its workspace.
  */
 async function newSession(dir) {
+  // The Scratch plot's folder holds the desktop app's own scratch sessions. A session opened on
+  // it, or the CLI run in it, would work inside the app's data rather than in a repo of yours.
+  if (SCRATCH_ROOT.test(dir)) {
+    return { ok: false, error: 'Scratch threads have no folder of their own; start one in the Claude app' }
+  }
+
   const url = `claude://code/new?${new URLSearchParams({ folder: dir })}`
   const bin = await cliBinary()
   const command = bin ? { argv: [bin], cwd: dir } : undefined

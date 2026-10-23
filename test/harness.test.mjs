@@ -782,6 +782,20 @@ test("the desktop app's scratch sessions share one plot instead of one each", as
   await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
+test("a new thread is not started in the scratch plot's folder, which is the desktop app's own", async () => {
+  // The Scratch plot stands on `<userData>/scratch-workspaces`, so New conversation there would
+  // open a session, or run the CLI, inside the Claude app's data. Every other folder still opens.
+  const scratch = path.join('/x', 'Claude', 'scratch-workspaces', 'acct', 'org', 'scratch-2026-09-22-a1b2c3')
+  const fx = await fakeClaude({ transcript: [{ ...typed('a quick question'), cwd: scratch }] })
+  const h = await claudeWith(fx)
+  const [t] = await h.scanThreads()
+  const refused = await h.newSession(t.projectPath)
+  assert.equal(refused.ok, false)
+  assert.match(refused.error, /Claude app/)
+  assert.equal((await h.newSession('/tmp/demo')).ok, true)
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
 // ── Cursor's encoded folder names ─────────────────────────────────────────────
 
 /**
