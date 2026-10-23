@@ -244,14 +244,15 @@ thread it already has. `claude://resume` is the fallback for threads that only e
 transcript: it *imports* the transcript, which creates a second untitled session and rewrites
 the `.jsonl`, so it is only ever used when there is nothing to navigate to.
 
-Archiving carries a deliberate one-writer discipline: the browser owns
-`data/colony.json` and PUTs it whole, `/api/archive` only touches Claude Code's records. If
-both wrote it, a save from a page holding older state would silently drop every archive made
-since that page loaded. Claude Code also rewrites its session records from memory and can
-stomp the flag, so the colony re-asserts it on every scan — an archive that gets stomped comes
-back within one poll.
+Archiving is the colony's own bookkeeping, with one writer: the browser owns
+`data/colony.json` and PUTs it whole, and the server only reads the archive list to mark the
+threads it names. A save from a tab holding older state is refused with what is on disk, and
+the tab merges its own edits on top, so it cannot drop an archive another tab made since it
+loaded.
 
-Nothing is ever written to your Claude Code data except that one `isArchived` field. The
+Nothing is ever written to your Claude Code data. Archiving here used to set `isArchived` on
+the desktop app's own record, but the app serves from the copy it loaded at launch, so the
+thread stayed in its list until a restart; [DECISIONS.md](DECISIONS.md) has the rest. The
 folder buttons only ever hand a path to `open`.
 
 The deep links above are the **Claude Code adapter's** business, not the colony's — another
@@ -832,7 +833,7 @@ What it touches on disk, in full:
 | | |
 | --- | --- |
 | Reads | Your harness's own session records and transcripts |
-| Writes | `data/colony.json`, and **one** `isArchived` field per archived thread |
+| Writes | `data/colony.json`, and nothing else |
 | Sends | Nothing. No network calls, no telemetry, no account |
 
 `data/colony.json` holds the names and paths of the repos you work in, so it is gitignored —
@@ -848,8 +849,8 @@ server/
     claude-code.mjs
   lib/         filesystem helpers the adapters share
   scan.mjs     harness-agnostic: asks every detected harness, merges, sorts
-  api.mjs      /api/threads, /api/harnesses, /api/state, /api/open, /api/archive,
-               /api/new-session, /api/reveal
+  api.mjs      /api/threads, /api/harnesses, /api/state, /api/open, /api/new-session,
+               /api/reveal
   serve.mjs    static server for the built app
 src/
   core/        settings, renderer + post chain + colour grade, the Google Earth camera,
