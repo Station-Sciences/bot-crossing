@@ -579,6 +579,8 @@ export class Astronauts {
       anchor: entry.anchor ? entry.anchor.clone() : null,
       workSpot: new THREE.Vector3(),
       workAt: 0,
+      // Whether a point is on this thread's zone, kept current by `_updateAgent`.
+      onPlot: entry.onPlot || null,
       pos: start,
       vel: new THREE.Vector3(),
       // Progress down the ramp, 0..1; 1 (or no ramp at all) means on the ground.
@@ -682,6 +684,7 @@ export class Astronauts {
       }
     }
     if (entry.anchor) (agent.anchor ||= new THREE.Vector3()).copy(entry.anchor)
+    agent.onPlot = entry.onPlot || null
     if (entry.status !== agent.status) {
       agent.status = entry.status
       this._applyStatus(agent, entry.status)
@@ -905,9 +908,12 @@ export class Astronauts {
           // of the doorway would claim the doorway, and the queue behind it inherits a
           // permanent wall. Out there it keeps its real site and tries again, which the crowd
           // thinning out is usually enough to fix.
+          // The same goes for ground that belongs to another zone: adopting it would leave the
+          // astronaut standing in somebody else's yard for as long as the thread lives.
           const inDoorway = this._nearDoor(agent.pos)
-          if (stuck && dist >= ARRIVE_RADIUS && !inDoorway) agent.site.copy(agent.pos)
-          if (stuck && inDoorway) {
+          const offPlot = !this._onPlot(agent, agent.pos.x, agent.pos.z)
+          if (stuck && dist >= ARRIVE_RADIUS && !inDoorway && !offPlot) agent.site.copy(agent.pos)
+          if (stuck && (inDoorway || (offPlot && dist >= ARRIVE_RADIUS))) {
             agent.stateAge = 0
             agent.pathVersion = -1
             break
@@ -1134,6 +1140,14 @@ export class Astronauts {
     return out
   }
 
+  /**
+   * Whether a point is on the agent's own plot. Only asked when a new target is picked or on
+   * rare give-up and jitter events, never per frame. Agents without a plot say yes.
+   */
+  _onPlot(agent, x, z) {
+    return !agent.onPlot || agent.onPlot(x, z)
+  }
+
   /** A slow wander inside the plot, re-targeted every few seconds. */
   _drift(agent, dt, elapsed) {
     if (elapsed > agent.wanderAt) {
@@ -1149,6 +1163,7 @@ export class Astronauts {
         const wx = agent.site.x + Math.cos(a) * r
         const wz = agent.site.z + Math.sin(a) * r
         if (this.nav?.isBlocked(wx, wz) || this.nav?.insideKeep(wx, wz)) continue
+        if (!this._onPlot(agent, wx, wz)) continue
         if (this.nav && !this.nav.clearWalk(agent.pos.x, agent.pos.z, wx, wz)) continue
         if (this._crowded(wx, wz, agent)) continue
         agent.wander.set(wx, 0, wz)
@@ -1240,6 +1255,7 @@ export class Astronauts {
         const wx = agent.anchor.x + Math.cos(a) * radius
         const wz = agent.anchor.z + Math.sin(a) * radius
         if (this.nav?.isBlocked(wx, wz) || this.nav?.insideKeep(wx, wz)) continue
+        if (!this._onPlot(agent, wx, wz)) continue
         if (this.nav && !this.nav.clearWalk(agent.pos.x, agent.pos.z, wx, wz)) continue
         if (this._crowded(wx, wz, agent)) continue
         agent.workSpot.set(wx, 0, wz)
@@ -1323,6 +1339,8 @@ export class Astronauts {
     let spot = null
     const x = agent.pos.x
     const z = agent.pos.z
+    // An agent already off its plot has nothing to stay on, so any clear ground will do.
+    const mustStay = this._onPlot(agent, x, z)
     for (let r = 0; r <= 5 && !spot; r += 0.4) {
       const n = r === 0 ? 1 : Math.max(8, Math.round(r * 12))
       for (let i = 0; i < n; i++) {
@@ -1330,6 +1348,7 @@ export class Astronauts {
         const cx = x + Math.cos(a) * r
         const cz = z + Math.sin(a) * r
         if (nav.isBlocked(cx, cz) || nav.insideKeep(cx, cz) || this._crowded(cx, cz, agent)) continue
+        if (mustStay && !this._onPlot(agent, cx, cz)) continue
         spot = { x: cx, z: cz }
         break
       }

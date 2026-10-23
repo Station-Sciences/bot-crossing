@@ -577,6 +577,12 @@ export class Colony {
           // Where the work actually is. A working astronaut circles it rather than standing
           // at one spot, so it needs the building, not just a place to stand near it.
           anchor: building.mesh.position.clone(),
+          // Whether a point is on this thread's zone. Looked up by name each call, so it
+          // follows the zone through a re-layout.
+          onPlot: (x, z) => {
+            const p = this.plots.get(this.buildings.get(thread.id)?.plot)
+            return !p || this._onPlot(p, x, z)
+          },
           // Already on the colony's books, so it does not need an entrance.
           known: knownIds.has(thread.id),
         })
@@ -991,6 +997,12 @@ export class Colony {
     }
   }
 
+  /** Whether a world point lies on one of the plot's hexes. */
+  _onPlot(plot, x, z) {
+    const cell = worldToHex(x, z)
+    return plot.cellKeys.has(`${cell.q},${cell.r}`)
+  }
+
   /** Where the astronaut stands: just outside its building, facing in. */
   _workSite(plot, entry, index) {
     const b = entry.mesh.position
@@ -1012,20 +1024,19 @@ export class Colony {
     // Outward points straight off the zone for a building on its edge, and an astronaut
     // standing in the neighbouring repo's yard reads as belonging to that repo. The inside
     // of its own plot is always the better answer when the outside is somebody else's.
-    const onPlot = (v) => {
-      const cell = worldToHex(v.x, v.z)
-      return plot.cellKeys.has(`${cell.q},${cell.r}`)
-    }
+    const onPlot = (v) => this._onPlot(plot, v.x, v.z)
     if (!onPlot(site)) {
       const inward = new THREE.Vector3(b.x - Math.cos(a) * stand, 0, b.z - Math.sin(a) * stand)
       if (onPlot(inward)) site = inward
     }
     // Pick against the complete, current map, including scaffolds about to rise. A grid
     // cell alone is insufficient: it can still be inside a building's keep-out radius.
-    const free = this.nav?.nearestClear(site.x, site.z, PLOT_CELL, (x, z) => {
-      const cell = worldToHex(x, z)
-      return plot.cellKeys.has(`${cell.q},${cell.r}`)
-    }) || this.nav?.nearestClear(site.x, site.z, PLOT_CELL * 2)
+    // Ground on the plot, searched wider before giving in. Off the plot is the last resort.
+    const inPlot = (x, z) => this._onPlot(plot, x, z)
+    const free =
+      this.nav?.nearestClear(site.x, site.z, PLOT_CELL, inPlot) ||
+      this.nav?.nearestClear(site.x, site.z, PLOT_CELL * 2, inPlot) ||
+      this.nav?.nearestClear(site.x, site.z, PLOT_CELL * 2)
     if (free) site.set(free.x, 0, free.z)
     return site
   }
