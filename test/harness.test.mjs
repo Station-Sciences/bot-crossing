@@ -709,6 +709,42 @@ test('a record the app still holds outranks a leftover deletion marker', async (
   await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
+test('a desktop record is re-read only when it changes, and a mid-write keeps the last good copy', async () => {
+  const record = {
+    sessionId: 'local_2df3987c-02d3-405e-b8f5-da30e3835213',
+    cliSessionId: SESSION_ID,
+    cwd: '/tmp/demo',
+    title: 'First title',
+    createdAt: 1,
+    lastActivityAt: 2,
+    lastFocusedAt: 3,
+    // What makes real records a megabyte each. Must not survive into the thread.
+    remoteMcpServersConfig: { padding: 'x'.repeat(4096) },
+  }
+  const fx = await fakeClaude({ transcript: [typed('hello')], records: [record] })
+  const file = path.join(fx.org, `${record.sessionId}.json`)
+  const h = await claudeWith(fx)
+
+  let [t] = await h.scanThreads()
+  assert.equal(t.title, 'First title')
+  assert.equal(t.remoteMcpServersConfig, undefined, 'only the fields the scan reads are kept')
+
+  // A real change to the record, with an mtime the cache cannot mistake for the old one.
+  await fsp.writeFile(file, JSON.stringify({ ...record, title: 'Second title' }))
+  await fsp.utimes(file, new Date(), new Date(Date.now() + 5000))
+  ;[t] = await h.scanThreads()
+  assert.equal(t.title, 'Second title', 'a changed mtime invalidates the cache')
+
+  // The app mid-save: the file is momentarily not JSON. Before the cache this thread dropped off
+  // the map for a poll; now the previous read stands in until the write completes.
+  await fsp.writeFile(file, '{"sessionId": "local_2df3987c-02d3-405e-b8f5-da30e3835213", "title": "Th')
+  await fsp.utimes(file, new Date(), new Date(Date.now() + 10000))
+  ;[t] = await h.scanThreads()
+  assert.equal(t.title, 'Second title', 'a half-written record is not a missing thread')
+
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
 /**
  * Kilo Code's store keeps whatever path the machine gave it, so the fixture uses one that is
  * absolute *here* rather than a Windows path pinned in place. The adapter refuses a cwd that is
