@@ -38,7 +38,7 @@ import { liveThreadsForColony } from './hidden-projects.js'
  * flags — errored, then running, then merged, then unread — so an astronaut can only ever be
  * telling you one thing, and the loudest true thing wins.
  *
- *   errored        → blocked, red eyes, a `!` over its head
+ *   errored        → blocked, red eyes, a `!` over its head; after three quiet days, asleep
  *   running        → hammering away at its building, sparks flying
  *   PR merged      → celebrating, confetti, a `✓`
  *   unread         → stopped and waiting on you, a bobbing `?` — click it to open the thread
@@ -77,9 +77,23 @@ export const STATUS_LABEL = {
   leaving: 'Heading home',
 }
 
+/**
+ * Whether an error still earns the `!`. `hasError` describes the last turn, so it is sticky by
+ * nature: a thread that failed a month ago still says so, and the adapter is right to report it.
+ * But as the first rule below it outranked the three-day sleep every other thread gets, so one
+ * abandoned failure held its astronaut slumped and badged for as long as the thread existed, and
+ * kept its whole repo from folding away with the other quiet ones. Opening it did not help:
+ * viewing clears `unread`, not `hasError`.
+ *
+ * So an error goes quiet on the same clock as everything else. The flag is untouched, only the
+ * alarm decays, and a thread that failed on Friday afternoon is still red on Monday morning.
+ */
+const isAlarming = (thread, now = Date.now()) =>
+  Boolean(thread.hasError) && now - thread.lastActivityAt <= STALE_MS
+
 /** Thread → behaviour. First match wins, exactly like the board's auto-sort. */
 export function statusFor(thread, now = Date.now()) {
-  if (thread.hasError) return 'blocked'
+  if (isAlarming(thread, now)) return 'blocked'
   if (thread.running) return 'working'
   if (thread.prState === 'MERGED') return 'celebrating'
   if (thread.unread) return 'waiting'
@@ -1089,7 +1103,7 @@ export class Colony {
   /** A site somebody is standing at: running, or stopped waiting on you. */
   _isActive(id) {
     const thread = this.threads.get(id)
-    return Boolean(thread && (thread.running || thread.unread || thread.hasError))
+    return Boolean(thread && (thread.running || thread.unread || isAlarming(thread)))
   }
 
   _badgeFor(agent) {

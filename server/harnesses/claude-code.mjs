@@ -145,6 +145,22 @@ const SUBAGENT_HEAD_BYTES = 64 * 1024
 const ID = (raw) => `claude-code:${raw}`
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * A title from a prompt, for a thread the desktop app never named: its first line that says
+ * anything, and no more of it than every other harness keeps. The fallback used to hand back
+ * the whole prompt — a headless orchestrator run opens with three kilobytes of instructions, and six
+ * of those were a third of every poll's payload, laid out as a title.
+ */
+const TITLE_MAX = 120
+export function titleFromPrompt(prompt) {
+  const line = String(prompt || '')
+    .split('\n')
+    .map((text) => text.replace(/\s+/g, ' ').trim())
+    .find(Boolean)
+  return line ? line.slice(0, TITLE_MAX) : 'Untitled thread'
+}
+
 const DESKTOP_ID = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // The type check matters wherever an id came back from the page: `RegExp.test` stringifies, so a
 // one-element array holding a valid id would pass the pattern and then travel on as an array.
@@ -162,12 +178,12 @@ function firstText(content) {
   return ''
 }
 
-/** Strip <system-reminder>/<command-*> noise the CLI wraps around prompts. */
-function cleanPrompt(s) {
-  return String(s)
-    .replace(/<([a-z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
+/** Strip <system-reminder>/<command-*> noise the CLI wraps around prompts, keeping line breaks. */
+const stripNoise = (text) => String(text).replace(/<([a-z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, ' ')
+
+/** A prompt as one line of text: the noise gone and every run of whitespace a single space. */
+function cleanPrompt(text) {
+  return stripNoise(text).replace(/\s+/g, ' ').trim()
 }
 
 /**
@@ -175,7 +191,10 @@ function cleanPrompt(s) {
  * Mirrors the CLI's own title precedence: custom > ai > summary > first prompt.
  */
 function readTranscriptMeta(records) {
-  const meta = { customTitle: '', aiTitle: '', summary: '', firstPrompt: '', cwd: '', gitBranch: '', startedAt: 0 }
+  const meta = {
+    customTitle: '', aiTitle: '', summary: '', firstPrompt: '', promptTitle: '',
+    cwd: '', gitBranch: '', startedAt: 0,
+  }
   for (const r of records) {
     if (!meta.customTitle && r.customTitle) meta.customTitle = r.customTitle
     if (!meta.aiTitle && r.aiTitle) meta.aiTitle = r.aiTitle
@@ -187,8 +206,15 @@ function readTranscriptMeta(records) {
       if (!Number.isNaN(t)) meta.startedAt = t
     }
     if (!meta.firstPrompt && r.type === 'user' && r.message) {
-      const text = cleanPrompt(firstText(r.message.content))
-      if (text && !text.startsWith('<')) meta.firstPrompt = text
+      const raw = firstText(r.message.content)
+      const text = cleanPrompt(raw)
+
+      if (text && !text.startsWith('<')) {
+        meta.firstPrompt = text
+        // Taken here, from the raw text: `firstPrompt` has its line breaks collapsed, so a title
+        // worked out from it later could never find the first line.
+        meta.promptTitle = titleFromPrompt(stripNoise(raw))
+      }
     }
   }
   return meta
@@ -232,7 +258,16 @@ function decodeProjectDir(name) {
   return name.startsWith('-') ? '/' + name.slice(1).replace(/-/g, '/') : name
 }
 
-/** Index every CLI transcript on disk, keyed by session id. */
+/**
+ * Index every CLI transcript on disk, keyed by session id.
+ *
+ * A session id is only unique *per directory* it has ever run in — resuming it from a git
+ * worktree, or any other second checkout, writes a second `<id>.jsonl` under a different
+ * `projectDir` rather than moving the first. Without a tiebreaker the later `listDirs` entry
+ * would win regardless of which copy is actually live, so a worktree's now-stale copy could
+ * overwrite the real one just by sorting after it. The newer file is always the live one: an
+ * abandoned copy stops being written to the moment the session moves on.
+ */
 async function scanTranscripts() {
   const byId = new Map()
   for (const projectDir of await listDirs(CLI_PROJECTS)) {
@@ -244,6 +279,8 @@ async function scanTranscripts() {
       } catch {
         continue
       }
+      const existing = byId.get(id)
+      if (existing && existing.mtime >= stat.mtimeMs) continue
       byId.set(id, { id, file, projectDir, size: stat.size, mtime: stat.mtimeMs })
     }
   }
@@ -404,10 +441,46 @@ async function scanSubagents(livePending) {
 const DELETED_MARKER = /^deleted_(.+)$/
 const isRecord = (name) => name.startsWith('local_') && name.endsWith('.json')
 
+/**
+ * The fields of a desktop record the scan actually reads. A record is not small: the app
+ * writes its whole MCP connector configuration into each one (`remoteMcpServersConfig`, close
+ * to a megabyte on a machine with a dozen connectors), and on this machine the store came to
+ * 148 MB over 204 records — read and parsed in full on every 15-second poll, for perhaps
+ * 60 KB of fields anyone looks at. Half of every scan, and most of the process's memory.
+ * Keeping only these means the cache below holds kilobytes, not the store.
+ */
+function pickRecord(r) {
+  return {
+    sessionId: r.sessionId,
+    cliSessionId: r.cliSessionId,
+    cwd: r.cwd,
+    originCwd: r.originCwd,
+    title: r.title,
+    bridgeSessionIds: r.bridgeSessionIds,
+    model: r.model,
+    effort: r.effort,
+    createdAt: r.createdAt,
+    lastActivityAt: r.lastActivityAt,
+    lastFocusedAt: r.lastFocusedAt,
+    error: r.error,
+    isStarred: r.isStarred,
+    scheduledTaskId: r.scheduledTaskId,
+    prState: r.prState,
+    isArchived: r.isArchived,
+  }
+}
+
+/**
+ * Parsed records, keyed by file and pinned to the mtime they were read at — the same shape
+ * `metaCache` already gives transcripts. A steady-state poll is then 204 stats and no reads.
+ */
+const recordCache = new Map()
+
 /** Every thread the desktop app has a record for, and the ids of the ones it has deleted. */
 async function scanDesktopSessions() {
   const records = []
   const deleted = new Set()
+  const seen = new Set()
   const accounts = (await Promise.all(DESKTOP_STORES.map((store) => listDirs(store)))).flat()
   for (const account of accounts) {
     for (const org of await listDirs(account)) {
@@ -418,14 +491,32 @@ async function scanDesktopSessions() {
           if (isCliId(marker[1])) deleted.add(marker[1])
           continue
         }
+        seen.add(file)
+        let stat
         try {
-          records.push(JSON.parse(await fsp.readFile(file, 'utf8')))
+          stat = await fsp.stat(file)
         } catch {
-          /* a session mid-write — skip this pass */
+          continue
+        }
+        const cached = recordCache.get(file)
+        if (cached && cached.mtime === stat.mtimeMs) {
+          records.push(cached.record)
+          continue
+        }
+        try {
+          const record = pickRecord(JSON.parse(await fsp.readFile(file, 'utf8')))
+          recordCache.set(file, { mtime: stat.mtimeMs, record })
+          records.push(record)
+        } catch {
+          // A session mid-write. The previous read is still the best account of this thread —
+          // without it the thread blinks off the map for a poll every time the app saves.
+          if (cached) records.push(cached.record)
         }
       }
     }
   }
+  // A record the app has since removed must not live on in here.
+  for (const file of recordCache.keys()) if (!seen.has(file)) recordCache.delete(file)
   return { records, deleted }
 }
 
@@ -517,7 +608,7 @@ async function scanThreads() {
       desktopSessionIds: s.sessionId ? [s.sessionId] : [],
       titled: Boolean(s.title),
       bridgeSessionId: (s.bridgeSessionIds && s.bridgeSessionIds[0]) || '',
-      title: s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || meta?.firstPrompt || 'Untitled thread',
+      title: s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || meta?.promptTitle || 'Untitled thread',
       preview: meta?.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,
@@ -566,7 +657,7 @@ async function scanThreads() {
       desktopSessionIds: [],
       titled: Boolean(meta.customTitle || meta.aiTitle),
       bridgeSessionId: '',
-      title: meta.customTitle || meta.aiTitle || meta.summary || meta.firstPrompt || 'Untitled thread',
+      title: meta.customTitle || meta.aiTitle || meta.summary || meta.promptTitle || 'Untitled thread',
       preview: meta.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,

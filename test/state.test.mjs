@@ -184,3 +184,22 @@ test('viewedAt is carried through the v1 migration with the ids it keys on', asy
     assert.deepEqual(Object.keys(state.viewedAt), [`claude-code:${id}`])
   })
 })
+
+test('colony.json is written readable by its owner only — it names every repo you work in', async () => {
+  await withServer(async ({ put, dir }) => {
+    assert.equal((await put({ archived: ['t1'] })).status, 200)
+    const mode = (await fsp.stat(path.join(dir, 'colony.json'))).mode & 0o777
+    assert.equal(mode, 0o600)
+    // And stays so on the next write: a fresh temp file every time, renamed into place.
+    assert.equal((await put({ archived: ['t1', 't2'] })).status, 200)
+    assert.equal((await fsp.stat(path.join(dir, 'colony.json'))).mode & 0o777, 0o600)
+  })
+})
+
+test('every JSON answer says it is JSON and nothing else', async () => {
+  await withServer(async ({ call }) => {
+    const res = await call('/api/state')
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(res.headers.get('cache-control'), 'no-store')
+  })
+})

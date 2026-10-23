@@ -118,7 +118,9 @@ async function writeState(next) {
   await fsp.mkdir(DATA_DIR, { recursive: true })
   const tmp = `${STATE_FILE}.${process.pid}.${++tmpSeq}.tmp`
   try {
-    await fsp.writeFile(tmp, JSON.stringify(state, null, 2))
+    // colony.json names the repos you work in and where they are: the owner's business, not
+    // every account on the machine's. A fresh file per write, so the mode always applies.
+    await fsp.writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 })
     await fsp.rename(tmp, STATE_FILE)
   } catch (err) {
     await fsp.rm(tmp, { force: true }).catch(() => {})
@@ -307,6 +309,7 @@ function send(res, status, body) {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-store',
     'Content-Length': Buffer.byteLength(payload),
+    'X-Content-Type-Options': 'nosniff',
   })
   res.end(payload)
 }
@@ -321,6 +324,18 @@ for (const addrs of Object.values(os.networkInterfaces())) {
   for (const a of addrs || []) {
     if (a && a.family === 'IPv4' && !a.internal && a.address) LOCAL_HOSTS.add(a.address)
   }
+}
+
+// Under WSL2 the Windows host's own address is not one of this machine's interfaces,
+// so a phone that reaches the Windows side arrives with a Host the loop above never
+// learned. BOT_CROSSING_ALLOWED_HOSTS names those extra addresses, comma separated,
+// and they get the same Host and Origin treatment as the rest. Each is read the way a
+// request's Host is, so `My-PC`, `192.0.2.10:5274` and `[fd00::1]` match what arrives; a
+// bare IPv6 address is not a valid URL host until it is bracketed.
+for (const extra of (process.env.BOT_CROSSING_ALLOWED_HOSTS || '').split(',')) {
+  const entry = extra.trim()
+  const host = hostnameOf(entry) || hostnameOf(`[${entry}]`)
+  if (host) LOCAL_HOSTS.add(host)
 }
 
 /** Hostname out of a `Host:` or `Origin:` value, with the port and any brackets stripped. */

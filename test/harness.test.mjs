@@ -15,10 +15,10 @@ import opencode from '../server/harnesses/opencode.mjs'
 
 import { HARNESSES } from '../server/harnesses/index.mjs'
 import codex from '../server/harnesses/codex.mjs'
-import claudeCode from '../server/harnesses/claude-code.mjs'
+import claudeCode, { titleFromPrompt } from '../server/harnesses/claude-code.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
 import { schemeOf } from '../server/lib/xdg.mjs'
-import { withEnv, withPlatform, fakeExecutable } from './support/env.mjs'
+import { withEnv, withNoCli, withPlatform, fakeExecutable } from './support/env.mjs'
 
 // ── the contract ──────────────────────────────────────────────────────────────
 
@@ -103,13 +103,10 @@ test('codex offers `codex resume <id>` in the thread cwd alongside its deep link
 })
 
 test('codex with no CLI installed offers the deep link alone', posixOnly, async () => {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
-  try {
-    const opened = await withEnv({ PATH: dir }, () => codex.openThread({ sessionId: SESSION_ID }))
+  await withNoCli(async () => {
+    const opened = await codex.openThread({ sessionId: SESSION_ID })
     assert.deepEqual(opened, { ok: true, url: `codex://threads/${SESSION_ID}`, command: undefined })
-  } finally {
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  })
 })
 
 // ── a Codex install, faked on disk ────────────────────────────────────────────
@@ -286,6 +283,23 @@ test('findExecutable refuses junk, and refuses a directory that sits on PATH', a
   assert.equal(await findExecutable(null), null)
   assert.equal(await findExecutable('.'), null)
   assert.equal(await findExecutable('definitely-not-a-real-binary-xyz'), null)
+})
+
+test('BOT_CROSSING_CLI_DIRS stands in for every install dir an adapter names, and empty means PATH alone', async () => {
+  const installed = await fsp.mkdtemp(path.join(os.tmpdir(), 'install-dir-'))
+  const emptyPath = await fsp.mkdtemp(path.join(os.tmpdir(), 'empty-path-'))
+  try {
+    const cli = await fakeExecutable(installed, 'some-cli')
+    await withEnv({ PATH: emptyPath, BOT_CROSSING_CLI_DIRS: undefined }, async () => {
+      assert.equal(await findExecutable('some-cli', [installed]), cli.file, 'unset: the adapter\'s own dirs')
+    })
+    await withEnv({ PATH: emptyPath, BOT_CROSSING_CLI_DIRS: '' }, async () => {
+      assert.equal(await findExecutable('some-cli', [installed]), null, 'empty: a real install is not found')
+    })
+  } finally {
+    await fsp.rm(installed, { recursive: true, force: true })
+    await fsp.rm(emptyPath, { recursive: true, force: true })
+  }
 })
 
 // ── Cursor, faked on disk ─────────────────────────────────────────────────────
@@ -656,6 +670,37 @@ async function listing(dir) {
   return out.sort()
 }
 
+test('on a duplicate session id across two project dirs, the newer file wins', async () => {
+  // A session id is only unique per directory it has run in: resuming one from a git worktree
+  // writes a second `<id>.jsonl` under a different project dir rather than moving the first,
+  // and relocating it back out leaves the worktree's copy stale. Directory names are chosen so
+  // that a plain "last one written to the map wins" (no mtime check at all) would pick the
+  // stale one — `-tmp-worktree` sorts after `-tmp-live` in `readdir`'s own order.
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-dup-'))
+  const configDir = path.join(root, 'claude')
+  const liveProject = path.join(configDir, 'projects', '-tmp-live')
+  const staleProject = path.join(configDir, 'projects', '-tmp-worktree')
+  await fsp.mkdir(liveProject, { recursive: true })
+  await fsp.mkdir(staleProject, { recursive: true })
+  await fsp.writeFile(
+    path.join(liveProject, `${SESSION_ID}.jsonl`),
+    `${JSON.stringify(typed('the live session, still being written'))}\n`
+  )
+  await fsp.writeFile(
+    path.join(staleProject, `${SESSION_ID}.jsonl`),
+    `${JSON.stringify(typed('stale copy left behind in a worktree'))}\n`
+  )
+  const now = Date.now()
+  await fsp.utimes(path.join(staleProject, `${SESSION_ID}.jsonl`), new Date(now - 60_000), new Date(now - 60_000))
+  await fsp.utimes(path.join(liveProject, `${SESSION_ID}.jsonl`), new Date(now), new Date(now))
+
+  const h = await claudeWith({ configDir, desktop: path.join(root, 'claude-code-sessions') })
+  const threads = await h.scanThreads()
+  assert.equal(threads.length, 1, 'one session id is one thread, whichever directory won')
+  assert.equal(threads[0].preview, 'the live session, still being written')
+  await fsp.rm(root, { recursive: true, force: true })
+})
+
 test('a thread deleted in the desktop app is reported archived, not dropped', async () => {
   const fx = await fakeClaude({ transcript: [typed('tidy the ledger')] })
   const h = await claudeWith(fx)
@@ -781,6 +826,42 @@ test('on Windows a bare name finds the .cmd npm installs, never the shell script
   } finally {
     await fsp.rm(dir, { recursive: true, force: true })
   }
+})
+
+test('a desktop record is re-read only when it changes, and a mid-write keeps the last good copy', async () => {
+  const record = {
+    sessionId: 'local_2df3987c-02d3-405e-b8f5-da30e3835213',
+    cliSessionId: SESSION_ID,
+    cwd: '/tmp/demo',
+    title: 'First title',
+    createdAt: 1,
+    lastActivityAt: 2,
+    lastFocusedAt: 3,
+    // What makes real records a megabyte each. Must not survive into the thread.
+    remoteMcpServersConfig: { padding: 'x'.repeat(4096) },
+  }
+  const fx = await fakeClaude({ transcript: [typed('hello')], records: [record] })
+  const file = path.join(fx.org, `${record.sessionId}.json`)
+  const h = await claudeWith(fx)
+
+  let [t] = await h.scanThreads()
+  assert.equal(t.title, 'First title')
+  assert.equal(t.remoteMcpServersConfig, undefined, 'only the fields the scan reads are kept')
+
+  // A real change to the record, with an mtime the cache cannot mistake for the old one.
+  await fsp.writeFile(file, JSON.stringify({ ...record, title: 'Second title' }))
+  await fsp.utimes(file, new Date(), new Date(Date.now() + 5000))
+  ;[t] = await h.scanThreads()
+  assert.equal(t.title, 'Second title', 'a changed mtime invalidates the cache')
+
+  // The app mid-save: the file is momentarily not JSON. Before the cache this thread dropped off
+  // the map for a poll; now the previous read stands in until the write completes.
+  await fsp.writeFile(file, '{"sessionId": "local_2df3987c-02d3-405e-b8f5-da30e3835213", "title": "Th')
+  await fsp.utimes(file, new Date(), new Date(Date.now() + 10000))
+  ;[t] = await h.scanThreads()
+  assert.equal(t.title, 'Second title', 'a half-written record is not a missing thread')
+
+  await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
 /**
@@ -940,4 +1021,27 @@ test('kilocode refuses untrusted refs and opens the repo folder in VS Code', asy
     delete process.env.KILO_DB
     await fsp.rm(home, { recursive: true, force: true })
   }
+})
+
+// ── a title is a line ─────────────────────────────────────────────────────────
+
+test('a scanned thread with no title of its own is named by the first line of its prompt', async () => {
+  // Through the scan, not just the helper: the prompt the adapter keeps has its whitespace
+  // collapsed, so a helper that only ever saw that text could never find a line in it.
+  const prompt = 'Fix the login bug\n\nIt fails when the session sat idle for an hour'
+  const fx = await fakeClaude({ transcript: [typed(prompt)] })
+  const [thread] = await (await claudeWith(fx)).scanThreads()
+  assert.equal(thread.title, 'Fix the login bug')
+  assert.equal(thread.preview, prompt.replace(/\s+/g, ' '), 'the preview keeps the whole prompt')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test('a thread the desktop never named takes the first line of its prompt, and no more than 120 of it', () => {
+  assert.equal(titleFromPrompt('Fix the login bug\n\nIt fails when…'), 'Fix the login bug')
+  assert.equal(titleFromPrompt('\n\n  second line is the first that says anything\nthird'), 'second line is the first that says anything')
+  const long = 'The block above is live local git activity, read just now. ' + 'x'.repeat(4000)
+  assert.equal(titleFromPrompt(long).length, 120)
+  assert.equal(titleFromPrompt(''), 'Untitled thread')
+  assert.equal(titleFromPrompt(undefined), 'Untitled thread')
+  assert.equal(titleFromPrompt('   \n  '), 'Untitled thread')
 })

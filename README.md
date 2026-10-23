@@ -131,12 +131,15 @@ thread can only ever be doing one thing. First match wins:
 
 | Signal | What the bot does | Badge |
 | --- | --- | --- |
-| Errored | Slumps, red eyes, fault light stutters | `!` |
+| Errored in the last 3 days | Slumps, red eyes, fault light stutters | `!` |
 | Running now | Hammers away at its building, sparks fly | `⚒` |
 | PR merged | Jumps, confetti, heart eyes | `✓` |
 | Unread | **Stops and waits on you** | `?` |
 | Nothing for 3 days | Sits down and sleeps, `z` bubbles | — |
 | Anything else | Potters around its plot | — |
+
+An error ages out on the same three-day clock as everything else. Without that, a run that
+failed a month ago would hold its bot at `!` forever and keep its whole repo from folding away.
 
 Only the states that want something from you get a badge. With most of a real thread list
 sitting quiet, a symbol over every bot buries the one `?` that actually matters.
@@ -241,14 +244,15 @@ thread it already has. `claude://resume` is the fallback for threads that only e
 transcript: it *imports* the transcript, which creates a second untitled session and rewrites
 the `.jsonl`, so it is only ever used when there is nothing to navigate to.
 
-Archiving carries a deliberate one-writer discipline: the browser owns
-`data/colony.json` and PUTs it whole, `/api/archive` only touches Claude Code's records. If
-both wrote it, a save from a page holding older state would silently drop every archive made
-since that page loaded. Claude Code also rewrites its session records from memory and can
-stomp the flag, so the colony re-asserts it on every scan — an archive that gets stomped comes
-back within one poll.
+Archiving is the colony's own bookkeeping, with one writer: the browser owns
+`data/colony.json` and PUTs it whole, and the server only reads the archive list to mark the
+threads it names. A save from a tab holding older state is refused with what is on disk, and
+the tab merges its own edits on top, so it cannot drop an archive another tab made since it
+loaded.
 
-Nothing is ever written to your Claude Code data except that one `isArchived` field. The
+Nothing is ever written to your Claude Code data. Archiving here used to set `isArchived` on
+the desktop app's own record, but the app serves from the copy it loaded at launch, so the
+thread stayed in its list until a restart; [DECISIONS.md](DECISIONS.md) has the rest. The
 folder buttons only ever hand a path to `open`.
 
 The deep links above are the **Claude Code adapter's** business, not the colony's — another
@@ -776,7 +780,7 @@ the blade's shadow lags the blade.
 ## Keeping it local
 
 The server reads your agent transcripts and can ask the OS to open things, which makes it a
-more interesting target than a localhost toy usually is. Three things hold it in:
+more interesting target than a localhost toy usually is. Four things hold it in:
 
 - **It binds `127.0.0.1`.** Nothing outside the machine can reach it, unless you deliberately
   change that — see below.
@@ -788,6 +792,11 @@ more interesting target than a localhost toy usually is. Three things hold it in
   without this any page you happened to have open could POST here — spawning sessions, opening
   Finder windows, or overwriting the colony layout — even while unable to read the response.
   Requests from anywhere but this server's own page are refused.
+- **The built page says what it may do.** The page draws text it did not write: thread titles
+  are your prompts. Every place that text reaches the page escapes it, and `npm start` and
+  `npm run serve` add a Content-Security-Policy as the backstop for the day one does not. Only
+  the bundle's own script runs, the page cannot be framed, and it fetches nothing but this
+  server. `npm run dev` does not send the policy, because Vite injects styles for hot reload.
 
 The practical cost: a bare `curl` POST is refused too, since browsers always send `Origin` on
 POST and its absence means the caller is not the page. Add `-H 'Origin: http://localhost:5274'`
@@ -801,6 +810,17 @@ tablet on the sofa:
 ```bash
 BOT_CROSSING_HOST=0.0.0.0 npm start
 ```
+
+Serving it from WSL2 needs one more thing. The server only learns the addresses of its own
+interfaces, and inside WSL2 that is the virtual adapter. A phone reaches the Windows side, so
+its requests arrive with the Windows address in `Host`, and the check above refuses them.
+Name those addresses and they pass the same Host and Origin checks as everything else:
+
+```bash
+BOT_CROSSING_HOST=0.0.0.0 BOT_CROSSING_ALLOWED_HOSTS=192.0.2.10,my-pc.example npm start
+```
+
+Comma separated, hostnames or addresses. Nothing else about the checks changes.
 
 **Understand what that hands out before you do it.** The two checks above stop a *web page* from
 driving the server; they are not access control, and they do nothing about another device asking
@@ -829,11 +849,12 @@ What it touches on disk, in full:
 | | |
 | --- | --- |
 | Reads | Your harness's own session records and transcripts |
-| Writes | `data/colony.json`, and **one** `isArchived` field per archived thread |
+| Writes | `data/colony.json`, and nothing else |
 | Sends | Nothing. No network calls, no telemetry, no account |
 
 `data/colony.json` holds the names and paths of the repos you work in, so it is gitignored —
-worth knowing before you copy one into an issue.
+worth knowing before you copy one into an issue. For the same reason it is written readable by
+your account only (`0600`), not by every account on the machine.
 
 ## Layout
 
@@ -844,8 +865,8 @@ server/
     claude-code.mjs
   lib/         filesystem helpers the adapters share
   scan.mjs     harness-agnostic: asks every detected harness, merges, sorts
-  api.mjs      /api/threads, /api/harnesses, /api/state, /api/open, /api/archive,
-               /api/new-session, /api/reveal
+  api.mjs      /api/threads, /api/harnesses, /api/state, /api/open, /api/new-session,
+               /api/reveal
   serve.mjs    static server for the built app
 src/
   core/        settings, renderer + post chain + colour grade, the Google Earth camera,
