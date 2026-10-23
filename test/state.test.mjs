@@ -184,3 +184,25 @@ test('viewedAt is carried through the v1 migration with the ids it keys on', asy
     assert.deepEqual(Object.keys(state.viewedAt), [`claude-code:${id}`])
   })
 })
+
+// ── names ─────────────────────────────────────────────────────────────────────
+
+test('a rename in one tab and a rename in the other both survive, and a cleared one stays cleared', () => {
+  const merged = mergeState(
+    { names: { a: 'old', gone: 'x' } },
+    { names: { a: 'mine' } },
+    { names: { a: 'old', gone: 'x', b: 'theirs' } },
+  )
+  assert.deepEqual(merged.names, { a: 'mine', b: 'theirs' })
+})
+
+test('names are read back trimmed, and blank or non-string ones are dropped', async () => {
+  await withServer(async ({ call, dir }) => {
+    await fsp.writeFile(
+      path.join(dir, 'colony.json'),
+      JSON.stringify({ version: 2, names: { a: '  Scout  ', b: '   ', c: 7 }, updatedAt: 1 })
+    )
+    const state = await (await call('/api/state')).json()
+    assert.deepEqual(state.names, { a: 'Scout' })
+  })
+})

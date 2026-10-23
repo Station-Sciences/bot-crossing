@@ -580,6 +580,17 @@ body {
   -webkit-box-orient: vertical;
 }
 
+.thread-pop .title .rename {
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  padding: 2px 6px;
+  outline: none;
+}
+
 .thread-pop .meta {
   display: flex;
   align-items: center;
@@ -1326,6 +1337,75 @@ kbd {
 
 .hint-pill.on {
   opacity: 1;
+}
+
+/* ── finder ──────────────────────────────────────────────────────────────────────── */
+
+.finder {
+  position: absolute;
+  top: 78px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 32px));
+  padding: 8px;
+  z-index: 20;
+}
+
+.finder[hidden] {
+  display: none;
+}
+
+.finder-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  outline: none;
+}
+
+.finder-input:focus {
+  border-color: var(--accent);
+}
+
+.finder-list {
+  margin-top: 6px;
+}
+
+.finder-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.finder-row.on {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.finder-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finder-meta {
+  flex: none;
+  color: var(--dim);
+  font-size: 11.5px;
+}
+
+.finder-none {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
 /* ── boot ────────────────────────────────────────────────────────────────────────── */

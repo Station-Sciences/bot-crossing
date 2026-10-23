@@ -25,6 +25,7 @@ import {
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 import { withErrands } from './game/errands.js'
+import { ACTIVE, JumpRun, NEEDS_YOU, busiestOrder, crewOrder, inScope, needsYouOrder, nextInRing } from './game/jumps.js'
 
 /**
  * Boot and the outer game loop.
@@ -61,7 +62,7 @@ engine.setPlanetGrade(PLANETS[settings.get('planet')]?.grade)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
+let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, names: {} }
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -71,7 +72,8 @@ let selectedId = null
 /** Which zone's sidebar is open. A repo, not a thread — they outlive the threads on them. */
 let selectedProject = null
 let hoverId = null
-let statusCursor = 0
+/** The run of B / N / stat-pill presses in progress — see `JumpRun`. */
+const jumpRun = new JumpRun()
 let pendingSave = 0
 const hoverGround = new THREE.Vector3()
 
@@ -107,9 +109,11 @@ const actions = {
     return on
   },
 
-  cyclePlanet: () => {
+  /** Next planet, or the previous one with `back` (shift+Tab), wrapping either way. */
+  cyclePlanet: ({ back = false } = {}) => {
     const ids = Object.keys(PLANETS)
-    const next = ids[(ids.indexOf(settings.get('planet')) + 1) % ids.length]
+    const step = back ? -1 : 1
+    const next = ids[(ids.indexOf(settings.get('planet')) + step + ids.length) % ids.length]
     settings.set('planet', next)
     hud.hint(`${PLANETS[next].name} — ${PLANETS[next].blurb}`)
   },
@@ -124,17 +128,109 @@ const actions = {
     hud.hint(next.label)
   },
 
-  /** Fly to the next astronaut in a given state, cycling through them on repeat presses. */
+  /**
+   * Fly to the next astronaut in a given state — what a HUD stat pill, or the rail's Next
+   * button, jumps to. Always the whole colony: the pills count the whole colony.
+   */
   focusStatus: (status) => {
-    const key = status === 'agents' ? null : status
-    const pool = colony.astronauts.agents.filter((a) => (key ? a.status === key : true))
-    if (!pool.length) {
-      hud.hint(key ? `Nobody is ${(STATUS_LABEL[key] || key).toLowerCase()} right now` : 'No bots on the surface')
+    const keys = status === 'agents' ? null : Array.isArray(status) ? status : [status]
+    const qualifies = (c) => !keys || keys.includes(c.status)
+    const rank = keys ? needsYouOrder : (list) => crewOrder(list, projectOrder())
+    const id = jumpRun.next(
+      `status:${keys || 'all'}`,
+      selectedId,
+      () => rank(jumpCandidates().filter(qualifies)).map((c) => c.id),
+      (id) => isCandidate(id, qualifies)
+    )
+    if (!id) {
+      hud.hint(
+        keys
+          ? keys.length > 1
+            ? 'Nobody needs you right now'
+            : `Nobody is ${(STATUS_LABEL[keys[0]] || keys[0]).toLowerCase()} right now`
+          : 'No bots on the surface'
+      )
       return
     }
-    pool.sort((a, b) => a.id.localeCompare(b.id))
-    const agent = pool[statusCursor++ % pool.length]
-    select(agent.id, { fly: true })
+    select(id, { fly: true })
+  },
+
+  /**
+   * Next bot waiting on you: errors, then approvals, then replies, longest-waiting first.
+   * The open zone by default; `outside` (shift) is every other zone.
+   */
+  focusNeedsYou: ({ outside = false } = {}) => {
+    const project = selectedProject
+    const qualifies = (c) => NEEDS_YOU.includes(c.status)
+    const id = jumpRun.next(
+      `needs:${outside}`,
+      selectedId,
+      () => needsYouOrder(inScope(jumpCandidates().filter(qualifies), project, { outside })).map((c) => c.id),
+      (id) => isCandidate(id, qualifies)
+    )
+    if (id) select(id, { fly: true })
+    else hud.hint(emptyScopeHint(project, outside, qualifies, 'needs you'))
+  },
+
+  /**
+   * Cycle to the next crew member. Plain stays in the open zone; shift steps out of it, to
+   * the first crew of the next zone along, so repeated shift-presses tour the zones.
+   */
+  focusAgent: ({ outside = false } = {}) => {
+    const project = selectedProject
+    const all = crewOrder(jumpCandidates(), projectOrder())
+    const pool = new Set(inScope(all, project, { outside }).map((c) => c.id))
+    const id = nextInRing(all, (c) => pool.has(c.id) && c.id !== selectedId, selectedId)
+    if (id) select(id, { fly: true })
+    else if (!outside && pool.has(selectedId)) hud.hint(`Nobody else in ${project}`)
+    else hud.hint(emptyScopeHint(project, outside))
+  },
+
+  /** Type-to-find over the open repo's threads that are on the map; Enter flies to the pick. */
+  openSearch: () => {
+    if (!selectedProject) {
+      hud.hint('Open a repo first, then press / to find a thread in it')
+      return
+    }
+    const list = [...colony.threads.values()]
+      .filter((t) => t.project === selectedProject && isCandidate(t.id))
+      .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0))
+      .map((t) => ({ id: t.id, title: t.title, worktree: t.worktree, status: statusFor(t, Date.now()) }))
+    if (!list.length) {
+      hud.hint(`No threads on the map in ${selectedProject}`)
+      return
+    }
+    hud.openSearch(list, (id) => select(id, { fly: true }))
+  },
+
+  /** Step to the next repo, wrapping — the same order the legend lists them in. */
+  cycleProject: () => {
+    const order = colony.plotOrder
+    if (!order.length) {
+      hud.hint('No projects yet')
+      return
+    }
+    const from = order.findIndex((p) => p.id === selectedProject)
+    const plot = order[(from + 1) % order.length]
+    selectProject(plot.id, { fly: true })
+  },
+
+  /**
+   * Jump to whoever has been busiest lately, walking down the ranking on repeat presses.
+   * Only active bots — building, or stuck on you — since an idle one has nothing to see.
+   * Plain ranks the open zone; shift ranks everything outside it.
+   */
+  focusBusiest: ({ outside = false } = {}) => {
+    const project = selectedProject
+    const qualifies = (c) => ACTIVE.includes(c.status)
+    const id = jumpRun.next(
+      `busiest:${outside}`,
+      selectedId,
+      () => busiestOrder(inScope(jumpCandidates().filter(qualifies), project, { outside })).map((c) => c.id),
+      (id) => isCandidate(id, qualifies)
+    )
+    if (id) select(id, { fly: true })
+    else hud.hint(emptyScopeHint(project, outside, qualifies, 'is busy'))
   },
 
   focusProject: (name) => {
@@ -207,6 +303,31 @@ const actions = {
     queueSave()
     applyThreads(threads)
     hud.toast(`Marked ${thread.title.slice(0, 40)} as viewed`)
+  },
+
+  /** Open the selected thread's title for editing — the card does the typing, `renameThread` the keeping. */
+  startRename: () => {
+    if (selectedId) hud.startRename()
+  },
+
+  /**
+   * Give a thread a name of your own. It lives in the colony file, not the harness: the
+   * session keeps whatever title its own app gave it. An empty name, or the harness's own
+   * title typed back in, drops the override so the thread follows the harness again.
+   */
+  renameThread: (id, name) => {
+    const thread = threads.find((t) => t.id === id)
+    if (!thread) return
+    const original = thread.originalTitle ?? thread.title
+    const clean = String(name ?? '').trim().slice(0, 120)
+    const names = { ...(state.names || {}) }
+    if (!clean || clean === original) delete names[id]
+    else names[id] = clean
+    if ((state.names || {})[id] === names[id]) return
+    state.names = names
+    queueSave()
+    applyThreads(threads)
+    hud.toast(names[id] ? `Renamed to ${clean.slice(0, 40)}` : 'Back to its original name')
   },
 
   hideProject: () => {
@@ -311,6 +432,40 @@ const hud = new Hud(app, settings, actions)
 
 let lastVoiced = null
 let lastPhrase = 0
+
+/** The crew as the jump keys see them — see game/jumps.js. */
+function jumpCandidates() {
+  return colony.astronauts.agents.filter(onTheMap).map((a) => ({
+    id: a.id,
+    status: a.status,
+    project: a.thread?.project,
+    lastActivityAt: a.thread?.lastActivityAt || 0,
+  }))
+}
+
+/** Not one walking home after an archive — it is leaving the map, not on it. */
+const onTheMap = (agent) => agent.state !== 'leaving' && agent.state !== 'gone'
+
+function projectOrder() {
+  return colony.plotOrder.map((p) => p.id)
+}
+
+/** Still on the surface, and (if asked) still in the state the jump was looking for. */
+function isCandidate(id, qualifies) {
+  const agent = colony.agentFor(id)
+  if (!agent || !onTheMap(agent)) return false
+  return !qualifies || qualifies({ id, status: agent.status, project: agent.thread?.project })
+}
+
+/** Why a scoped jump found nobody — and, when the other side has someone, which key reaches them. */
+function emptyScopeHint(project, outside, qualifies = () => true, what = 'crew') {
+  const nobody = what === 'crew' ? 'No bots' : 'Nobody'
+  const tail = what === 'crew' ? '' : ` ${what}`
+  if (!project) return `${nobody}${tail} anywhere right now`
+  const others = inScope(jumpCandidates().filter(qualifies), project, { outside: !outside }).length
+  const tip = others ? ` — ${others} ${outside ? 'in it, drop' : 'elsewhere, hold'} shift` : ''
+  return `${nobody} ${outside ? 'outside' : 'in'} ${project}${tail}${tip}`
+}
 
 function select(id, { fly = false } = {}) {
   selectedId = id
@@ -812,7 +967,7 @@ window.addEventListener('keydown', (e) => {
       break
     case 'n':
     case 'N':
-      actions.focusStatus('waiting')
+      actions.focusNeedsYou({ outside: e.shiftKey })
       break
     case 'p':
     case 'P':
@@ -831,9 +986,28 @@ window.addEventListener('keydown', (e) => {
       settings.set('sound', !settings.get('sound'))
       hud.hint(settings.get('sound') ? 'Sound on' : 'Muted')
       break
+    // N, J and B share one rule: plain stays inside the open zone, shift goes outside it.
+    case 'j':
+    case 'J':
+      actions.focusAgent({ outside: e.shiftKey })
+      break
+    case '/':
+    case 'f':
+    case 'F':
+      e.preventDefault()
+      actions.openSearch()
+      break
+    case 'k':
+    case 'K':
+      actions.cycleProject()
+      break
+    case 'b':
+    case 'B':
+      actions.focusBusiest({ outside: e.shiftKey })
+      break
     case 'Tab':
       e.preventDefault()
-      actions.cyclePlanet()
+      actions.cyclePlanet({ back: e.shiftKey })
       break
     case '0':
       actions.resetView()
@@ -849,6 +1023,14 @@ window.addEventListener('keydown', (e) => {
     case 'v':
     case 'V':
       if (selectedId) actions.markViewed()
+      break
+    case 'r':
+    case 'R':
+      // Held back so the keystroke that opens the field does not also type an "r" into it.
+      if (selectedId) {
+        e.preventDefault()
+        actions.startRename()
+      }
       break
     case 'c':
     case 'C':
@@ -884,6 +1066,7 @@ window.addEventListener('keydown', (e) => {
       break
     // One step at a time, outward: the drag in hand, the thread, then the zone.
     case 'Escape':
+      if (hud.closeSearch()) break
       if (drag.lifted || drag.timer) {
         cancelHold()
         if (drag.lifted) {
@@ -913,10 +1096,21 @@ function applyThreads(list) {
 
   // A thread you have said you looked at stops counting as unread until it moves on again.
   // Done here rather than in `statusFor` so the card, the badge and the astronaut all agree.
+  //
+  // Names you gave threads go on here too, for the same reason. `originalTitle` keeps the
+  // harness's own, since this also runs on the already-renamed list after a local change.
   const viewed = state.viewedAt || {}
+  const names = state.names || {}
   threads = list.map((t) => {
     const at = viewed[t.id]
-    return at && t.lastActivityAt <= at ? { ...t, unread: false } : t
+    if (at && t.lastActivityAt <= at) t = { ...t, unread: false }
+    const original = t.originalTitle ?? t.title
+    if (names[t.id]) return { ...t, title: names[t.id], originalTitle: original }
+    if (t.originalTitle !== undefined) {
+      const { originalTitle, ...rest } = t
+      return { ...rest, title: original }
+    }
+    return t
   })
   list = threads
   const archivedSet = new Set(state.archived)
