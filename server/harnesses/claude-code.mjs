@@ -141,6 +141,22 @@ const SUBAGENT_HEAD_BYTES = 64 * 1024
 const ID = (raw) => `claude-code:${raw}`
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * A title from a prompt, for a thread the desktop app never named: its first line that says
+ * anything, and no more of it than every other harness keeps. The fallback used to hand back
+ * the whole prompt — a headless orchestrator run opens with three kilobytes of instructions, and six
+ * of those were a third of every poll's payload, laid out as a title.
+ */
+const TITLE_MAX = 120
+export function titleFromPrompt(prompt) {
+  const line = String(prompt || '')
+    .split('\n')
+    .map((text) => text.replace(/\s+/g, ' ').trim())
+    .find(Boolean)
+  return line ? line.slice(0, TITLE_MAX) : 'Untitled thread'
+}
+
 const DESKTOP_ID = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // The type check matters wherever an id came back from the page: `RegExp.test` stringifies, so a
 // one-element array holding a valid id would pass the pattern and then travel on as an array.
@@ -158,12 +174,12 @@ function firstText(content) {
   return ''
 }
 
-/** Strip <system-reminder>/<command-*> noise the CLI wraps around prompts. */
-function cleanPrompt(s) {
-  return String(s)
-    .replace(/<([a-z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
+/** Strip <system-reminder>/<command-*> noise the CLI wraps around prompts, keeping line breaks. */
+const stripNoise = (text) => String(text).replace(/<([a-z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, ' ')
+
+/** A prompt as one line of text: the noise gone and every run of whitespace a single space. */
+function cleanPrompt(text) {
+  return stripNoise(text).replace(/\s+/g, ' ').trim()
 }
 
 /**
@@ -171,7 +187,10 @@ function cleanPrompt(s) {
  * Mirrors the CLI's own title precedence: custom > ai > summary > first prompt.
  */
 function readTranscriptMeta(records) {
-  const meta = { customTitle: '', aiTitle: '', summary: '', firstPrompt: '', cwd: '', gitBranch: '', startedAt: 0 }
+  const meta = {
+    customTitle: '', aiTitle: '', summary: '', firstPrompt: '', promptTitle: '',
+    cwd: '', gitBranch: '', startedAt: 0,
+  }
   for (const r of records) {
     if (!meta.customTitle && r.customTitle) meta.customTitle = r.customTitle
     if (!meta.aiTitle && r.aiTitle) meta.aiTitle = r.aiTitle
@@ -183,8 +202,15 @@ function readTranscriptMeta(records) {
       if (!Number.isNaN(t)) meta.startedAt = t
     }
     if (!meta.firstPrompt && r.type === 'user' && r.message) {
-      const text = cleanPrompt(firstText(r.message.content))
-      if (text && !text.startsWith('<')) meta.firstPrompt = text
+      const raw = firstText(r.message.content)
+      const text = cleanPrompt(raw)
+
+      if (text && !text.startsWith('<')) {
+        meta.firstPrompt = text
+        // Taken here, from the raw text: `firstPrompt` has its line breaks collapsed, so a title
+        // worked out from it later could never find the first line.
+        meta.promptTitle = titleFromPrompt(stripNoise(raw))
+      }
     }
   }
   return meta
@@ -566,7 +592,7 @@ async function scanThreads() {
       desktopSessionIds: s.sessionId ? [s.sessionId] : [],
       titled: Boolean(s.title),
       bridgeSessionId: (s.bridgeSessionIds && s.bridgeSessionIds[0]) || '',
-      title: s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || meta?.firstPrompt || 'Untitled thread',
+      title: s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || meta?.promptTitle || 'Untitled thread',
       preview: meta?.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,
@@ -615,7 +641,7 @@ async function scanThreads() {
       desktopSessionIds: [],
       titled: Boolean(meta.customTitle || meta.aiTitle),
       bridgeSessionId: '',
-      title: meta.customTitle || meta.aiTitle || meta.summary || meta.firstPrompt || 'Untitled thread',
+      title: meta.customTitle || meta.aiTitle || meta.summary || meta.promptTitle || 'Untitled thread',
       preview: meta.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,
