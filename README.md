@@ -806,6 +806,17 @@ tablet on the sofa:
 BOT_CROSSING_HOST=0.0.0.0 npm start
 ```
 
+Serving it from WSL2 needs one more thing. The server only learns the addresses of its own
+interfaces, and inside WSL2 that is the virtual adapter. A phone reaches the Windows side, so
+its requests arrive with the Windows address in `Host`, and the check above refuses them.
+Name those addresses and they pass the same Host and Origin checks as everything else:
+
+```bash
+BOT_CROSSING_HOST=0.0.0.0 BOT_CROSSING_ALLOWED_HOSTS=192.0.2.10,my-pc.example npm start
+```
+
+Comma separated, hostnames or addresses. Nothing else about the checks changes.
+
 **Understand what that hands out before you do it.** The two checks above stop a *web page* from
 driving the server; they are not access control, and they do nothing about another device asking
 directly. Anyone who can reach the port gets every thread title, every opening prompt, every
