@@ -25,6 +25,7 @@ import {
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 import { withErrands } from './game/errands.js'
+import { archivedInProject, restorableArchives, unarchive, withLocalArchive } from './game/archive.js'
 
 /**
  * Boot and the outer game loop.
@@ -72,6 +73,8 @@ let selectedId = null
 let selectedProject = null
 let hoverId = null
 let statusCursor = 0
+/** Threads just un-archived, so the next pass walks them out of the ship. */
+const restoring = new Set()
 let pendingSave = 0
 const hoverGround = new THREE.Vector3()
 
@@ -281,9 +284,40 @@ const actions = {
     hud.toast(
       folded.length
         ? `Archived — ${folded.join(', ')} ${folded.length === 1 ? 'is' : 'are'} all quiet now, folded off the map`
-        : 'Archived — heading home'
+        : 'Archived — heading home',
+      '',
+      { label: 'Undo', run: () => actions.unarchiveThread(thread.id) }
     )
     colony.ship.ping()
+  },
+
+  /**
+   * Put an archived thread back on the map — from the archive toast's Undo, or the zone's
+   * archived list. It walks back out of the ship, the reverse of how it left.
+   */
+  unarchiveThread: (id) => {
+    const thread = threads.find((t) => t.id === id)
+    if (!thread) return
+    // In place, like `archiveThread`: a save in flight hands back this same object, and a new
+    // one assigned here would be overwritten by it when it lands.
+    Object.assign(state, unarchive(state, thread))
+    restoring.add(id)
+    queueSave()
+    applyThreads(threads)
+    // Back on the books is not always back on the map: a repo you hid stays hidden, and an old
+    // thread's repo can be quiet enough to fold away. Say where it went rather than leave the
+    // toast promising a bot that never walks out.
+    const repo = thread.project
+    const where = (state.hiddenProjects || []).includes(repo)
+      ? `. ${repo} is hidden, so it is with the hidden repos`
+      : new Set(colony.dormantProjects || []).has(repo)
+        ? `. ${repo} is quiet, so it is folded off the map with the quiet repos`
+        : ''
+    const title = thread.title.length > 40 ? `${thread.title.slice(0, 39)}…` : thread.title
+    hud.toast(`Restored — ${title}${where}`)
+    // An archived thread arrives as a stub (see server/lib/page-threads.mjs). It can walk out
+    // on that, but its card fills in from the next scan, so fetch one once the save has landed.
+    setTimeout(poll, 1500)
   },
 
   uiVisibility: (visible) => colony.setUiVisible(visible),
@@ -411,11 +445,15 @@ function syncProject() {
   // Folded-away repos are listed alongside the ones you hid by hand. Same principle: nothing
   // leaves the map without somewhere on screen saying where it went.
   const folded = hiddenCatalog([...(colony.dormantProjects || [])], threads)
+  // Archives in repos that left the map because nothing else was left in them. Hidden and
+  // dormant repos are off the map for their own reasons, and have their own way back.
+  const elsewhere = new Set([...hidden, ...folded].map((p) => p.name))
+  const offMap = restorableArchives(threads, state, (p) => !colony.plots.has(p) && !elsewhere.has(p))
   const plot = selectedProject ? colony.plots.get(selectedProject) : null
   if (!plot) {
     selectedProject = null
     hud.setProject(null)
-    hud.setLegend(legendProjects, null, hidden, folded)
+    hud.setLegend(legendProjects, null, hidden, folded, offMap)
     return
   }
   const now = Date.now()
@@ -440,11 +478,12 @@ function syncProject() {
     accent: plot.accent,
     path: pathForProject(plot.name),
     threads: list,
+    archived: archivedInProject(threads, state, plot.name),
     selectedId,
   })
   // The legend is the same selection seen from the bottom of the screen: keep it in step
   // here rather than only on the next poll.
-  hud.setLegend(legendProjects, selectedProject, hidden, folded)
+  hud.setLegend(legendProjects, selectedProject, hidden, folded, offMap)
 }
 
 // ── pointer ───────────────────────────────────────────────────────────────────────────
@@ -914,12 +953,13 @@ function applyThreads(list) {
   // A thread you have said you looked at stops counting as unread until it moves on again.
   // Done here rather than in `statusFor` so the card, the badge and the astronaut all agree.
   const viewed = state.viewedAt || {}
+  const archivedSet = new Set(state.archived)
   threads = list.map((t) => {
+    t = withLocalArchive(t, archivedSet)
     const at = viewed[t.id]
     return at && t.lastActivityAt <= at ? { ...t, unread: false } : t
   })
   list = threads
-  const archivedSet = new Set(state.archived)
   const hiddenSet = new Set(state.hiddenProjects || [])
 
   // Which threads the colony has met before. Walking out of the ship is meant to *mean*
@@ -934,6 +974,9 @@ function applyThreads(list) {
     firstSeen = true
   }
   if (firstSeen) queueSave()
+  // Restored threads walk back out of the ship rather than appearing where they stood.
+  for (const id of restoring) known.delete(id)
+  restoring.clear()
 
   const stats = colony.setThreads(list, archivedSet, hiddenSet, known)
   hud.setStats(stats)

@@ -57,6 +57,9 @@ const STAT_DEFS = [
   { key: 'agents', label: 'bots', cls: 'idle' },
 ]
 
+/** How many archived threads a zone lists before "Show all". */
+const ARCHIVE_PEEK = 8
+
 export class Hud {
   constructor(root, settings, actions) {
     this.settings = settings
@@ -505,12 +508,14 @@ export class Hud {
    * it is a list now because the sidebar is where all the chrome lives, and because a list
    * can carry a count and an alarm without running out of room at eleven repos.
    */
-  setLegend(projects, activeName = null, hidden = [], folded = []) {
+  setLegend(projects, activeName = null, hidden = [], folded = [], offMap = []) {
+    this._legendArgs = [projects, activeName, hidden, folded, offMap]
     const signature =
       projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
       `~${activeName}~` +
       hidden.map((p) => `${p.name}:${p.count}`).join('|') +
-      `~${folded.length}`
+      `~${folded.length}~` +
+      offMap.map((t) => `${t.id}:${t.title}`).join('|')
     if (this._last.legend === signature) return
     this._last.legend = signature
 
@@ -535,7 +540,7 @@ export class Hud {
     // The hidden list is its own block at the foot of the sidebar: collapsed by default, because
     // the whole point of hiding a repo is not to look at it.
     const block = this.$('.hidden-block')
-    block.hidden = hidden.length === 0 && folded.length === 0
+    block.hidden = hidden.length === 0 && folded.length === 0 && offMap.length === 0
     const hiddenWrap = this.$('.hidden-projects')
     hiddenWrap.innerHTML = ''
     for (const p of hidden) {
@@ -575,7 +580,20 @@ export class Hud {
       hiddenWrap.appendChild(row)
     }
 
-    const total = hidden.length + folded.length
+    // Repos that left the map because every thread in them was archived. Only reachable from
+    // here — with no zone, there is no zone sidebar to hold their archived list.
+    this._appendArchived(hiddenWrap, offMap, {
+      key: 'offMap',
+      label: `${offMap.length} archived thread${offMap.length === 1 ? '' : 's'}`,
+      withProject: true,
+      redraw: () => {
+        this._last.legend = null
+        this.setLegend(...this._legendArgs)
+      },
+    })
+
+    const gone = new Set(offMap.map((t) => t.project)).size
+    const total = hidden.length + folded.length + gone
     this.$('#btn-hidden-toggle .label').textContent = `${total} off the map`
     this._syncHiddenList()
   }
@@ -597,6 +615,14 @@ export class Hud {
    */
   setProject(project) {
     const panel = this.$('.side')
+    // An archived list folds back up once you leave where it was opened: the zone's when the
+    // zone changes, the off-the-map one as soon as any zone is opened.
+    this._archive ||= {}
+    if (this._archiveZone !== project?.name) {
+      this._archiveZone = project?.name
+      delete this._archive.zone
+      if (project) delete this._archive.offMap
+    }
     if (!project) {
       this.project = null
       if (this._last.project === null) return
@@ -619,7 +645,8 @@ export class Hud {
     // you leave the panel open.
     const signature =
       `${project.name}~${project.path}~${project.accent}~${project.selectedId}~${Math.floor(Date.now() / 60000)}~` +
-      project.threads.map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}`).join('|')
+      project.threads.map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}`).join('|') +
+      `~${(project.archived || []).map((t) => `${t.id}:${t.title}`).join('|')}`
     panel.classList.add('drilled')
     if (this._last.project === signature) return
     this._last.project = signature
@@ -674,8 +701,68 @@ export class Hud {
         })
       }
     }
+    const archived = project.archived || []
+    this._appendArchived(list, archived, {
+      key: 'zone',
+      label: `${archived.length} archived`,
+      redraw: () => {
+        this._last.project = null
+        this.setProject(this.project)
+      },
+    })
     list.scrollTop = scroll
     if (!project.selectedId) this._scrolledTo = null
+  }
+
+  /**
+   * A folded list of archived threads with Restore on each: one line until asked — a busy
+   * repo collects hundreds, and the sidebar is for what is happening now — then the most
+   * recent few, then all of them. `key` names whose list it is; whoever owns that key folds
+   * it back up by forgetting it (leaving the zone, or opening one from the repo list).
+   */
+  _appendArchived(parent, archived, { key, label, withProject = false, redraw }) {
+    if (!archived.length) return
+    this._archive ||= {}
+    const view = this._archive[key] || { open: false, all: false }
+    const set = (next) => {
+      this._archive[key] = { ...view, ...next }
+      redraw()
+    }
+    const shown = view.all ? archived : archived.slice(0, ARCHIVE_PEEK)
+
+    const toggle = document.createElement('button')
+    toggle.type = 'button'
+    toggle.className = 'archived-toggle'
+    toggle.setAttribute('aria-expanded', String(view.open))
+    toggle.innerHTML = `<span>${escapeHtml(label)}</span>${ICON.chev}`
+    toggle.addEventListener('click', () => set({ open: !view.open, all: false }))
+    parent.appendChild(toggle)
+    if (!view.open) return
+
+    for (const t of shown) {
+      const row = document.createElement('div')
+      row.className = 'thread archived-row'
+      row.innerHTML =
+        `<span class="t">${escapeHtml(t.title || 'Untitled thread')}` +
+        (withProject ? ` <span class="p">· ${escapeHtml(t.project || '')}</span>` : '') +
+        `</span><span class="when">${ago(t.archivedAt)}</span>`
+      const restore = document.createElement('button')
+      restore.type = 'button'
+      restore.className = 'btn ghost restore'
+      restore.title = 'Put this thread back on the map'
+      restore.textContent = 'Restore'
+      restore.addEventListener('click', () => this.actions.unarchiveThread?.(t.id))
+      row.appendChild(restore)
+      parent.appendChild(row)
+    }
+    if (shown.length < archived.length) {
+      const more = document.createElement('button')
+      more.type = 'button'
+      more.className = 'archived-more'
+      more.textContent = `Show all ${archived.length}`
+      more.addEventListener('click', () => set({ all: true }))
+      parent.appendChild(more)
+    }
   }
 
   /**
@@ -876,15 +963,32 @@ export class Hud {
     this._hintTimer = setTimeout(() => el.classList.remove('on'), ms)
   }
 
-  toast(message, kind = '') {
+  /**
+   * A passing message. `action` adds one button to it — `{ label, run }` — and keeps it up a
+   * little longer, since a button you have to race is not much of an offer.
+   */
+  toast(message, kind = '', action = null) {
     const el = document.createElement('div')
     el.className = `toast panel ${kind}`
     el.textContent = message
-    this.$('.toasts').appendChild(el)
-    setTimeout(() => {
+    const leave = () => {
+      if (el.classList.contains('leaving')) return
       el.classList.add('leaving')
       setTimeout(() => el.remove(), 260)
-    }, 3600)
+    }
+    if (action) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'toast-action'
+      b.textContent = action.label
+      b.addEventListener('click', () => {
+        leave()
+        action.run()
+      })
+      el.appendChild(b)
+    }
+    this.$('.toasts').appendChild(el)
+    setTimeout(leave, action ? 7000 : 3600)
   }
 
   // ── visibility ──────────────────────────────────────────────────────────────────────
