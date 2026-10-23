@@ -327,9 +327,12 @@ for (const addrs of Object.values(os.networkInterfaces())) {
 // Under WSL2 the Windows host's own address is not one of this machine's interfaces,
 // so a phone that reaches the Windows side arrives with a Host the loop above never
 // learned. BOT_CROSSING_ALLOWED_HOSTS names those extra addresses, comma separated,
-// and they get the same Host and Origin treatment as the rest.
+// and they get the same Host and Origin treatment as the rest. Each is read the way a
+// request's Host is, so `My-PC`, `192.0.2.10:5274` and `[fd00::1]` match what arrives; a
+// bare IPv6 address is not a valid URL host until it is bracketed.
 for (const extra of (process.env.BOT_CROSSING_ALLOWED_HOSTS || '').split(',')) {
-  const host = extra.trim()
+  const entry = extra.trim()
+  const host = hostnameOf(entry) || hostnameOf(`[${entry}]`)
   if (host) LOCAL_HOSTS.add(host)
 }
 

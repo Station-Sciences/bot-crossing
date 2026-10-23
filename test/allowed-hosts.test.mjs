@@ -31,6 +31,19 @@ test('names in BOT_CROSSING_ALLOWED_HOSTS pass the Host check, others still do n
   )
 })
 
+test('an entry is read the way a request Host is: any case, with a port, bracketed or bare IPv6', async () => {
+  await withEnv({ BOT_CROSSING_ALLOWED_HOSTS: 'My-PC.example, 192.0.2.10:5274, [fd00::1], fd00::2' }, () =>
+    withServer(async ({ call }) => {
+      const port = new URL((await call('/api/nope')).url).port
+      assert.equal(await statusFor(port, 'my-pc.example:5274'), 404)
+      assert.equal(await statusFor(port, '192.0.2.10:5274'), 404)
+      assert.equal(await statusFor(port, '[fd00::1]:5274'), 404)
+      assert.equal(await statusFor(port, '[fd00::2]:5274'), 404)
+      assert.equal(await statusFor(port, 'evil.example:5274'), 403)
+    })
+  )
+})
+
 test('with the variable unset a foreign Host is refused as before', async () => {
   await withEnv({ BOT_CROSSING_ALLOWED_HOSTS: undefined }, () =>
     withServer(async ({ call }) => {
