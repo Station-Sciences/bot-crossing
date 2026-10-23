@@ -839,6 +839,17 @@ test('kilocode refuses untrusted refs and opens the repo folder in VS Code', asy
 
 // ── a title is a line ─────────────────────────────────────────────────────────
 
+test('a scanned thread with no title of its own is named by the first line of its prompt', async () => {
+  // Through the scan, not just the helper: the prompt the adapter keeps has its whitespace
+  // collapsed, so a helper that only ever saw that text could never find a line in it.
+  const prompt = 'Fix the login bug\n\nIt fails when the session sat idle for an hour'
+  const fx = await fakeClaude({ transcript: [typed(prompt)] })
+  const [thread] = await (await claudeWith(fx)).scanThreads()
+  assert.equal(thread.title, 'Fix the login bug')
+  assert.equal(thread.preview, prompt.replace(/\s+/g, ' '), 'the preview keeps the whole prompt')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
 test('a thread the desktop never named takes the first line of its prompt, and no more than 120 of it', () => {
   assert.equal(titleFromPrompt('Fix the login bug\n\nIt fails when…'), 'Fix the login bug')
   assert.equal(titleFromPrompt('\n\n  second line is the first that says anything\nthird'), 'second line is the first that says anything')
