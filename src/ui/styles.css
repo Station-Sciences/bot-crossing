@@ -1158,6 +1158,99 @@ body {
   color: #7c7b86;
 }
 
+/* Crew sit under the manager that sent them out, indented with a rule down the left. */
+.side .thread.crew-row {
+  margin-left: calc(var(--depth, 1) * 14px);
+  border-left: 2px solid var(--squad, var(--line-strong));
+  border-radius: 0 10px 10px 0;
+}
+
+/* ── the card's family: who started this thread, and who it started ─────────────── */
+
+.thread-pop .family {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.thread-pop .family .kin-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.thread-pop .family .label {
+  white-space: nowrap;
+}
+
+.thread-pop .family .kin-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.thread-pop .family .kin {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.thread-pop .family .kin:hover {
+  background: rgba(255, 255, 255, 0.13);
+}
+
+.thread-pop .family .kin span {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-pop .family .kin .pip {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.thread-pop .family .kin.working { color: #7fd39a; }
+.thread-pop .family .kin.waiting { color: #8fb4ee; }
+.thread-pop .family .kin.blocked { color: #e88b8b; }
+.thread-pop .family .kin.approval { color: #e0b25a; }
+.thread-pop .family .kin.done { color: #e6c67f; }
+.thread-pop .family .kin.idle { color: #7c7b86; }
+
+/* A squad's colour, as worn on its manager's pennant and its crew's backpacks. */
+.side .thread .squad,
+.thread-pop .family .squad {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 2px;
+  vertical-align: 0;
+  flex: none;
+}
+
+.thread-pop .family .more {
+  align-self: center;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+
 /* ── toasts + readouts ───────────────────────────────────────────────────────────── */
 
 .toasts {

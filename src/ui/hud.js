@@ -57,6 +57,9 @@ const STAT_DEFS = [
   { key: 'agents', label: 'bots', cls: 'idle' },
 ]
 
+/** How many of a manager's crew its card lists by name before "+n more". */
+const FAMILY_PEEK = 6
+
 export class Hud {
   constructor(root, settings, actions) {
     this.settings = settings
@@ -270,6 +273,11 @@ export class Hud {
       this._toggle('Return to isometric', 'autoFrame', 'Eases the angle back when you stop dragging.'),
       this._slider('Field of view', 'fov', 20, 60, 1, (v) => `${v}°`),
       this._toggle('Project labels', 'showLabels'),
+      this._toggle(
+        'Hide crew alerts',
+        'hideCrewAlerts',
+        'No badges over bots another session started. Whatever they need you for shows over their manager instead.'
+      ),
       this._toggle('Reduced motion', 'reducedMotion', 'Calms the bobbing and the camera easing.'),
       this._toggle('Show FPS', 'showFps')
     )
@@ -619,7 +627,9 @@ export class Hud {
     // you leave the panel open.
     const signature =
       `${project.name}~${project.path}~${project.accent}~${project.selectedId}~${Math.floor(Date.now() / 60000)}~` +
-      project.threads.map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}`).join('|')
+      project.threads
+        .map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}:${t.depth}:${t.crew}:${t.squad}:${t.flag}`)
+        .join('|')
     panel.classList.add('drilled')
     if (this._last.project === signature) return
     this._last.project = signature
@@ -649,14 +659,27 @@ export class Hud {
     for (const t of project.threads) {
       const b = document.createElement('button')
       b.type = 'button'
-      b.className = `thread ${statusClass(t.status)}`
+      b.className = `thread ${statusClass(t.status)}${t.depth ? ' crew-row' : ''}`
+      // Nested by indent alone, capped so a deep chain cannot push titles out of the panel.
+      if (t.depth) b.style.setProperty('--depth', String(Math.min(t.depth, 3)))
+      // The rule down the left wears the squad's colour, the same one on the crew's backpacks.
+      if (t.squad !== null && t.squad !== undefined) b.style.setProperty('--squad', hex(t.squad))
       b.setAttribute('aria-pressed', String(t.id === project.selectedId))
       b.title = STATUS_LABEL[t.status] || t.status
       b.innerHTML =
         '<i class="pip"></i>' +
         `<span class="t">${escapeHtml(t.title || 'Untitled thread')}</span>` +
         `<span class="when">${ago(t.lastActivityAt)}</span>` +
-        (t.worktree ? `<span class="wt">⑂ ${escapeHtml(t.worktree)}</span>` : '')
+        (t.worktree || t.crew
+          ? `<span class="wt">${[
+              t.crew
+                ? `${t.flag !== null && t.flag !== undefined ? `<i class="squad" style="background:${hex(t.flag)}"></i>` : ''}Managing ${t.crew}`
+                : '',
+              t.worktree ? `⑂ ${escapeHtml(t.worktree)}` : '',
+            ]
+              .filter(Boolean)
+              .join(' · ')}</span>`
+          : '')
       b.addEventListener('click', () => this.actions.focusThread?.(t.id))
       list.appendChild(b)
       // A long repo can hide the astronaut you just clicked in the world. Scrolled by hand
@@ -698,7 +721,8 @@ export class Hud {
     if (this.isPhone()) this.toggleSheet(false)
 
     this.$('.thread-pop .title').textContent = thread.title || 'Untitled thread'
-    const status = STATUS_LABEL[agent.status] || agent.status
+    // A supervising manager is idle as far as its thread goes; what it is doing is watching.
+    const status = agent.supervising ? 'Supervising' : STATUS_LABEL[agent.status] || agent.status
     const meta = this.$('.thread-pop .meta')
     const bits = [
       `<span class="tag"><i class="swatch" style="background:${hex(agent.trim.getHex())}"></i>${escapeHtml(status)}</span>`,
@@ -711,6 +735,7 @@ export class Hud {
     if (thread.model) bits.push(`<span class="tag">${escapeHtml(shortModel(thread.model))}</span>`)
     bits.push(`<span>${ago(thread.lastActivityAt)}</span>`)
     meta.innerHTML = bits.join('')
+    this._setFamily(thread.id)
 
     const pct = Math.round((this.actions.progressFor?.(thread.id) ?? 0) * 100)
     this.$('.thread-pop .progress > i').style.width = `${pct}%`
@@ -724,6 +749,53 @@ export class Hud {
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
     this.$('#btn-viewed').hidden = !thread.unread
+  }
+
+  /**
+   * Who started this thread, and who it started — each a link that flies to that bot. Rebuilt
+   * with the rest of the card on every poll, so the crew's states stay current.
+   */
+  _setFamily(id) {
+    const box = this.$('.thread-pop .family')
+    const family = this.actions.familyFor?.(id)
+    box.innerHTML = ''
+    box.hidden = !family || (!family.manager && !family.crew.length)
+    if (box.hidden) return
+
+    const link = (who) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = `kin ${statusClass(who.status)}`
+      b.title = `${STATUS_LABEL[who.status] || who.status} — fly there (G walks the family, ⇧G its manager)`
+      b.innerHTML = `<i class="pip"></i><span>${escapeHtml(who.title || 'Untitled thread')}</span>`
+      b.addEventListener('click', () => this.actions.focusThread?.(who.id))
+      return b
+    }
+    const line = (label, color) => {
+      const row = document.createElement('div')
+      row.className = 'kin-line'
+      const swatch = color !== null && color !== undefined ? `<i class="squad" style="background:${hex(color)}"></i>` : ''
+      row.innerHTML = `${swatch}<span class="label">${label}</span>`
+      box.appendChild(row)
+      return row
+    }
+
+    if (family.manager) line('Spawned by', family.managerColor).appendChild(link(family.manager))
+    if (family.crew.length) {
+      const { total, working, needsYou, done } = family.summary
+      const parts = [working && `${working} working`, needsYou && `${needsYou} need you`, done && `${done} idle`]
+      line(`Managing ${total}${parts.some(Boolean) ? ` · ${parts.filter(Boolean).join(' · ')}` : ''}`, family.crewColor)
+      const list = document.createElement('div')
+      list.className = 'kin-list'
+      for (const who of family.crew.slice(0, FAMILY_PEEK)) list.appendChild(link(who))
+      if (family.crew.length > FAMILY_PEEK) {
+        const more = document.createElement('span')
+        more.className = 'more'
+        more.textContent = `+${family.crew.length - FAMILY_PEEK} more`
+        list.appendChild(more)
+      }
+      box.appendChild(list)
+    }
   }
 
   /**
@@ -1138,6 +1210,7 @@ const TEMPLATE = `
     <button class="btn icon ghost" id="btn-follow" title="Follow selected bot" aria-label="Follow selected bot" aria-pressed="false">${ICON.locate}</button>
     <button class="btn icon ghost" id="btn-deselect" title="Deselect (Esc)">${ICON.close}</button>
   </div>
+  <div class="family" hidden></div>
   <div class="progress"><i></i></div>
   <div class="pair">
     <button class="btn primary" id="btn-open" title="Open this thread in the harness it came from (Enter)">${ICON.open} Open</button>
@@ -1168,6 +1241,9 @@ const TEMPLATE = `
       </div>
       <div>
         <div class="k"><span>Next needing you</span><kbd>N</kbd></div>
+        <div class="k"><span>Walk this bot's family</span><kbd>G</kbd></div>
+        <div class="k"><span>Its family's manager</span><kbd>⇧G</kbd></div>
+        <div class="k"><span>Next team in this repo</span><kbd>T</kbd> <kbd>⇧T</kbd></div>
         <div class="k"><span>Open thread</span><kbd>Enter</kbd></div>
         <div class="k"><span>Mark viewed</span><kbd>V</kbd></div>
         <div class="k"><span>Archive</span><kbd>A</kbd></div>

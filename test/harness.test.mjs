@@ -684,6 +684,35 @@ test('a thread deleted in the desktop app is reported archived, not dropped', as
   await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
+test('a session started by another is linked to its thread, not to its desktop record', async () => {
+  // The record names its parent by desktop id; the thread is keyed on the CLI session.
+  const PARENT = 'local_11111111-2222-4333-8444-555555555555'
+  const CHILD = 'local_66666666-7777-4888-9999-aaaaaaaaaaaa'
+  const fx = await fakeClaude({
+    transcript: [typed('split this up')],
+    records: [
+      { sessionId: PARENT, cliSessionId: SESSION_ID, cwd: '/tmp/demo', title: 'Manager', createdAt: 1, lastActivityAt: 2 },
+      {
+        sessionId: CHILD,
+        cwd: '/tmp/demo',
+        title: 'Side job',
+        createdAt: 3,
+        lastActivityAt: 4,
+        spawnedFrom: { sessionId: PARENT, taskId: 'task_1', title: 'Side job', sideSession: true },
+      },
+    ],
+  })
+  const h = await claudeWith(fx)
+  const threads = await h.scanThreads()
+  const parent = threads.find((t) => t.title === 'Manager')
+  const child = threads.find((t) => t.title === 'Side job')
+  assert.equal(parent.id, `claude-code:${SESSION_ID}`)
+  assert.equal(child.spawnedBy, parent.id)
+  assert.equal(parent.spawnedBy, undefined)
+  assert.equal('spawnedFrom' in child, false, 'the desktop id stays inside the adapter')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
 test('a record the app still holds outranks a leftover deletion marker', async () => {
   // Resuming a deleted transcript makes the app write a fresh record; the marker stays behind.
   const fx = await fakeClaude({

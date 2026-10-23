@@ -454,6 +454,7 @@ function mergeThread(existing, next) {
     starred: existing.starred || next.starred,
     routine: existing.routine || next.routine,
     prState: existing.prState || next.prState,
+    spawnedFrom: existing.spawnedFrom || next.spawnedFrom,
     archived: existing.archived && next.archived,
     hasTranscript: existing.hasTranscript || next.hasTranscript,
   }
@@ -468,7 +469,7 @@ function mergeThread(existing, next) {
 function toThread(t) {
   const {
     desktopSessionId, desktopSessionIds, cliSessionId, bridgeSessionId,
-    titled, hasLiveProcess, transcriptFile, recordActivityAt, ...rest
+    titled, hasLiveProcess, transcriptFile, recordActivityAt, spawnedFrom, ...rest
   } = t
   return {
     ...rest,
@@ -539,6 +540,9 @@ async function scanThreads() {
       starred: s.isStarred === true,
       routine: s.scheduledTaskId || '',
       prState: s.prState || '',
+      // The desktop session that started this one, by its `local_…` id. Resolved to a thread id
+      // once every thread is known — see `linkSpawns`.
+      spawnedFrom: isDesktopId(s.spawnedFrom?.sessionId) ? s.spawnedFrom.sessionId : '',
       archived: s.isArchived === true || s.isArchived === 'True',
       hasTranscript: Boolean(entry),
       sizeBytes: entry?.size || 0,
@@ -630,7 +634,26 @@ async function scanThreads() {
     const errands = subagents.get(thread.cliSessionId)
     if (errands) thread.subagents = errands
   }
+
+  linkSpawns(threads)
   return threads.map(toThread)
+}
+
+/**
+ * Point each thread a desktop session started at the thread that started it.
+ *
+ * The record names its parent by the parent's desktop id, which is not the thread id: a thread is
+ * keyed on its CLI session where it has one, and may hold several desktop records. So the link is
+ * only resolvable once every thread is built. A parent that is not among them — deleted, or never
+ * written to disk — leaves the child with no `spawnedBy`, which is the same as never having had one.
+ */
+function linkSpawns(threads) {
+  const byDesktopId = new Map()
+  for (const t of threads) for (const id of t.desktopSessionIds) byDesktopId.set(id, t.id)
+  for (const t of threads) {
+    const parent = t.spawnedFrom ? byDesktopId.get(t.spawnedFrom) : undefined
+    if (parent && parent !== t.id) t.spawnedBy = parent
+  }
 }
 
 /**

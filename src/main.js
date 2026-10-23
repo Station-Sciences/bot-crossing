@@ -25,6 +25,7 @@ import {
 } from './game/api.js'
 import { hideProject, hiddenCatalog, unhideProject } from './game/hidden-projects.js'
 import { withErrands } from './game/errands.js'
+import { buildFamilies, crewSummary, familyRing, nextTeam } from './game/families.js'
 
 /**
  * Boot and the outer game loop.
@@ -63,6 +64,8 @@ const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer
 
 let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {} }
 let threads = []
+/** Who started whom, among the threads on the map — rebuilt every poll. See game/families.js. */
+let families = buildFamilies([])
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
 /** The zone layout as last written to the colony file, so an unchanged map is not re-saved. */
@@ -127,7 +130,7 @@ const actions = {
   /** Fly to the next astronaut in a given state, cycling through them on repeat presses. */
   focusStatus: (status) => {
     const key = status === 'agents' ? null : status
-    const pool = colony.astronauts.agents.filter((a) => (key ? a.status === key : true))
+    const pool = colony.astronauts.agents.filter((a) => (key ? colony.alertStatusOf(a) === key : true))
     if (!pool.length) {
       hud.hint(key ? `Nobody is ${(STATUS_LABEL[key] || key).toLowerCase()} right now` : 'No bots on the surface')
       return
@@ -157,6 +160,81 @@ const actions = {
   select: (id) => select(id, {}),
 
   focusThread: (id) => select(id, { fly: true }),
+
+  /**
+   * Walk the selected thread's family: its manager, then the crew it sent out, oldest first.
+   * With `toManager` (shift), go straight to the family's manager instead — from deep in a
+   * squad, the way back to whoever is running it. Only bots still on the surface are stops.
+   */
+  focusFamily: ({ toManager = false } = {}) => {
+    if (!selectedId) {
+      hud.hint('Pick a bot first — G walks its family')
+      return
+    }
+    // Only bots still on the surface are stops — not one walking home after an archive.
+    const onMap = (id) => {
+      const agent = colony.agentFor(id)
+      return agent && agent.state !== 'leaving' && agent.state !== 'gone'
+    }
+    const ring = familyRing(families, selectedId).filter(onMap)
+    if (ring.length < 2) {
+      hud.hint('No family on the map for this thread')
+      return
+    }
+    if (toManager) {
+      // The ring starts at the manager, unless the manager is walking home and was filtered out.
+      const manager = familyRing(families, selectedId)[0]
+      if (manager === selectedId) hud.hint('This is the manager')
+      else if (ring[0] === manager) select(manager, { fly: true })
+      else hud.hint('Its manager is not on the map')
+      return
+    }
+    const at = ring.indexOf(selectedId)
+    select(ring[(at + 1) % ring.length], { fly: true })
+  },
+
+  /**
+   * Step out of the selected bot's team to the next one in the same repo — the open one, or
+   * else the selected bot's — landing on its lead: its manager, or a bot on its own. Shift goes
+   * back. Teams come round in the order they were started, so repeated presses tour the repo.
+   */
+  focusTeam: ({ back = false } = {}) => {
+    const project = selectedProject ?? colony.threads.get(selectedId)?.project ?? null
+    if (!project) {
+      hud.hint('Open a repo or pick a bot first — T steps between its teams')
+      return
+    }
+    const ids = [...colony.threads.values()]
+      .filter((t) => t.project === project)
+      .filter((t) => {
+        const agent = colony.agentFor(t.id)
+        return agent && agent.state !== 'leaving' && agent.state !== 'gone'
+      })
+      .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.id.localeCompare(b.id))
+      .map((t) => t.id)
+    const id = nextTeam(families, ids, selectedId, { back })
+    if (id) select(id, { fly: true })
+    else hud.hint(`Only one team in ${project}`)
+  },
+
+  /** What the card says about a thread's family: who started it, and who it started. */
+  familyFor: (id) => {
+    const card = (childId) => {
+      const t = colony.threads.get(childId)
+      return t ? { id: childId, title: t.title, status: statusFor(t, Date.now()) } : null
+    }
+    const managerId = families.managerOf.get(id)
+    const crew = (families.crewOf.get(id) || []).map(card).filter(Boolean)
+    const statuses = new Map(crew.map((c) => [c.id, c.status]))
+    return {
+      manager: managerId ? card(managerId) : null,
+      // Whose colour each line wears: the manager's squad for "Spawned by", its own for its crew.
+      managerColor: managerId ? (colony.squads?.get(managerId) ?? null) : null,
+      crewColor: colony.squads?.get(id) ?? null,
+      crew,
+      summary: crewSummary(families, id, (childId) => statuses.get(childId)),
+    }
+  },
 
   /**
    * A new thread in this repo. The desktop app opens an empty session with the folder as
@@ -427,6 +505,11 @@ function syncProject() {
       worktree: thread.worktree,
       lastActivityAt: thread.lastActivityAt,
       status: statusFor(thread, now),
+      crew: families.crewOf.get(thread.id)?.length ?? 0,
+      // The squad colours, for the row's rule (crew) and its "Managing" line (manager).
+      squad: colony.squads?.get(families.managerOf.get(thread.id)) ?? null,
+      flag: colony.squads?.get(thread.id) ?? null,
+      depth: 0,
     }))
     // Whoever wants something first, then most recently touched — the same order of
     // importance the badges use above their heads.
@@ -439,12 +522,33 @@ function syncProject() {
     name: plot.name,
     accent: plot.accent,
     path: pathForProject(plot.name),
-    threads: list,
+    threads: nestCrew(list),
     selectedId,
   })
   // The legend is the same selection seen from the bottom of the screen: keep it in step
   // here rather than only on the next poll.
   hud.setLegend(legendProjects, selectedProject, hidden, folded)
+}
+
+/**
+ * Crew listed under the manager that sent them out, when both are in this repo, keeping the
+ * urgency order inside each level. A manager in another repo leaves its crew at the top level
+ * here — the card still names it.
+ */
+function nestCrew(rows) {
+  const here = new Set(rows.map((r) => r.id))
+  const placed = new Set()
+  const out = []
+  const place = (row, depth) => {
+    if (placed.has(row.id)) return
+    placed.add(row.id)
+    out.push(depth ? { ...row, depth } : row)
+    for (const child of rows) if (families.managerOf.get(child.id) === row.id) place(child, depth + 1)
+  }
+  for (const row of rows) if (!here.has(families.managerOf.get(row.id))) place(row, 0)
+  // Anything a loop in the records kept from having a top still gets a row.
+  for (const row of rows) place(row, 0)
+  return out
 }
 
 // ── pointer ───────────────────────────────────────────────────────────────────────────
@@ -831,6 +935,14 @@ window.addEventListener('keydown', (e) => {
       settings.set('sound', !settings.get('sound'))
       hud.hint(settings.get('sound') ? 'Sound on' : 'Muted')
       break
+    case 'g':
+    case 'G':
+      actions.focusFamily({ toManager: e.shiftKey })
+      break
+    case 't':
+    case 'T':
+      actions.focusTeam({ back: e.shiftKey })
+      break
     case 'Tab':
       e.preventDefault()
       actions.cyclePlanet()
@@ -936,6 +1048,8 @@ function applyThreads(list) {
   if (firstSeen) queueSave()
 
   const stats = colony.setThreads(list, archivedSet, hiddenSet, known)
+  // The colony built it from the threads on the map, which is the only place a family counts.
+  families = colony.families
   hud.setStats(stats)
   chimeForNewWaiting(list, archivedSet, hiddenSet)
 

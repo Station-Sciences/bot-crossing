@@ -104,6 +104,22 @@ const PATH_BUDGET = 6
 const CREW_SCALE = 0.56
 
 /**
+ * A manager — a thread with crew of its own on the map — stands a head taller than the rest,
+ * and carries a mast on its antenna with a pennant on it. Size alone is ambiguous at a
+ * distance; the pennant is the part that reads as "in charge" from across the colony.
+ */
+const MANAGER_SCALE = 1.14
+/** A pennant with no squad colour handed over — not something the colony does, but a default. */
+const PENNANT = 0xff8a3d
+/**
+ * How far a crew member's backpack goes toward its squad's colour. Not all the way: a pack in
+ * the full saturated colour reads as a second status light, and the suit is meant to stay quiet.
+ */
+const SQUAD_TINT = 0.7
+/** How long a supervisor watches its crew between looks at its clipboard, in seconds. */
+const SUPERVISE_GAP = [3.5, 7]
+
+/**
  * Where the worn parts sit relative to the bone they hang off, in the mannequin's own
  * units — the root transform carries CREW_SCALE, so everything downstream of a bone is
  * measured in the rig's space and stays put if that scale is ever retuned.
@@ -163,11 +179,16 @@ export class Astronauts {
     this._m2 = new THREE.Matrix4()
     this._m3 = new THREE.Matrix4()
     this._m4 = new THREE.Matrix4()
+    this._m4b = new THREE.Matrix4()
+    this._m4c = new THREE.Matrix4()
+    /** Where the camera is, handed over by the colony each frame — for the pennants. */
+    this.viewFrom = new THREE.Vector3(0, 30, 30)
     this._q = new THREE.Quaternion()
     this._e = new THREE.Euler()
     this._v = new THREE.Vector3()
     this._one = new THREE.Vector3(1, 1, 1)
     this._color = new THREE.Color()
+    this._squadColor = new THREE.Color()
     this._wp = new THREE.Vector3()
     this._sep = new THREE.Vector3()
     this._pickBadge = new THREE.Vector3()
@@ -224,6 +245,18 @@ export class Astronauts {
     // Independent XYZ offsets drift off centre when the antenna leans or animates.
     tipGeo.translate(0, antennaHeight, 0)
     parts.tip = this._mesh(tipGeo, glowMat, capacity, false)
+
+    // A manager's mast and pennant, standing on the end of its antenna. The glowing tip moves
+    // up to the top of the mast for a manager, so the light stays the highest thing it wears.
+    // Unlit, like the glow parts but not pushed past 1.0: a flag that went brown at dusk would
+    // stop being the thing you spot a manager by.
+    this.mastHeight = R * 0.8
+    parts.pennant = this._mesh(
+      pennantGeometry(R, antennaHeight, this.mastHeight),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, toneMapped: true }),
+      capacity,
+      false
+    )
     parts.lamp = this._mesh(new THREE.SphereGeometry(R * 0.16, 6, 5), glowMat.clone(), capacity, false)
 
     // The hammer, held in the right hand while a thread is running. Wood and steel rather
@@ -574,6 +607,14 @@ export class Astronauts {
       id: entry.id,
       thread: entry.thread,
       status: entry.status,
+      // A manager wears the pennant; a supervising one watches its crew instead of pottering.
+      // Kept apart from `status`, which stays the thread's own — see `_supervise`.
+      manager: Boolean(entry.manager),
+      supervising: Boolean(entry.supervising),
+      crewIds: entry.crewIds || [],
+      watching: null,
+      flag: entry.flag ?? null,
+      squad: entry.squad ?? null,
       site: entry.site ? entry.site.clone() : new THREE.Vector3(),
       // The thing being worked on, and where round it this astronaut is standing to do it.
       anchor: entry.anchor ? entry.anchor.clone() : null,
@@ -682,6 +723,23 @@ export class Astronauts {
       }
     }
     if (entry.anchor) (agent.anchor ||= new THREE.Vector3()).copy(entry.anchor)
+    agent.manager = Boolean(entry.manager)
+    agent.crewIds = entry.crewIds || []
+    agent.flag = entry.flag ?? null
+    // The pack colour is only written on dirty frames, so a squad change has to say so.
+    if ((entry.squad ?? null) !== agent.squad) {
+      agent.squad = entry.squad ?? null
+      agent.colorDirty = true
+    }
+    if (Boolean(entry.supervising) !== agent.supervising) {
+      agent.supervising = Boolean(entry.supervising)
+      // A clipboard out when supervising ends is put away at once, and a phone check timed for
+      // working does not carry over into the much shorter supervising rhythm, or back.
+      agent.checkStart = -1
+      agent.checkT = -1
+      agent.checkAt = 0
+      agent.watching = null
+    }
     if (entry.status !== agent.status) {
       agent.status = entry.status
       this._applyStatus(agent, entry.status)
@@ -919,7 +977,9 @@ export class Astronauts {
       }
 
       case 'at-site': {
-        if (agent.status === 'idle') {
+        if (agent.supervising) {
+          this._supervise(agent, dt, elapsed)
+        } else if (agent.status === 'idle') {
           // Idlers potter around their plot, and `_drift` owns their velocity outright.
           this._drift(agent, dt, elapsed)
         } else if (agent.status === 'working' && agent.anchor) {
@@ -1271,6 +1331,53 @@ export class Astronauts {
   }
 
   /**
+   * A manager with nothing of its own on, while its crew are still out working or waiting on
+   * you. It does not potter: it stands at its site, looks over its clipboard, then turns to
+   * watch one of its crew for a few seconds — wherever on the map that one is — and back.
+   * The thread's status is untouched (it is idle), so badges and counts stay honest; this is
+   * only what the body does about it.
+   */
+  _supervise(agent, dt, elapsed) {
+    agent.vel.set(0, 0, 0)
+    if (agent.checkStart >= 0) {
+      agent.checkT = elapsed - agent.checkStart
+      if (agent.checkT >= CHECK_LEN) {
+        agent.checkStart = -1
+        agent.checkT = -1
+        agent.checkAt = elapsed + SUPERVISE_GAP[0] + Math.random() * (SUPERVISE_GAP[1] - SUPERVISE_GAP[0])
+        agent.watching = this._pickCrew(agent)
+      }
+    } else {
+      if (agent.checkAt === 0) {
+        agent.checkAt = elapsed + 1 + Math.random() * 3
+        agent.watching = this._pickCrew(agent)
+      }
+      if (elapsed >= agent.checkAt) {
+        agent.checkStart = elapsed
+        agent.checkT = 0
+        agent.checkProp = 'clipboard'
+      }
+    }
+    // Reading the clipboard holds whichever way it was facing; between reads it turns to the
+    // one it is watching, and to its building when that one has gone.
+    if (agent.checkStart < 0) {
+      const crew = agent.watching && this.byId.get(agent.watching)
+      const live = crew && crew.state !== 'gone' && crew.state !== 'leaving'
+      this._faceToward(agent, live ? crew.pos : agent.anchor || agent.site, dt)
+    }
+    this._settle(agent, dt)
+  }
+
+  /** One of an agent's crew that is on the map, at random; null when none are. */
+  _pickCrew(agent) {
+    const here = agent.crewIds.filter((id) => {
+      const crew = this.byId.get(id)
+      return crew && crew.state !== 'gone' && crew.state !== 'leaving'
+    })
+    return here.length ? here[Math.floor(Math.random() * here.length)] : null
+  }
+
+  /**
    * Now and then a working astronaut stops swinging, gets something out — a phone, for
    * now — looks at it for a few seconds, and puts it away again. Its next move round the
    * building is pushed back so it is not walked off mid-check; a status change or a walk
@@ -1389,7 +1496,10 @@ export class Astronauts {
     let key
     if (agent.state === 'spawning') key = 'spawn'
     else if (speed > 0.12) key = speed > WALK_SPEED * 1.25 ? 'run' : 'walk'
-    else {
+    else if (agent.supervising && agent.checkStart >= 0) {
+      const t = agent.checkT
+      key = t < 0.5 ? 'phoneUp' : t > CHECK_LEN - 0.55 ? 'phoneDown' : 'phone'
+    } else {
       switch (agent.status) {
         case 'working':
           // A check raises the arm, holds it, and lowers it, on its own clock.
@@ -1441,7 +1551,7 @@ export class Astronauts {
   // ── writing the instance buffers ────────────────────────────────────────────────────
 
   _writeMatrices(elapsed, anim) {
-    const { helmet, visor, pack, antenna, tip, lamp, face, hammer } = this.parts
+    const { helmet, visor, pack, antenna, tip, lamp, face, hammer, pennant } = this.parts
     const rig = this.rig
     const crew = this.crew
     const root = this._m
@@ -1457,6 +1567,7 @@ export class Astronauts {
 
     let i = 0
     let hands = 0
+    let managers = 0
     let staticDirty = false
     const props = this.props
     props.begin()
@@ -1481,7 +1592,7 @@ export class Astronauts {
       e.set(0, agent.yaw, 0)
       q.setFromEuler(e)
       v.set(agent.pos.x, agent.pos.y, agent.pos.z)
-      root.compose(v, q, one.setScalar(s * CREW_SCALE))
+      root.compose(v, q, one.setScalar(s * CREW_SCALE * (agent.manager ? MANAGER_SCALE : 1)))
       one.setScalar(1)
 
       if (crew) {
@@ -1499,6 +1610,28 @@ export class Astronauts {
         setPart(child, worn, face, i, 0, P.headUp, 0, 0, 0, 0)
         setPart(child, worn, antenna, i, P.antX, P.antY, P.antZ, P.antRx, 0, P.antRz)
         setPart(child, worn, tip, i, P.antX, P.antY, P.antZ, P.antRx, 0, P.antRz)
+        // Only managers carry the pennant, so it counts its own instances like the hammer.
+        if (agent.manager) {
+          // The antenna's own frame, which the mast continues straight up out of.
+          const mast = this._m4b.compose(
+            _cv.set(P.antX, P.antY, P.antZ),
+            _cq.setFromEuler(_ce.set(P.antRx, 0, P.antRz)),
+            _cs
+          ).premultiply(worn)
+          // A flag flat in one plane vanishes edge-on, so it turns about its mast to face the
+          // camera wherever the astronaut is looking, with a flutter so it is never quite still.
+          const toCamera = Math.atan2(this.viewFrom.x - agent.pos.x, this.viewFrom.z - agent.pos.z)
+          const flutter = 0.3 * Math.sin(elapsed * 2.3 + agent.phase)
+          child.copy(mast).multiply(this._m4c.makeRotationY(toCamera - agent.yaw + flutter))
+          pennant.setMatrixAt(managers, child)
+          // Every frame rather than on a dirty flag: a pennant's slot is its place among the
+          // managers, which shifts whenever any manager comes or goes, not when this one does.
+          pennant.setColorAt(managers, this._color.setHex(agent.flag ?? PENNANT))
+          managers++
+          // Up the antenna's own axis, so the tip stays on the mast however the antenna leans.
+          child.copy(mast).multiply(this._m4c.makeTranslation(0, this.mastHeight, 0))
+          tip.setMatrixAt(i, child)
+        }
 
         attachMatrixAt(rig, agent.frame, this.chestSlot, bone)
         worn.multiplyMatrices(root, bone)
@@ -1528,7 +1661,9 @@ export class Astronauts {
         crew?.setColorAt(i, c.setHex(agent.suit))
         helmet.setColorAt(i, c.setHex(agent.suit))
         antenna.setColorAt(i, c.setHex(agent.suit))
-        pack.setColorAt(i, c.setHex(agent.suit))
+        c.setHex(agent.suit)
+        if (agent.squad !== null) c.lerp(this._squadColor.setHex(agent.squad), SQUAD_TINT)
+        pack.setColorAt(i, c)
         face.setColorAt(i, agent.eye)
         staticDirty = true
       }
@@ -1554,9 +1689,9 @@ export class Astronauts {
     const n = i
     props.end()
     // The glowing parts pulse every frame; the rest only re-upload when something moved slot.
-    const animated = new Set(['tip', 'lamp'])
+    const animated = new Set(['tip', 'lamp', 'pennant'])
     for (const [name, mesh] of Object.entries(this.parts)) {
-      mesh.count = name === 'hammer' ? hands : n
+      mesh.count = name === 'hammer' ? hands : name === 'pennant' ? managers : n
       mesh.instanceMatrix.needsUpdate = true
       if (mesh.instanceColor && (staticDirty || animated.has(name))) mesh.instanceColor.needsUpdate = true
     }
@@ -1587,7 +1722,7 @@ export class Astronauts {
 
     for (const agent of this._drawnAgents) {
       if (agent.scale < 0.3 || agent.state === 'gone') continue
-      const scale = agent.scale * CREW_SCALE
+      const scale = agent.scale * CREW_SCALE * (agent.manager ? MANAGER_SCALE : 1)
       this._e.set(0, agent.yaw, 0)
       this._q.setFromEuler(this._e)
       this._m.compose(agent.pos, this._q, this._one.setScalar(scale))
@@ -1661,8 +1796,25 @@ export class Astronauts {
   }
 
   setHover(agent) {
+    this.hovered = agent || null
     this.hoverRing.visible = Boolean(agent)
     if (agent) this.hoverRing.position.set(agent.pos.x, agent.pos.y + 0.03, agent.pos.z)
+  }
+
+  /**
+   * The top of an astronaut's antenna — the mast's, for a manager — in world space, for anything
+   * that wants to run a line to it. Measured off the resting rig rather than the animated head:
+   * close enough to the light that the eye joins them, and steady while the head bobs.
+   * False when that astronaut is not standing on the map.
+   */
+  antennaTop(id, out) {
+    const agent = this.byId.get(id)
+    if (!agent || agent.state === 'gone' || agent.state === 'queued' || agent.scale < 0.3) return false
+    const R = P.helmetR
+    const above = P.antY - P.headUp + R * 0.57 + (agent.manager ? this.mastHeight : 0)
+    const height = ((this.headHeight || 0.75) + above * CREW_SCALE) * (agent.manager ? MANAGER_SCALE : 1)
+    out.set(agent.pos.x, agent.pos.y + height * agent.scale, agent.pos.z)
+    return true
   }
 
   setSelected(agent) {
@@ -1752,6 +1904,37 @@ function hammerGeometry(R) {
   const merged = BufferGeometryUtils.mergeGeometries([shaft, head], false)
   shaft.dispose()
   head.dispose()
+  return merged
+}
+
+/**
+ * A manager's mast and pennant, in the antenna's own frame: a thin pole continuing up from the
+ * antenna's end, and a swallow-tailed flag off its top. White here; the instance colour paints
+ * it, so a squad colour can replace the default without a second mesh.
+ */
+function pennantGeometry(R, base, mast) {
+  const pole = new THREE.CylinderGeometry(R * 0.022, R * 0.03, mast, 6)
+  pole.translate(0, base + mast / 2, 0)
+  const top = base + mast
+  const len = R * 0.95
+  const drop = R * 0.5
+  // Two triangles to the swallowtail's notch, flat in the XY plane; the material is double-sided.
+  const flag = new THREE.BufferGeometry()
+  const x0 = R * 0.02
+  const pts = [
+    [x0, top - R * 0.02], [x0, top - drop], [x0 + len * 0.62, top - drop * 0.5],
+    [x0, top - R * 0.02], [x0 + len * 0.62, top - drop * 0.5], [x0 + len, top - R * 0.02],
+    [x0, top - drop], [x0 + len, top - drop], [x0 + len * 0.62, top - drop * 0.5],
+  ]
+  flag.setAttribute('position', new THREE.Float32BufferAttribute(pts.flatMap(([x, y]) => [x, y, 0]), 3))
+  flag.computeVertexNormals()
+  // The flag has no UVs to merge against, and nothing here is textured.
+  const body = pole.toNonIndexed()
+  body.deleteAttribute('uv')
+  const merged = BufferGeometryUtils.mergeGeometries([body, flag], false)
+  body.dispose()
+  pole.dispose()
+  flag.dispose()
   return merged
 }
 

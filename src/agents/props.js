@@ -11,7 +11,8 @@ import { withCurve } from '../core/curve.js'
  * the astronauts hand over the chest bone's matrix and how far into the check they are,
  * and the prop places itself.
  *
- * One kind so far: a folding phone. More can be added here and cycled by `pickProp`.
+ * Two kinds: a folding phone, which `pickProp` hands any working astronaut, and a clipboard,
+ * which only a manager supervising its crew gets out (see `_supervise` in astronauts.js).
  */
 
 /** Seconds a check lasts, and the gap between one and the next, in seconds. */
@@ -59,6 +60,21 @@ const PHONE = {
   away: CHECK_LEN - 0.55, // and shrinks away as the arm drops
 }
 
+/**
+ * A clipboard, in R like the phone, held with the same arm pose and grip. A board, a sheet of
+ * paper on its face with a few lines ruled on it, and the clip across the top — the steel clip
+ * is what makes it read as a clipboard rather than a tablet at the colony's distance.
+ */
+const CLIP = {
+  w: 0.62,
+  h: 0.82,
+  t: 0.05,
+  r: 0.035,
+  grip: 0.42,
+  out: 0.5,
+  away: CHECK_LEN - 0.55,
+}
+
 export class Props {
   constructor(R, capacity) {
     this.R = R
@@ -72,10 +88,46 @@ export class Props {
     this._q = new THREE.Quaternion()
     this._e = new THREE.Euler()
     this._s = new THREE.Vector3()
-    this._n = 0
+    /** Placed this frame, per kind: each kind's meshes draw only their own. */
+    this._n = { phone: 0, clipboard: 0 }
+    this._kindOf = new Map()
     /** The hold, exposed so it can be tuned live. */
     this.tune = PHONE
     this._buildPhone()
+    this._buildClipboard()
+  }
+
+  _track(mesh, kind) {
+    mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    mesh.count = 0
+    mesh.frustumCulled = false
+    mesh.castShadow = true
+    mesh.receiveShadow = false
+    mesh.name = `prop-${kind}`
+    this._kindOf.set(mesh, kind)
+    this.meshes.push(mesh)
+  }
+
+  _buildClipboard() {
+    const R = this.R
+    const w = CLIP.w * R
+    const h = CLIP.h * R
+    const t = CLIP.t * R
+    // Board: hardboard brown all round, the paper on its face (+Z, toward the visor).
+    const board = new THREE.MeshStandardMaterial({ color: 0x8a6440, roughness: 0.8, metalness: 0 })
+    const paper = new THREE.MeshStandardMaterial({ map: paperTexture(), roughness: 0.9, metalness: 0 })
+    const geo = roundedBox(w, h, t, CLIP.r * R)
+    const sheet = new THREE.InstancedMesh(geo, [board, board, board, board, paper, board], this.capacity)
+    // The clip: a steel bar across the top edge, standing proud of the paper.
+    const clipGeo = roundedBox(w * 0.46, h * 0.1, t * 2.4, CLIP.r * R * 0.6)
+    clipGeo.translate(0, h * 0.47, t * 0.6)
+    const clip = new THREE.InstancedMesh(
+      clipGeo,
+      new THREE.MeshStandardMaterial({ color: 0xb8bec6, roughness: 0.35, metalness: 0.8 }),
+      this.capacity
+    )
+    for (const m of [sheet, clip]) this._track(m, 'clipboard')
+    this.clipboard = { sheet, clip, h, t }
   }
 
   _buildPhone() {
@@ -98,15 +150,7 @@ export class Props {
 
     const halfA = new THREE.InstancedMesh(geoA, [body, body, body, body, screen, back], this.capacity)
     const halfB = new THREE.InstancedMesh(geoB, [body, body, body, body, screen, screen], this.capacity)
-    for (const m of [halfA, halfB]) {
-      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
-      m.count = 0
-      m.frustumCulled = false
-      m.castShadow = true
-      m.receiveShadow = false
-      m.name = 'prop-phone'
-      this.meshes.push(m)
-    }
+    for (const m of [halfA, halfB]) this._track(m, 'phone')
     this.phone = { halfA, halfB, w, h, t }
   }
 
@@ -191,7 +235,7 @@ export class Props {
 
   /** Start a frame: nothing placed yet. */
   begin() {
-    this._n = 0
+    for (const kind in this._n) this._n[kind] = 0
   }
 
   /**
@@ -199,14 +243,34 @@ export class Props {
    * `t` is seconds since the check began.
    */
   write(kind, hand, t) {
-    if (this._n >= this.capacity) return
+    if (!(kind in this._n) || this._n[kind] >= this.capacity) return
     if (kind === 'phone') this._writePhone(hand, t)
+    else if (kind === 'clipboard') this._writeClipboard(hand, t)
+  }
+
+  /** Held where the phone is held, tipped up to be read; it grows in and shrinks away the same. */
+  _writeClipboard(hand, t) {
+    const R = this.R
+    const { sheet, clip, h, t: thick } = this.clipboard
+    const i = this._n.clipboard++
+    let out = 1
+    if (t < CLIP.out) out = smooth(t / CLIP.out)
+    else if (t > CLIP.away) out = 1 - smooth((t - CLIP.away) / (CHECK_LEN - CLIP.away))
+    const root = this._m
+    this._e.set(PHONE.rx, PHONE.ry, PHONE.rz)
+    this._q.setFromEuler(this._e)
+    this._v.set(PHONE.x * R, PHONE.y * R, PHONE.z * R)
+    root.compose(this._v, this._q, this._s.setScalar(Math.max(0.001, out)))
+    root.premultiply(hand)
+    root.multiply(this._m2.makeTranslation(0, CLIP.grip * h, -thick / 2))
+    sheet.setMatrixAt(i, root)
+    clip.setMatrixAt(i, root)
   }
 
   _writePhone(hand, t) {
     const R = this.R
     const { halfA, halfB, w, h, t: thick } = this.phone
-    const i = this._n++
+    const i = this._n.phone++
 
     // Grows in the hand as the arm comes up, shrinks away as it drops.
     let out = 1
@@ -249,7 +313,7 @@ export class Props {
   /** End the frame: the counts are what was placed. */
   end() {
     for (const m of this.meshes) {
-      m.count = this._n
+      m.count = this._n[this._kindOf.get(m)]
       m.instanceMatrix.needsUpdate = true
     }
   }
@@ -289,6 +353,40 @@ function roundedBox(w, h, d, r) {
   pos.needsUpdate = true
   geo.computeVertexNormals()
   return geo
+}
+
+/** The clipboard's sheet: off-white, a heading bar and a column of ruled lines with ticks. */
+function paperTexture() {
+  const size = 128
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const c = canvas.getContext('2d')
+  c.fillStyle = '#efece4'
+  c.fillRect(0, 0, size, size)
+  c.fillStyle = '#c96442'
+  c.fillRect(size * 0.14, size * 0.2, size * 0.5, size * 0.07)
+  for (let row = 0; row < 6; row++) {
+    const y = size * (0.36 + row * 0.1)
+    c.fillStyle = '#9aa3ad'
+    c.fillRect(size * 0.3, y, size * 0.56, size * 0.025)
+    // A tick or an empty box at the start of each line: some of the crew are done.
+    c.strokeStyle = '#5b6470'
+    c.lineWidth = size * 0.02
+    c.strokeRect(size * 0.14, y - size * 0.03, size * 0.08, size * 0.08)
+    if (row < 3) {
+      c.strokeStyle = '#4f9a63'
+      c.beginPath()
+      c.moveTo(size * 0.15, y + size * 0.005)
+      c.lineTo(size * 0.18, y + size * 0.035)
+      c.lineTo(size * 0.23, y - size * 0.04)
+      c.stroke()
+    }
+  }
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.anisotropy = 4
+  return tex
 }
 
 /**
