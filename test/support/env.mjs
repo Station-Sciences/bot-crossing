@@ -2,11 +2,14 @@ import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-/** PATH alone is not enough: the Codex adapter also walks Homebrew and npm-global install dirs. */
-export async function withNoCodexCli(fn) {
+/**
+ * No harness CLI anywhere. An empty PATH is not enough on its own: adapters also look in the dirs
+ * installers use (`/opt/homebrew/bin`, `~/.local/bin`), so `BOT_CROSSING_CLI_DIRS` empties those too.
+ */
+export async function withNoCli(fn) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
   try {
-    return await withEnv({ PATH: dir, BOT_CROSSING_CODEX_EXTRA_DIRS: '' }, fn)
+    return await withEnv({ PATH: dir, BOT_CROSSING_CLI_DIRS: '' }, fn)
   } finally {
     await fsp.rm(dir, { recursive: true, force: true })
   }

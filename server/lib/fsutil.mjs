@@ -92,12 +92,20 @@ export async function exists(p) {
  *
  * It never looks inside an application bundle, and no caller should hand it a path that does.
  * Running a binary out of somebody else's `.app` is how you get the OS blaming us for it.
+ *
+ * `BOT_CROSSING_CLI_DIRS`, when set, stands in for every caller's `extraDirs`, and empty means
+ * PATH alone. It is the same kind of override as `CLAUDE_CONFIG_DIR`: the suite uses it to test
+ * "no CLI installed" on a machine that has one in `/opt/homebrew/bin`, which an emptied PATH
+ * alone would still find. Kept here rather than per adapter, so one switch covers them all.
  */
 export async function findExecutable(name, extraDirs = []) {
   if (typeof name !== 'string' || !name) return null
   const explicit = name.includes('/') || name.includes(path.sep)
   const onPath = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
-  for (const dir of explicit ? ['.'] : [...onPath, ...extraDirs]) {
+  const override = process.env.BOT_CROSSING_CLI_DIRS
+  const installDirs = override === undefined ? extraDirs : override.split(path.delimiter).filter(Boolean)
+
+  for (const dir of explicit ? ['.'] : [...onPath, ...installDirs]) {
     const candidate = path.resolve(dir, name)
     try {
       await fsp.access(candidate, fsp.constants.X_OK)
