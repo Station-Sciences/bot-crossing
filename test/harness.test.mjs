@@ -678,6 +678,24 @@ test('a record the app still holds outranks a leftover deletion marker', async (
   await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
+test('a first prompt past the head still names the thread', async () => {
+  // Both shapes seen on a real store: a screenshot pasted into the prompt itself, and the
+  // attachments the CLI writes ahead of the first prompt.
+  const screenshot = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A'.repeat(300 * 1024) } }
+  const attachment = { type: 'attachment', attachment: { content: 'x'.repeat(250 * 1024) } }
+  for (const transcript of [
+    [{ ...typed(''), message: { role: 'user', content: [{ type: 'text', text: 'crop this logo' }, screenshot] } }],
+    [attachment, typed('crop this logo')],
+  ]) {
+    const fx = await fakeClaude({ transcript })
+    const h = await claudeWith(fx)
+    const [t] = await h.scanThreads()
+    assert.equal(t.title, 'crop this logo')
+    assert.equal(t.preview, 'crop this logo')
+    await fsp.rm(fx.root, { recursive: true, force: true })
+  }
+})
+
 /**
  * Kilo Code's store keeps whatever path the machine gave it, so the fixture uses one that is
  * absolute *here* rather than a Windows path pinned in place. The adapter refuses a cwd that is
