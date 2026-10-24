@@ -156,7 +156,21 @@ const actions = {
 
   select: (id) => select(id, {}),
 
-  focusThread: (id) => select(id, { fly: true }),
+  // A thread past the bot budget (Settings → Max bots) has nobody on the map to select, so a
+  // click on its row would otherwise do nothing at all: open it instead.
+  focusThread: async (id) => {
+    if (colony.agentFor(id)) return select(id, { fly: true })
+    const thread = threads.find((t) => t.id === id)
+    if (!thread) return
+    try {
+      const shown = await openThread(thread, settings.get('openIn'))
+      const name = thread.harnessName || 'your harness'
+      hud.toast(shown.via === 'terminal' ? `Opened ${name} in a terminal` : `Opened in ${name}`)
+      setTimeout(poll, 1800)
+    } catch (err) {
+      hud.toast(err.message || 'Could not open that thread', 'err')
+    }
+  },
 
   /**
    * A new thread in this repo. The desktop app opens an empty session with the folder as
