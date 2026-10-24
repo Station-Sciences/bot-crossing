@@ -1,5 +1,15 @@
 # Bot Crossing — your agent threads, as a colony
 
+> **Fork by [Tanishka Rajratna Randive](https://github.com/Tanishka15)**
+> ([IIT Ropar](https://www.iitrpr.ac.in/) — 2023AIB1018)
+>
+> This fork adds **remote SSH Codex session support** (scan and open threads on a remote dev
+> server over SSH), an **unarchive UI** (bring archived threads back to the map), and several
+> **bug fixes** to the open-thread flow on macOS. See **[CONTRIBUTIONS.md](CONTRIBUTIONS.md)**
+> for the full list of changes.
+>
+> Upstream: [Station-Sciences/bot-crossing](https://github.com/Station-Sciences/bot-crossing)
+
 **[botcrossing.com](https://botcrossing.com)**
 
 Every coding-agent thread on this machine is a little bot. They walk out of the ship, claim
@@ -13,6 +23,7 @@ is the only file it writes anywhere.
 > **Status:** published as-is. I built this for myself and cannot promise to maintain it —
 > issues and PRs are welcome but may go unanswered, and forking is an entirely reasonable
 > thing to do. [CONTRIBUTING.md](CONTRIBUTING.md) sets out what to expect.
+
 
 ## Run it
 
