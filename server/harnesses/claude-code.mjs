@@ -112,6 +112,49 @@ const CLI_PROJECTS = path.join(CLI_HOME, 'projects')
 /** One file per live CLI process: {pid, sessionId, cwd, ...}. Stale files outlive their pid. */
 const CLI_LIVE = path.join(CLI_HOME, 'sessions')
 
+/**
+ * Every CLI home on this machine. People who run several accounts point `CLAUDE_CONFIG_DIR` at
+ * sibling folders (`~/.claude-work`, ...), so without an explicit override every `~/.claude-*`
+ * holding a `projects/` folder is read alongside `~/.claude`.
+ */
+function cliHomes() {
+  if (process.env.CLAUDE_CONFIG_DIR) return [CLI_HOME]
+  let extra = []
+  try {
+    extra = readdirSync(HOME, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && d.name.startsWith('.claude-'))
+      .map((d) => path.join(HOME, d.name))
+      .filter((dir) => existsSync(path.join(dir, 'projects')))
+  } catch {}
+  return [CLI_HOME, ...extra]
+}
+
+/** Project folders across every CLI home. */
+async function cliProjectDirs() {
+  const out = []
+  for (const home of cliHomes()) out.push(...(await listDirs(path.join(home, 'projects'))))
+  return out
+}
+
+/** The CLI home whose `projects/` holds this session's transcript, or '' if none does. */
+async function cliHomeOf(sessionId) {
+  for (const home of cliHomes()) {
+    for (const projectDir of await listDirs(path.join(home, 'projects'))) {
+      if (await exists(path.join(projectDir, `${sessionId}.jsonl`))) return home
+    }
+  }
+  return ''
+}
+
+/** Live-process records across every CLI home. */
+async function cliLiveFiles() {
+  const out = []
+  for (const home of cliHomes()) {
+    out.push(...(await listFiles(path.join(home, 'sessions'), (n) => n.endsWith('.json'))))
+  }
+  return out
+}
+
 const HEAD_BYTES = 192 * 1024
 
 /**
@@ -273,7 +316,7 @@ function decodeProjectDir(name) {
  */
 async function scanTranscripts() {
   const byId = new Map()
-  for (const projectDir of await listDirs(CLI_PROJECTS)) {
+  for (const projectDir of await cliProjectDirs()) {
     for (const file of await listFiles(projectDir, (n) => n.endsWith('.jsonl'))) {
       const id = path.basename(file, '.jsonl')
       let stat
@@ -336,6 +379,14 @@ async function transcriptMeta(entry) {
   let meta
   try {
     meta = readTranscriptMeta(jsonLines(await readHead(entry.file, HEAD_BYTES)))
+    // Titles are appended as the session goes, so in a long transcript the current one sits
+    // near the end, far past the head. The last one written there is the one the CLI shows.
+    if (entry.size > HEAD_BYTES) {
+      for (const r of jsonLines(await readTail(entry.file, TAIL_BYTES))) {
+        if (r.customTitle) meta.customTitle = r.customTitle
+        if (r.aiTitle) meta.aiTitle = r.aiTitle
+      }
+    }
   } catch {
     meta = readTranscriptMeta([])
   }
@@ -349,7 +400,7 @@ async function transcriptMeta(entry) {
  */
 async function scanLiveSessions() {
   const live = new Set()
-  for (const file of await listFiles(CLI_LIVE, (n) => n.endsWith('.json'))) {
+  for (const file of await cliLiveFiles()) {
     let record
     try {
       record = JSON.parse(await fsp.readFile(file, 'utf8'))
@@ -405,7 +456,7 @@ async function scanSubagents(livePending) {
   if (!live.size) return byParent
   const seen = new Set()
   const cutoff = Date.now() - SUBAGENT_WINDOW_MS
-  for (const projectDir of await listDirs(CLI_PROJECTS)) {
+  for (const projectDir of await cliProjectDirs()) {
     for (const sessionDir of await listDirs(projectDir)) {
       const parent = path.basename(sessionDir)
       if (!live.has(parent)) continue
@@ -751,7 +802,7 @@ const cliBinary = () => findExecutable('claude', CLI_DIRS)
  * `scanLiveSessions`: files outlive their pids, so the pid is probed before it counts.
  */
 async function liveSessionPid(sessionId) {
-  for (const file of await listFiles(CLI_LIVE, (n) => n.endsWith('.json'))) {
+  for (const file of await cliLiveFiles()) {
     let record
     try {
       record = JSON.parse(await fsp.readFile(file, 'utf8'))
@@ -794,7 +845,14 @@ async function openThread(ref) {
   let command
   if (isCliId(cliSessionId)) {
     const bin = await cliBinary()
-    if (bin) command = { argv: [bin, '--resume', cliSessionId], cwd: typeof cwd === 'string' ? cwd : '' }
+    if (bin) {
+      // A transcript under a sibling home (`~/.claude-work`) only resumes with that home set.
+      const home = await cliHomeOf(cliSessionId)
+      const argv = home && home !== CLI_HOME
+        ? ['/usr/bin/env', `CLAUDE_CONFIG_DIR=${home}`, bin, '--resume', cliSessionId]
+        : [bin, '--resume', cliSessionId]
+      command = { argv, cwd: typeof cwd === 'string' ? cwd : '' }
+    }
   }
 
   if (!url && !command) return { ok: false, error: 'No openable session id on that thread' }
