@@ -2,15 +2,17 @@
  * Errands: the subagents a thread has out right now, as threads of their own.
  *
  * A harness that can see them hands back `subagents` on the parent — `{ id, task,
- * lastActivityAt }` each. This turns every one into an ordinary thread so the rest of the
- * colony needs to know nothing about them: an errand lands in its parent's zone because it
- * inherits the project, it walks out of the airlock on the poll it first appears because the
- * colony already stages an entrance for a thread it has not seen, and it leaves when the errand
- * ends the same way any thread that stops being scanned does.
+ * lastActivityAt }` each. This turns every one into an ordinary thread, so the rest of the
+ * colony needs to know almost nothing about them: an errand lands in its parent's zone because
+ * it inherits the project and carries `parentId`.
  *
- * Drawing them as small companions at the parent's building was the other option and was
- * rejected: a subagent is doing the same kind of work as everything else on the map, and a
- * second, smaller visual vocabulary for it buys nothing but a special case in the renderer.
+ * Where a subagent differs from a scanned thread is that it has no session of its own — nothing
+ * to open, no transcript, no life once its parent is done with it. So the colony reads `parentId`
+ * off it to keep it *at* the parent: it raises no building, it is born standing beside the
+ * parent's and stays confined to that zone rather than walking in from the ship and back out
+ * again, and when the errand ends it blinks out where it stood instead of trekking home. That
+ * confinement lives in `colony.js` (the parent's building, no slot of its own) and
+ * `astronauts.js` (born on the map, dropped rather than sent home), keyed on `isErrandId`.
  *
  * Pure and browser-free, because every way of getting it wrong is a way of forking a thread
  * into two astronauts — an id collision here would put one bot on the map twice and leave the

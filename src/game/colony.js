@@ -30,6 +30,7 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
+import { isErrandId } from './errands.js'
 
 /**
  * The colony: everything that turns a list of agent threads into a place.
@@ -490,7 +491,7 @@ export class Colony {
    */
   setThreads(threads, archivedIds = new Set(), hiddenProjects = new Set(), knownIds = new Set()) {
     const now = Date.now()
-    const live = liveThreadsForColony(threads, archivedIds, hiddenProjects)
+    const live = liveThreadsForColony(threads, archivedIds, hiddenProjects, now)
 
     // Group by repo, biggest project first so the busiest work lands nearest the middle.
     const byProject = new Map()
@@ -565,7 +566,9 @@ export class Colony {
       for (const id of [...slotOf.keys()]) if (!list.some((t) => t.id === id)) slotOf.delete(id)
       const taken = new Set(slotOf.values())
       for (const thread of list) {
-        if (slotOf.has(thread.id)) continue
+        // Subagents raise no building of their own — they work beside their parent's — so they
+        // claim no slot. Handing them one would leave a gap in the ring where nothing ever rises.
+        if (isErrandId(thread.id) || slotOf.has(thread.id)) continue
         let slot = 0
         while (taken.has(slot)) slot++
         taken.add(slot)
@@ -573,15 +576,33 @@ export class Colony {
       }
 
       list.forEach((thread) => {
-        const i = slotOf.get(thread.id)
         const status = statusFor(thread, now)
         if (stats[status] !== undefined) stats[status]++
         if (status === 'waiting' || status === 'blocked') urgent.add(plot.id)
         if (status === 'waiting' || status === 'blocked' || status === 'working') active.add(plot.id)
         stats.agents++
 
-        const building = this._syncBuilding(thread, plot, i)
-        seenBuildings.add(thread.id)
+        // A subagent has no session of its own to open, so it raises no building: it works
+        // beside its parent's, inside the parent's zone, rather than trekking in from the ship
+        // and back out again when it ends. If the parent is not on the map this poll it falls
+        // back to a building of its own, claiming a free slot on the way rather than the
+        // undefined one the slot pass skipped it over.
+        const errand = isErrandId(thread.id)
+        const parent = errand ? this.buildings.get(thread.parentId) : null
+        let building
+        if (parent) {
+          building = parent
+        } else {
+          let slot = slotOf.get(thread.id)
+          if (slot === undefined) {
+            const taken = new Set(slotOf.values())
+            slot = 0
+            while (taken.has(slot)) slot++
+            slotOf.set(thread.id, slot)
+          }
+          building = this._syncBuilding(thread, plot, slot)
+          seenBuildings.add(thread.id)
+        }
 
         roster.push({
           id: thread.id,
@@ -591,8 +612,13 @@ export class Colony {
           // Where the work actually is. A working astronaut circles it rather than standing
           // at one spot, so it needs the building, not just a place to stand near it.
           anchor: building.mesh.position.clone(),
-          // Already on the colony's books, so it does not need an entrance.
-          known: knownIds.has(thread.id),
+          // Already on the colony's books, or a subagent that belongs beside its parent —
+          // either way it does not walk in from the airlock and across the map.
+          known: knownIds.has(thread.id) || errand,
+          // Carried to the site pass below. A subagent shares its parent's building, so it
+          // needs that entry to stand by, and a flag to fan itself off to one side of it.
+          building,
+          errand,
         })
       })
     }
@@ -607,9 +633,22 @@ export class Colony {
     this.urgentPlots = urgent
     this.activePlots = active
     this._rebuildNavigation()
+    // How many subagents already stand at a given building, so several out at once fan around
+    // it rather than piling onto one spot.
+    const errandFan = new Map()
     for (const member of roster) {
-      const entry = this.buildings.get(member.id)
-      member.site = this._workSite(this.plots.get(entry.plot), entry, entry.slot)
+      const entry = member.building
+      const plot = this.plots.get(entry.plot)
+      if (member.errand) {
+        const key = `${entry.plot}:${entry.slot}`
+        const n = errandFan.get(key) || 0
+        errandFan.set(key, n + 1)
+        // Off to one side of the parent's stand angle, a fresh side per subagent, so the crew
+        // and its errands ring the one building instead of overlapping.
+        member.site = this._workSite(plot, entry, entry.slot, 0.9 + n * 1.7)
+      } else {
+        member.site = this._workSite(plot, entry, entry.slot)
+      }
     }
     this._syncFaunaSites()
     this.stats = { ...stats, done: stats.celebrating }
@@ -1005,8 +1044,12 @@ export class Colony {
     }
   }
 
-  /** Where the astronaut stands: just outside its building, facing in. */
-  _workSite(plot, entry, index) {
+  /**
+   * Where the astronaut stands: just outside its building, facing in. `spread` turns the stand
+   * angle a little, so several bodies sharing one building — a thread and the subagents it has
+   * out — ring it instead of landing on the same mark.
+   */
+  _workSite(plot, entry, index, spread = 0) {
     const b = entry.mesh.position
     // Outward from the *middle* of the zone rather than from its root tile: the root sits
     // on one edge of a grown blob, and standing spots measured from there all point the
@@ -1016,7 +1059,7 @@ export class Colony {
     const dz = b.z - middle.z
     const len = Math.hypot(dx, dz)
     // Buildings in the middle of a plot have no outward direction, so fan those out by index.
-    const a = len > 0.2 ? Math.atan2(dz, dx) : (index * 2.4) % (Math.PI * 2)
+    const a = (len > 0.2 ? Math.atan2(dz, dx) : (index * 2.4) % (Math.PI * 2)) + spread
     // Clear of the building's *own* footprint rather than a fixed 2.35: a big habitat blocks
     // more ground than a small one, and a standing spot inside that radius is a spot the
     // crew can never actually reach — it walks at the wall for as long as the thread lives.
