@@ -236,6 +236,27 @@ comes off the map, which on a machine with a few harnesses and a lot of checkout
 them. The sidebar keeps a count and a way back, and a repo returns to its own ground the moment
 a thread in it wakes up. *Hide dormant repos* in settings turns it off.
 
+**What gets scanned at all** is settled one tab over, under Settings → *Repos*, and is a
+different question from hiding. *Harnesses* is a toggle per agent — Claude Code, Codex, Cursor,
+and the rest. *Locations* is a tree of the folders those harnesses reported, each with a
+checkbox: uncheck one and everything under it stays out of the colony, check a child of it and
+only that branch comes back. Nothing is written to the harness either way, and until you change
+either, everything is included. A folder chain nobody can branch at is drawn as one row, so a
+checkout six levels below home costs one line rather than six; hover a row for its full path.
+
+A harness you switch off is still *read* — that is where the thread count beside its name comes
+from, so you can see what switching it back on would bring. What changes is that none of its
+threads reach the map. A harness that is not installed shows its switch off and greyed out,
+since there is nothing behind it either way.
+
+What the colony stores is the repos you switched *off*, by exact path. That is what keeps a repo
+sitting inside another repo — a dotfiles checkout at `~` is the common case — from taking
+everything beneath it off the map too. A repo found later is therefore on by default, even
+inside a folder you had unticked.
+
+*Hide* and *dormant*, by contrast, only apply to repos that were already scanned — they do
+not stop the scanner.
+
 Only one button in the panel is ever the accent colour: whichever action is the immediate
 one. `Esc` steps outward a notch at a time — the thread first, then its zone.
 

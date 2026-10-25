@@ -98,7 +98,33 @@ function mergeMap(base, local, remote) {
 }
 
 /**
+ * Both halves are plain sets of "things switched off", so both merge as sets.
+ *
+ * That they *are* plain sets is the point of storing exclusions as exact repository paths
+ * rather than as folder roots: no entry implies anything about any other, so a union cannot
+ * produce a pair that contradicts each other, and one tab unticking a project while the other
+ * unticks a harness leaves both unticked.
+ */
+function mergeRepositorySettings(base, local, remote) {
+  const b = asObject(base)
+  const l = asObject(local)
+  const r = asObject(remote)
+  const out = {}
+
+  const disabled = mergeSet(b.disabledHarnesses, l.disabledHarnesses, r.disabledHarnesses)
+  if (disabled.length) out.disabledHarnesses = disabled
+
+  const excluded = mergeSet(b.excludedPaths, l.excludedPaths, r.excludedPaths)
+  if (excluded.length) out.excludedPaths = excluded
+
+  return Object.keys(out).length ? out : null
+}
+
+/**
  * Merge one colony state, field by field.
+ *
+ * `repositorySettings` is merged key by key, each by the rule that fits it — see
+ * `mergeRepositorySettings`.
  *
  * `settings` is the deliberate exception: local wins, whole. It is a per-browser preference blob
  * — render scale, shadow quality, which planet — and two tabs are usually the same person on the
@@ -127,5 +153,6 @@ export function mergeState(base, local, remote) {
     hiddenProjects: mergeSet(b.hiddenProjects, l.hiddenProjects, r.hiddenProjects),
     viewedAt: mergeMap(b.viewedAt, l.viewedAt, r.viewedAt),
     settings: l.settings && typeof l.settings === 'object' ? l.settings : r.settings ?? null,
+    repositorySettings: mergeRepositorySettings(b.repositorySettings, l.repositorySettings, r.repositorySettings),
   }
 }

@@ -247,21 +247,78 @@ body {
 }
 
 .settings .body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.settings-sheet {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.settings-tabs {
+  display: flex;
+  flex: none;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-tab {
+  flex: 1;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 9px 4px 8px;
+  margin-bottom: -1px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.settings-tab[aria-selected='true'] {
+  color: var(--text);
+  border-bottom-color: var(--teal);
+}
+
+.settings-tab[aria-selected='false']:hover {
+  color: var(--muted);
+}
+
+.settings-sheet-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0 16px 16px;
-  flex: 1;
+  padding: 14px 16px 16px;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }
 
-.settings .body::-webkit-scrollbar {
+.settings-sheet-body::-webkit-scrollbar {
   width: 8px;
 }
 
-.settings .body::-webkit-scrollbar-thumb {
+.settings-sheet-body::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.14);
   border-radius: 8px;
+}
+
+.settings-pane[hidden] {
+  display: none;
+}
+
+.settings-pane > .group:first-child,
+.settings-pane > .scan-intro:first-child {
+  margin-top: 0;
 }
 
 .group {
@@ -275,6 +332,179 @@ body {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--dim);
+}
+
+.scan-intro,
+.scan-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dim);
+}
+
+.scan-harnesses {
+  display: flex;
+  flex-direction: column;
+}
+
+.scan-harness-row.muted .label > span:first-child {
+  color: var(--dim);
+}
+
+.scan-harness-row .toggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Locations tree. Indentation is the only structure it draws, so every other part of a row
+   is kept to the width of a glyph — there are only ~270px to spend and the names need them. */
+.loc-tree {
+  display: flex;
+  flex-direction: column;
+}
+
+.loc-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding-left: calc(var(--depth, 0) * 12px);
+  font-size: 12.5px;
+  line-height: 1.2;
+  /* Rows are reused across repaints, so these only ever run for the ones actually arriving
+     or leaving — everything that merely stayed put is never touched. Height is in here
+     because the space a row takes has to arrive at the same speed the row does; fading
+     something that already occupies its full height just moves the jolt to its neighbours. */
+  transition: height 400ms cubic-bezier(0.32, 0.72, 0, 1), opacity 380ms ease,
+    transform 400ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Both directions need the row to be free to be shorter than a row. */
+.loc-row.is-entering,
+.loc-row.is-animating,
+.loc-row.is-leaving {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.loc-row.is-entering {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.loc-row.is-leaving {
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loc-row {
+    transition: none;
+  }
+  .loc-row.is-entering {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.loc-twist {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.loc-twist.leaf {
+  cursor: default;
+}
+
+.loc-twist svg {
+  width: 11px;
+  height: 11px;
+  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.loc-row[aria-expanded='true'] > .loc-twist svg {
+  transform: rotate(90deg);
+}
+
+.loc-check {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  position: relative;
+  padding: 0;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.loc-check:hover {
+  border-color: var(--teal);
+}
+
+.loc-check[aria-checked='true'] {
+  background: var(--teal);
+  border-color: var(--teal);
+}
+
+/* Both states are ticked, because both mean "this is on the map". A minus said the opposite
+   of what mixed means. Part-way is the hollow tick: same mark, not yet filled in. */
+.loc-check[aria-checked='true']::after,
+.loc-check[aria-checked='mixed']::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 3px;
+  height: 7px;
+  border-width: 0 2px 2px 0;
+  border-style: solid;
+  transform: rotate(45deg);
+}
+
+.loc-check[aria-checked='true']::after {
+  border-color: var(--bg);
+}
+
+.loc-check[aria-checked='mixed'] {
+  border-color: var(--teal);
+  background: rgba(47, 212, 196, 0.16);
+}
+
+.loc-check[aria-checked='mixed']::after {
+  border-color: var(--teal);
+}
+
+.loc-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loc-row[aria-expanded] > .loc-name {
+  cursor: pointer;
+}
+
+.loc-row.off > .loc-name {
+  color: var(--dim);
+}
+
+.loc-count {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .row {
@@ -1497,7 +1727,9 @@ kbd {
     padding-top: 16px;
   }
   .settings .body .btn,
-  .settings .body select {
+  .settings .body select,
+  .settings-sheet-body .btn,
+  .settings-sheet-body select {
     min-height: 38px;
   }
 
