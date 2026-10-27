@@ -92,21 +92,56 @@ export async function exists(p) {
  *
  * It never looks inside an application bundle, and no caller should hand it a path that does.
  * Running a binary out of somebody else's `.app` is how you get the OS blaming us for it.
+ *
+ * On Windows a bare name is never the file. `claude` is `claude.exe` from the native installer or
+ * `claude.cmd` from npm — and npm leaves an extensionless `claude` beside the `.cmd` as well, a
+ * shell script for Git Bash that Windows cannot run. Matching that one handed a terminal a file it
+ * could only fail on. So a name with no extension is tried with the extensions Windows can launch,
+ * and never on its own.
+ *
+ * `BOT_CROSSING_CLI_DIRS`, when set, stands in for every caller's `extraDirs`, and empty means
+ * PATH alone. It is the same kind of override as `CLAUDE_CONFIG_DIR`: the suite uses it to test
+ * "no CLI installed" on a machine that has one in `/opt/homebrew/bin`, which an emptied PATH
+ * alone would still find. Kept here rather than per adapter, so one switch covers them all.
  */
 export async function findExecutable(name, extraDirs = []) {
   if (typeof name !== 'string' || !name) return null
   const explicit = name.includes('/') || name.includes(path.sep)
   const onPath = (process.env.PATH || '').split(path.delimiter).filter(Boolean)
-  for (const dir of explicit ? ['.'] : [...onPath, ...extraDirs]) {
-    const candidate = path.resolve(dir, name)
-    try {
-      await fsp.access(candidate, fsp.constants.X_OK)
-      if ((await fsp.stat(candidate)).isFile()) return candidate
-    } catch {
-      /* not here */
+  const override = process.env.BOT_CROSSING_CLI_DIRS
+  const installDirs = override === undefined ? extraDirs : override.split(path.delimiter).filter(Boolean)
+  const launchable = WINDOWS_EXTS.includes(path.extname(name).toLowerCase())
+  const names = process.platform === 'win32' && !launchable ? WINDOWS_EXTS.map((ext) => name + ext) : [name]
+
+  for (const dir of explicit ? ['.'] : [...onPath, ...installDirs]) {
+    for (const file of names) {
+      const candidate = path.resolve(dir, file)
+      if (await isExecutableFile(candidate)) return candidate
     }
   }
   return null
+}
+
+/** What CreateProcess will start, best first. PATHEXT also lists script hosts, which it will not. */
+const WINDOWS_EXTS = ['.exe', '.cmd', '.bat', '.com']
+
+async function isExecutableFile(candidate) {
+  try {
+    await fsp.access(candidate, fsp.constants.X_OK)
+  } catch {
+    return false
+  }
+  try {
+    return (await fsp.stat(candidate)).isFile()
+  } catch {
+    // An app execution alias — `wt.exe`, and anything else the Store installs into
+    // `%LOCALAPPDATA%\Microsoft\WindowsApps` — is a reparse point only CreateProcess follows:
+    // `stat` fails on it with EACCES while the alias itself is there and starts fine. Without
+    // this, Windows Terminal was never found and every terminal opened in plain `cmd.exe`.
+    if (process.platform !== 'win32') return false
+    const link = await fsp.lstat(candidate).catch(() => null)
+    return Boolean(link && !link.isDirectory())
+  }
 }
 
 export const num = (v) => {

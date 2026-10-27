@@ -9,6 +9,41 @@ const DIST = path.join(here, '..', 'dist')
 const PORT = Number(process.env.PORT) || 5274
 const HOST = process.env.BOT_CROSSING_HOST || '127.0.0.1'
 
+/**
+ * What the page is allowed to do, said once by the server so a slip in the page cannot widen it.
+ *
+ * The colony draws text it did not write — thread titles are people's prompts, previews are
+ * their first messages — and every place that text reaches `innerHTML` escapes it. This is the
+ * backstop for the day one does not: a script that is not the bundle does not run, the page
+ * cannot be framed, and nothing on it can post a form or fetch anywhere but here. Everything
+ * listed is something the page actually does — one module script, style attributes set from
+ * code, textures and the screenshot as data: and blob: URLs, models and audio from `/assets`.
+ * `connect-src` allows blob: because three's GLTFLoader unpacks a model's embedded textures
+ * into blob: URLs and fetches them back — without it every tree on the map is white. Nothing
+ * inline, no workers, no third party. The dev server (`vite`) is not this file and keeps its HMR.
+ */
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "style-src-attr 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "font-src 'self' data:",
+  "connect-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'",
+].join('; ')
+
+const SECURITY_HEADERS = {
+  'Content-Security-Policy': CSP,
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer',
+  'X-Frame-Options': 'DENY',
+}
+
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -36,7 +71,7 @@ const server = http.createServer(async (req, res) => {
 
   let file = resolveInDist(url.pathname)
   if (!file) {
-    res.writeHead(403).end('Forbidden')
+    res.writeHead(403, SECURITY_HEADERS).end('Forbidden')
     return
   }
   try {
@@ -51,10 +86,10 @@ const server = http.createServer(async (req, res) => {
     const cache = file.includes(`${path.sep}assets${path.sep}`)
       ? 'public, max-age=31536000, immutable'
       : 'no-cache'
-    res.writeHead(200, { 'Content-Type': type, 'Content-Length': body.length, 'Cache-Control': cache })
+    res.writeHead(200, { ...SECURITY_HEADERS, 'Content-Type': type, 'Content-Length': body.length, 'Cache-Control': cache })
     res.end(body)
   } catch {
-    res.writeHead(404, { 'Content-Type': 'text/plain' }).end('Not found')
+    res.writeHead(404, { ...SECURITY_HEADERS, 'Content-Type': 'text/plain' }).end('Not found')
   }
 })
 
