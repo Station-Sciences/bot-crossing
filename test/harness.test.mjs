@@ -1059,3 +1059,71 @@ test('a thread the desktop never named takes the first line of its prompt, and n
   assert.equal(titleFromPrompt(undefined), 'Untitled thread')
   assert.equal(titleFromPrompt('   \n  '), 'Untitled thread')
 })
+
+// ── several CLI homes ─────────────────────────────────────────────────────────
+
+/**
+ * One CLI home per account: `~/.claude` and a sibling `~/.claude-work`, the way people running
+ * two accounts point `CLAUDE_CONFIG_DIR` per shell. Imported with `HOME` moved and no
+ * `CLAUDE_CONFIG_DIR`, since setting it pins the adapter to that one home.
+ */
+async function claudeWithHomes(transcripts) {
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-homes-'))
+  for (const [home, project, id, records] of transcripts) {
+    const dir = path.join(root, home, 'projects', project)
+    await fsp.mkdir(dir, { recursive: true })
+    await fsp.writeFile(path.join(dir, `${id}.jsonl`), records.map((r) => JSON.stringify(r)).join('\n') + '\n')
+  }
+  const env = {
+    HOME: root,
+    CLAUDE_CONFIG_DIR: undefined,
+    BOT_CROSSING_CLAUDE_DESKTOP: path.join(root, 'no-desktop-app'),
+  }
+  const h = await withEnv(env, async () => (await import(`../server/harnesses/claude-code.mjs?${root}`)).default)
+  return { root, env, h }
+}
+
+const WORK_ID = '7a1e4c52-3b0d-4f61-9c2a-5e8b7d6f4a10'
+
+test('sessions under a sibling ~/.claude-* home are scanned alongside ~/.claude', async () => {
+  const { root, env, h } = await claudeWithHomes([
+    ['.claude', '-tmp-demo', CLI_UUID, [typed('from the default home')]],
+    ['.claude-work', '-tmp-demo', WORK_ID, [typed('from the work account')]],
+  ])
+  const threads = await withEnv(env, () => h.scanThreads())
+  assert.deepEqual(threads.map((t) => t.title).sort(), ['from the default home', 'from the work account'])
+  await fsp.rm(root, { recursive: true, force: true })
+})
+
+test('a session from a sibling home resumes with that home as CLAUDE_CONFIG_DIR', posixOnly, async () => {
+  const { root, env, h } = await claudeWithHomes([
+    ['.claude', '-tmp-demo', CLI_UUID, [typed('default')]],
+    ['.claude-work', '-tmp-demo', WORK_ID, [typed('work')]],
+  ])
+  await withFakeCli('claude', (bin) =>
+    withEnv(env, async () => {
+      const work = await h.openThread({ cliSessionId: WORK_ID, cwd: '/tmp/demo' })
+      assert.deepEqual(work.command.argv, [
+        '/usr/bin/env',
+        `CLAUDE_CONFIG_DIR=${path.join(root, '.claude-work')}`,
+        bin,
+        '--resume',
+        WORK_ID,
+      ])
+      const plain = await h.openThread({ cliSessionId: CLI_UUID, cwd: '/tmp/demo' })
+      assert.deepEqual(plain.command.argv, [bin, '--resume', CLI_UUID], 'the default home needs nothing extra')
+    })
+  )
+  await fsp.rm(root, { recursive: true, force: true })
+})
+
+test('a title written past the head of a long transcript is still found', async () => {
+  // The CLI appends `ai-title` records as a session goes, so in a long one the current title
+  // sits far past the 192 KB the head read covers.
+  const filler = { type: 'assistant', message: { content: [{ type: 'text', text: 'x'.repeat(8 * 1024) }] } }
+  const records = [typed('the opening prompt'), ...Array(40).fill(filler), { type: 'ai-title', aiTitle: 'The late title' }]
+  const { root, env, h } = await claudeWithHomes([['.claude', '-tmp-demo', CLI_UUID, records]])
+  const [thread] = await withEnv(env, () => h.scanThreads())
+  assert.equal(thread.title, 'The late title')
+  await fsp.rm(root, { recursive: true, force: true })
+})

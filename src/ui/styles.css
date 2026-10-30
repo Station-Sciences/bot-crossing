@@ -892,6 +892,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* A long hidden list would otherwise run off the bottom of the panel, which clips it. */
+  max-height: 40vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
 }
 
 .side .hidden-projects[hidden] { display: none; }
