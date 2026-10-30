@@ -7,7 +7,7 @@ const crew = [
   { id: 'a2', project: 'alpha', status: 'waiting', lastActivityAt: 10 },
   { id: 'b1', project: 'beta', status: 'blocked', lastActivityAt: 5 },
   { id: 'b2', project: 'beta', status: 'working', lastActivityAt: 90 },
-  { id: 'c1', project: 'gamma', status: 'approval', lastActivityAt: 20 },
+  { id: 'c1', project: 'gamma', status: 'waiting', lastActivityAt: 20 },
 ]
 const order = ['alpha', 'beta', 'gamma']
 const ids = (list) => list.map((c) => c.id)
@@ -42,10 +42,10 @@ test('busiest puts errored crew first, then most recent activity', () => {
   assert.deepEqual(ids(busiestOrder(crew)), ['b1', 'b2', 'a1', 'c1', 'a2'])
 })
 
-test('needs-you is errors, approvals, replies — longest waiting first within each', () => {
+test('needs-you is errors, then replies — longest waiting first within each', () => {
   const extra = [...crew, { id: 'a3', project: 'alpha', status: 'waiting', lastActivityAt: 2 }]
-  const needs = extra.filter((c) => ['blocked', 'approval', 'waiting'].includes(c.status))
-  assert.deepEqual(ids(needsYouOrder(needs)), ['b1', 'c1', 'a3', 'a2'])
+  const needs = extra.filter((c) => ['blocked', 'waiting'].includes(c.status))
+  assert.deepEqual(ids(needsYouOrder(needs)), ['b1', 'a3', 'a2', 'c1'])
 })
 
 test('a run walks its first-press snapshot even as the ranking and zone change', () => {
@@ -85,6 +85,6 @@ test('a run skips bots that left or stopped qualifying, and stays put when alone
 })
 
 test('busiest only reaches bots with something going on', () => {
-  for (const s of ['blocked', 'approval', 'waiting', 'working']) assert.ok(ACTIVE.includes(s), s)
+  for (const s of ['blocked', 'waiting', 'working']) assert.ok(ACTIVE.includes(s), s)
   for (const s of ['idle', 'sleeping', 'celebrating', 'leaving']) assert.ok(!ACTIVE.includes(s), s)
 })

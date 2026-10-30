@@ -453,7 +453,7 @@ export class Hud {
     on('#btn-help', 'click', () => this.toggleHelp())
     on('#btn-shot', 'click', () => this.actions.screenshot?.())
     on('#btn-home', 'click', () => this.actions.resetView?.())
-    on('#btn-next', 'click', () => this.actions.focusStatus?.('waiting'))
+    on('#btn-next', 'click', () => this.actions.focusNeedsYou?.())
     on('#btn-orbit', 'click', () => this.setOrbit(this.actions.toggleOrbit?.()))
     on('#btn-planet', 'click', () => this.actions.cyclePlanet?.())
     on('#btn-time', 'click', () => this.actions.cycleTime?.())
@@ -1403,8 +1403,8 @@ const TEMPLATE = `
       </div>
       <div>
         <div class="k"><span>Next needing you</span><kbd>N</kbd> <kbd>⇧N</kbd></div>
-        <div class="k"><span>Next crew</span><kbd>J</kbd> <kbd>⇧J</kbd></div>
-        <div class="k"><span>Busiest crew</span><kbd>B</kbd> <kbd>⇧B</kbd></div>
+        <div class="k"><span>Next bot</span><kbd>J</kbd> <kbd>⇧J</kbd></div>
+        <div class="k"><span>Busiest bot</span><kbd>B</kbd> <kbd>⇧B</kbd></div>
         <div class="k"><span>Next repo</span><kbd>K</kbd></div>
         <div class="k"><span>Find a thread in this repo</span><kbd>/</kbd> <kbd>F</kbd></div>
         <div class="k"><span>Open thread</span><kbd>Enter</kbd></div>

@@ -10,7 +10,7 @@
  */
 
 /** Everything the "needs you" key covers, most urgent first. */
-export const NEEDS_YOU = ['blocked', 'approval', 'waiting']
+export const NEEDS_YOU = ['blocked', 'waiting']
 
 /** What the busiest key covers: anyone stuck on you, plus anyone building. Idle, asleep and
  *  shipped bots have nothing going on to jump to. */
