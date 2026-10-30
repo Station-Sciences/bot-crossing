@@ -812,11 +812,11 @@ window.addEventListener('pointercancel', () => {
 })
 
 // Pressing on an astronaut used to suppress the camera, on the theory that grabbing one
-// should not also drag the world out from under it. But nothing is draggable *about* an
-// astronaut — a press is only ever the start of a selection or the start of a pan — so all
+// should not also drag the world out from under it. But a press that moves is a pan, so all
 // that suppression did was make the ground refuse to move whenever a drag happened to begin
-// on top of somebody. Selection is decided on release instead, where `wasClick` already
-// distinguishes a click from a drag.
+// on top of somebody. Only holding still lifts one (`liftAgent`), and only then is the camera
+// suppressed. Selection is decided on release, where `wasClick` already distinguishes a click
+// from a drag.
 engine.canvas.addEventListener('pointerup', (e) => {
   // A release that ends a lift is the end of a carry, not a click — even an unmoved one:
   // long-pressing a plot and thinking better of it should not also open its sidebar.
@@ -1156,7 +1156,9 @@ settings.onChange((changed, scope) => {
 
 engine.add({
   update(dt, elapsed) {
-    rig.setFollow(settings.get('followSelected') ? colony.agentFor(selectedId) : null)
+    // Not while a bot is carried: following it moves the ground under the cursor by every step
+    // it takes, so it chases a point that keeps moving away and the map runs off with it.
+    rig.setFollow(settings.get('followSelected') && !drag.agent ? colony.agentFor(selectedId) : null)
     rig.update(dt)
     // The world bends away from wherever the camera is looking, every frame, before the
     // colony projects anything to the screen.
