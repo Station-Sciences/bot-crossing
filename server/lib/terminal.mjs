@@ -32,6 +32,9 @@ const TERMINALS = {
   alacritty: (dir, cmd) => ['--working-directory', dir, '-e', ...cmd],
   ghostty: (dir, cmd) => [`--working-directory=${dir}`, '-e', ...cmd],
   wezterm: (dir, cmd) => ['start', '--cwd', dir, '--', ...cmd],
+  // A wezterm fork, and it takes wezterm's flags unchanged. It needs a key of its own anyway,
+  // since this table is looked up by the name of the binary.
+  kaku: (dir, cmd) => ['start', '--cwd', dir, '--', ...cmd],
   foot: (dir, cmd) => [`--working-directory=${dir}`, ...cmd],
   terminator: (dir, cmd) => [`--working-directory=${dir}`, '-x', ...cmd],
   xterm: (_dir, cmd) => ['-e', ...cmd],
@@ -43,7 +46,7 @@ const TERMINALS = {
 
 const GENERAL_ORDER = [
   'gnome-terminal', 'konsole', 'xfce4-terminal', 'mate-terminal', 'kitty', 'alacritty', 'ghostty',
-  'wezterm', 'foot', 'terminator', 'ptyxis', 'kgx', 'xterm', 'uxterm', 'urxvt', 'rxvt', 'st',
+  'wezterm', 'kaku', 'foot', 'terminator', 'ptyxis', 'kgx', 'xterm', 'uxterm', 'urxvt', 'rxvt', 'st',
 ]
 
 /**
@@ -149,8 +152,8 @@ function trySpawn(cmd, args, cwd) {
  * opens a window on the wrong command — worse than moving on to a terminal we do know.
  *
  * On macOS the desktop walk finds nothing, so only a named terminal works there — kitty,
- * alacritty, ghostty and wezterm take the same flags on both. Terminal.app and iTerm are not
- * driven: `open -a` cannot hand them an argv without a shell string in between.
+ * alacritty, ghostty, wezterm and kaku take the same flags on both. Terminal.app and iTerm are
+ * not driven: `open -a` cannot hand them an argv without a shell string in between.
  */
 export async function openInTerminal(argv, cwd) {
   // Windows shares none of the trivia below — no PATH walk over sixteen emulators, no display
@@ -175,9 +178,15 @@ export async function openInTerminal(argv, cwd) {
     'x-terminal-emulator',
   ]
   const names = [...new Set(preferred.filter(Boolean))]
+  // The two a person set deliberately. Skipping one of those is a different event from walking
+  // past a terminal nobody asked for, and is worth a different sentence at the end.
+  const asked = new Set(
+    [process.env.BOT_CROSSING_TERMINAL || '', process.env.TERMINAL || ''].filter(Boolean).map((n) => path.basename(n))
+  )
   const deadline = Date.now() + WALK_BUDGET_MS
   const tried = new Set()
   let lastError = ''
+  let unknownAsked = ''
   let ranOut = false
 
   for (const name of names) {
@@ -193,7 +202,10 @@ export async function openInTerminal(argv, cwd) {
     let args
     if (base === 'x-terminal-emulator') args = ['-e', ...argv]
     else if (TERMINALS[base]) args = TERMINALS[base](cwd, argv)
-    else continue
+    else {
+      if (asked.has(base) && !unknownAsked) unknownAsked = base
+      continue
+    }
 
     const result = await trySpawn(resolved, args, cwd)
     if (result.ok) return { ok: true }
@@ -202,6 +214,17 @@ export async function openInTerminal(argv, cwd) {
 
   if (ranOut) {
     return { ok: false, error: 'Gave up waiting for a terminal to open — is the display responding?' }
+  }
+  // Naming the terminal that was asked for and passed over. Without this the walk ends on the
+  // generic line, which tells somebody who has already set the variable to go and set it —
+  // and says nothing about the emulator sitting on their PATH that was skipped on purpose.
+  if (unknownAsked) {
+    return {
+      ok: false,
+      error:
+        `${unknownAsked} is installed but its flags are not known here, so it was skipped rather ` +
+        'than opened on the wrong command. Add it to TERMINALS in server/lib/terminal.mjs, or name one it knows.',
+    }
   }
   return {
     ok: false,
