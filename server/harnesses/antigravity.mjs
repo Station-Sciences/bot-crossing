@@ -55,6 +55,35 @@ function extractCwd(text) {
   return ''
 }
 
+/**
+ * Where each conversation ran. A transcript usually does not say, so most sessions arrived with
+ * no folder at all and shared one zone called "unknown". The CLI's prompt history beside `brain/`
+ * does: every prompt typed is a line of `{ display, timestamp, workspace, conversationId }`. Older
+ * lines carry no conversation id, so not every session is covered — those stay unknown rather
+ * than being guessed from whichever files the session happened to read.
+ *
+ * The folder a conversation started in wins. Re-read only when the file changes.
+ */
+const HISTORY = path.join(ANTIGRAVITY_HOME, 'history.jsonl')
+let history = { mtime: -1, workspaces: new Map() }
+async function workspaces() {
+  const st = await fsp.stat(HISTORY).catch(() => null)
+  if (!st) return new Map()
+  if (st.mtimeMs === history.mtime) return history.workspaces
+  const out = new Map()
+  try {
+    for (const r of jsonLines(await fsp.readFile(HISTORY, 'utf8'))) {
+      const id = r?.conversationId
+      const dir = r?.workspace
+      if (typeof id === 'string' && typeof dir === 'string' && path.isAbsolute(dir) && !out.has(id)) out.set(id, dir)
+    }
+  } catch {
+    /* mid-write, or gone */
+  }
+  history = { mtime: st.mtimeMs, workspaces: out }
+  return out
+}
+
 async function findTranscriptFile(sessionDir) {
   const candidates = [
     path.join(sessionDir, '.system_generated', 'logs', 'transcript.jsonl'),
@@ -127,13 +156,13 @@ async function facts(entry) {
 }
 
 async function scanThreads() {
-  const entries = await scanTranscripts()
+  const [entries, where] = await Promise.all([scanTranscripts(), workspaces()])
   const now = Date.now()
   const threads = []
 
   for (const entry of entries) {
     const f = await facts(entry)
-    const cwd = f.cwd || ''
+    const cwd = f.cwd || where.get(entry.id) || ''
     const projectPath = cwd
     const project = cwd ? path.basename(cwd) : 'unknown'
     const prompt = f.prompt

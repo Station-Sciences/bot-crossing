@@ -1,4 +1,8 @@
 import { FACE, walkingFaceAt } from './faces.js'
+import { isAirborne } from './carry.js'
+
+/** What being picked up looks like from the inside. */
+const TANTRUM = [FACE.alert, FACE.sad, FACE.error, FACE.sad]
 
 const WALK_BLINK = {
   [FACE.strollOpen]: FACE.strollBlink,
@@ -13,6 +17,10 @@ export function animateFace(agent, dt, anim = 1) {
 
   if (agent.state === 'spawning' && agent.stateAge < 0.8) {
     agent.faceFrame = FACE.boot
+    return
+  }
+  if (isAirborne(agent)) {
+    agent.faceFrame = TANTRUM[Math.floor(agent.faceTimer / 0.18) % TANTRUM.length]
     return
   }
   if (agent.state === 'leaving') {
