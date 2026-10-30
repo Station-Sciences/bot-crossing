@@ -23,72 +23,77 @@ import { exists, findExecutable, jsonLines, listDirs, listFiles, num, readHead, 
 const HOME = os.homedir()
 
 /**
- * Where the Claude desktop app keeps its data: Electron's `userData` for an app named
- * "Claude", which lands somewhere different on each OS.
- */
-function desktopDataDir() {
-  switch (process.platform) {
-    case 'win32':
-      return windowsDataDir()
-    case 'linux':
-      return path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'Claude')
-    default:
-      return macDataDir()
-  }
-}
-
-/**
- * macOS has two answers as well, because the app ships under two Electron app names: the
- * classic `Claude`, and `Claude-3p`, which is what a current install writes to. Both can be
- * present at once — an older install leaves an empty `Claude` behind, and an empty directory
- * is indistinguishable from the app never having been installed. Hard-coding `Claude` there
- * means every desktop thread is missed, and the colony falls back to drawing the CLI
- * transcript alone: no title, no model, and `Open` resorts to `claude://resume`, which
- * imports rather than navigates.
+ * Where Electron puts `userData` on each OS. The Claude desktop app's own folder is one level
+ * below, named after the app — see `desktopStores` for why that name is not a constant.
  *
- * So pick whichever one actually holds session records, the same rule windowsDataDir uses
- * below — and, like it, resolved once at import, so installing the app under the colony
- * wants a restart to be noticed.
- */
-function macDataDir() {
-  const support = path.join(HOME, 'Library', 'Application Support')
-  const candidates = [path.join(support, 'Claude-3p'), path.join(support, 'Claude')]
-  return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || candidates[1]
-}
-
-/**
- * Windows has two answers, because the app ships two ways.
- *
- * The classic installer writes to `%APPDATA%\Claude`, which is what Electron's `userData` means
- * everywhere else. Installed from the Microsoft Store the app is an MSIX package, and MSIX
- * *redirects* what a packaged app believes is `%APPDATA%` into its own private
- * `…\Packages\<family>\LocalCache\Roaming`. The app is installed, running and writing session
- * records — and `%APPDATA%\Claude` does not exist at all.
+ * On Windows there are two answers, because the app ships two ways. The classic installer writes
+ * to `%APPDATA%`, which is what Electron's `userData` means everywhere else. Installed from the
+ * Microsoft Store the app is an MSIX package, and MSIX *redirects* what a packaged app believes is
+ * `%APPDATA%` into its own private `…\Packages\<family>\LocalCache\Roaming`. The app is installed,
+ * running and writing session records — and `%APPDATA%\Claude` does not exist at all.
  *
  * The package folder is globbed rather than named: its suffix is a hash of the publisher, and
  * hard-coding that buys a constant which is right until it is not, and then wrong in a way that
  * looks exactly like the app having been uninstalled.
+ */
+function userDataRoots() {
+  switch (process.platform) {
+    case 'win32': {
+      const roots = [process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming')]
+      const packages = path.join(process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local'), 'Packages')
+      for (const name of dirNames(packages)) {
+        if (name.startsWith('Claude_')) roots.push(path.join(packages, name, 'LocalCache', 'Roaming'))
+      }
+      return roots
+    }
+    case 'linux':
+      return [process.env.XDG_CONFIG_HOME || path.join(HOME, '.config')]
+    default:
+      return [path.join(HOME, 'Library', 'Application Support')]
+  }
+}
+
+function dirNames(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Every session store the desktop app has written, as a list.
+ *
+ * The app's folder is not always called `Claude`. macOS ships it as `Claude-3p` too, and a second
+ * desktop profile gets a folder of its own, `Claude-<profile>`, beside the first. Two can be live
+ * at once, and an older install leaves a `Claude` behind that still holds a handful of records and
+ * its deletion markers. Picking the first folder that had records meant reading that leftover and
+ * missing the one in use: on one Windows machine that was 4 records of 103, so nearly every thread
+ * lost its title and `Open` fell back to `claude://resume`, which imports a copy of the thread
+ * rather than navigating to it.
+ *
+ * So every `Claude*` folder holding a `claude-code-sessions` store is read, and the scan merges
+ * them the way it already merges two records for one transcript.
  *
  * Resolved once, at import. Installing the app while the colony is running therefore wants a
- * restart to be noticed — a knowing trade, since the alternative is globbing `Packages` on every
- * scan to catch something that happens once.
+ * restart to be noticed — a knowing trade, since the alternative is globbing these folders on
+ * every scan to catch something that happens once. When nothing is found, the classic path stands
+ * in so every caller still works against a real path, which `detect()` reads as "no app".
  */
-function windowsDataDir() {
-  const roaming = path.join(process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming'), 'Claude')
-  const local = process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local')
-  const candidates = [roaming]
-  try {
-    for (const entry of readdirSync(path.join(local, 'Packages'), { withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name.startsWith('Claude_')) {
-        candidates.push(path.join(local, 'Packages', entry.name, 'LocalCache', 'Roaming', 'Claude'))
-      }
+function desktopStores() {
+  if (process.env.BOT_CROSSING_CLAUDE_DESKTOP) return [process.env.BOT_CROSSING_CLAUDE_DESKTOP]
+  const roots = userDataRoots()
+  const found = []
+  for (const root of roots) {
+    for (const name of dirNames(root)) {
+      if (!/^Claude(?:$|[-_ ])/.test(name)) continue
+      const store = path.join(root, name, 'claude-code-sessions')
+      if (existsSync(store)) found.push(store)
     }
-  } catch {
-    /* no Packages directory — this machine has no Store apps at all */
   }
-  // Whichever actually holds the records. Falling back to the unpackaged path keeps every
-  // caller working against a real path when neither exists, which `detect()` reads as "no app".
-  return candidates.find((dir) => existsSync(path.join(dir, 'claude-code-sessions'))) || roaming
+  return found.length ? found : [path.join(roots[0], 'Claude', 'claude-code-sessions')]
 }
 
 /**
@@ -98,9 +103,8 @@ function windowsDataDir() {
  * `BOT_CROSSING_CLAUDE_DESKTOP` names the session store itself, the sibling of Cursor's
  * `BOT_CROSSING_CURSOR_PROJECTS`.
  */
-/** Where the Claude desktop app keeps one JSON record per thread. */
-const DESKTOP_SESSIONS =
-  process.env.BOT_CROSSING_CLAUDE_DESKTOP || path.join(desktopDataDir(), 'claude-code-sessions')
+/** Where the Claude desktop app keeps one JSON record per thread — one store per app profile. */
+const DESKTOP_STORES = desktopStores()
 /** The CLI's home: `~/.claude`, unless the CLI itself has been told otherwise. */
 const CLI_HOME = process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude')
 /** Where the CLI keeps the raw transcript: ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl */
@@ -141,6 +145,22 @@ const SUBAGENT_HEAD_BYTES = 64 * 1024
 const ID = (raw) => `claude-code:${raw}`
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * A title from a prompt, for a thread the desktop app never named: its first line that says
+ * anything, and no more of it than every other harness keeps. The fallback used to hand back
+ * the whole prompt — a headless orchestrator run opens with three kilobytes of instructions, and six
+ * of those were a third of every poll's payload, laid out as a title.
+ */
+const TITLE_MAX = 120
+export function titleFromPrompt(prompt) {
+  const line = String(prompt || '')
+    .split('\n')
+    .map((text) => text.replace(/\s+/g, ' ').trim())
+    .find(Boolean)
+  return line ? line.slice(0, TITLE_MAX) : 'Untitled thread'
+}
+
 const DESKTOP_ID = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // The type check matters wherever an id came back from the page: `RegExp.test` stringifies, so a
 // one-element array holding a valid id would pass the pattern and then travel on as an array.
@@ -158,12 +178,12 @@ function firstText(content) {
   return ''
 }
 
-/** Strip <system-reminder>/<command-*> noise the CLI wraps around prompts. */
-function cleanPrompt(s) {
-  return String(s)
-    .replace(/<([a-z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
+/** Strip <system-reminder>/<command-*> noise the CLI wraps around prompts, keeping line breaks. */
+const stripNoise = (text) => String(text).replace(/<([a-z][\w-]*)(?:\s[^>]*)?>[\s\S]*?<\/\1>/g, ' ')
+
+/** A prompt as one line of text: the noise gone and every run of whitespace a single space. */
+function cleanPrompt(text) {
+  return stripNoise(text).replace(/\s+/g, ' ').trim()
 }
 
 /**
@@ -171,7 +191,10 @@ function cleanPrompt(s) {
  * Mirrors the CLI's own title precedence: custom > ai > summary > first prompt.
  */
 function readTranscriptMeta(records) {
-  const meta = { customTitle: '', aiTitle: '', summary: '', firstPrompt: '', cwd: '', gitBranch: '', startedAt: 0 }
+  const meta = {
+    customTitle: '', aiTitle: '', summary: '', firstPrompt: '', promptTitle: '',
+    cwd: '', gitBranch: '', startedAt: 0,
+  }
   for (const r of records) {
     if (!meta.customTitle && r.customTitle) meta.customTitle = r.customTitle
     if (!meta.aiTitle && r.aiTitle) meta.aiTitle = r.aiTitle
@@ -183,8 +206,15 @@ function readTranscriptMeta(records) {
       if (!Number.isNaN(t)) meta.startedAt = t
     }
     if (!meta.firstPrompt && r.type === 'user' && r.message) {
-      const text = cleanPrompt(firstText(r.message.content))
-      if (text && !text.startsWith('<')) meta.firstPrompt = text
+      const raw = firstText(r.message.content)
+      const text = cleanPrompt(raw)
+
+      if (text && !text.startsWith('<')) {
+        meta.firstPrompt = text
+        // Taken here, from the raw text: `firstPrompt` has its line breaks collapsed, so a title
+        // worked out from it later could never find the first line.
+        meta.promptTitle = titleFromPrompt(stripNoise(raw))
+      }
     }
   }
   return meta
@@ -201,7 +231,21 @@ function splitWorktree(cwd) {
   return { root: cwd.slice(0, m.index), worktree: m[1] }
 }
 
+/**
+ * The desktop app's throwaway sessions each get a fresh folder of their own,
+ * `<userData>/scratch-workspaces/<account>/<org>/scratch-2026-09-22-a1b2c3`. Read as projects,
+ * every one of them claimed a hex zone for a single bot — twenty-one zones on one machine — so
+ * they share one plot, the way a repo's worktrees share its plot, and the folder rides along as
+ * the worktree tag.
+ */
+const SCRATCH = /^(.*[\\/]scratch-workspaces)[\\/](?:[^\\/]+[\\/]){2}(scratch-[^\\/]+)[\\/]?$/
+
+/** The folder that plot stands on: the app's own, so nothing is started in it. */
+const SCRATCH_ROOT = /[\\/]scratch-workspaces[\\/]?$/
+
 function projectOf(cwd, originCwd) {
+  const scratch = SCRATCH.exec(originCwd || cwd || '')
+  if (scratch) return { projectPath: scratch[1], project: 'Scratch', worktree: scratch[2] }
   const { root, worktree } = splitWorktree(cwd || '')
   const projectPath = originCwd || root || cwd || ''
   return { projectPath, project: path.basename(projectPath) || projectPath || 'unknown', worktree }
@@ -217,7 +261,16 @@ function decodeProjectDir(name) {
   return name.startsWith('-') ? '/' + name.slice(1).replace(/-/g, '/') : name
 }
 
-/** Index every CLI transcript on disk, keyed by session id. */
+/**
+ * Index every CLI transcript on disk, keyed by session id.
+ *
+ * A session id is only unique *per directory* it has ever run in — resuming it from a git
+ * worktree, or any other second checkout, writes a second `<id>.jsonl` under a different
+ * `projectDir` rather than moving the first. Without a tiebreaker the later `listDirs` entry
+ * would win regardless of which copy is actually live, so a worktree's now-stale copy could
+ * overwrite the real one just by sorting after it. The newer file is always the live one: an
+ * abandoned copy stops being written to the moment the session moves on.
+ */
 async function scanTranscripts() {
   const byId = new Map()
   for (const projectDir of await listDirs(CLI_PROJECTS)) {
@@ -229,6 +282,8 @@ async function scanTranscripts() {
       } catch {
         continue
       }
+      const existing = byId.get(id)
+      if (existing && existing.mtime >= stat.mtimeMs) continue
       byId.set(id, { id, file, projectDir, size: stat.size, mtime: stat.mtimeMs })
     }
   }
@@ -389,11 +444,48 @@ async function scanSubagents(livePending) {
 const DELETED_MARKER = /^deleted_(.+)$/
 const isRecord = (name) => name.startsWith('local_') && name.endsWith('.json')
 
+/**
+ * The fields of a desktop record the scan actually reads. A record is not small: the app
+ * writes its whole MCP connector configuration into each one (`remoteMcpServersConfig`, close
+ * to a megabyte on a machine with a dozen connectors), and on this machine the store came to
+ * 148 MB over 204 records — read and parsed in full on every 15-second poll, for perhaps
+ * 60 KB of fields anyone looks at. Half of every scan, and most of the process's memory.
+ * Keeping only these means the cache below holds kilobytes, not the store.
+ */
+function pickRecord(r) {
+  return {
+    sessionId: r.sessionId,
+    cliSessionId: r.cliSessionId,
+    cwd: r.cwd,
+    originCwd: r.originCwd,
+    title: r.title,
+    bridgeSessionIds: r.bridgeSessionIds,
+    model: r.model,
+    effort: r.effort,
+    createdAt: r.createdAt,
+    lastActivityAt: r.lastActivityAt,
+    lastFocusedAt: r.lastFocusedAt,
+    error: r.error,
+    isStarred: r.isStarred,
+    scheduledTaskId: r.scheduledTaskId,
+    prState: r.prState,
+    isArchived: r.isArchived,
+  }
+}
+
+/**
+ * Parsed records, keyed by file and pinned to the mtime they were read at — the same shape
+ * `metaCache` already gives transcripts. A steady-state poll is then 204 stats and no reads.
+ */
+const recordCache = new Map()
+
 /** Every thread the desktop app has a record for, and the ids of the ones it has deleted. */
 async function scanDesktopSessions() {
   const records = []
   const deleted = new Set()
-  for (const account of await listDirs(DESKTOP_SESSIONS)) {
+  const seen = new Set()
+  const accounts = (await Promise.all(DESKTOP_STORES.map((store) => listDirs(store)))).flat()
+  for (const account of accounts) {
     for (const org of await listDirs(account)) {
       for (const file of await listFiles(org, (n) => isRecord(n) || DELETED_MARKER.test(n))) {
         const marker = DELETED_MARKER.exec(path.basename(file))
@@ -402,14 +494,32 @@ async function scanDesktopSessions() {
           if (isCliId(marker[1])) deleted.add(marker[1])
           continue
         }
+        seen.add(file)
+        let stat
         try {
-          records.push(JSON.parse(await fsp.readFile(file, 'utf8')))
+          stat = await fsp.stat(file)
         } catch {
-          /* a session mid-write — skip this pass */
+          continue
+        }
+        const cached = recordCache.get(file)
+        if (cached && cached.mtime === stat.mtimeMs) {
+          records.push(cached.record)
+          continue
+        }
+        try {
+          const record = pickRecord(JSON.parse(await fsp.readFile(file, 'utf8')))
+          recordCache.set(file, { mtime: stat.mtimeMs, record })
+          records.push(record)
+        } catch {
+          // A session mid-write. The previous read is still the best account of this thread —
+          // without it the thread blinks off the map for a poll every time the app saves.
+          if (cached) records.push(cached.record)
         }
       }
     }
   }
+  // A record the app has since removed must not live on in here.
+  for (const file of recordCache.keys()) if (!seen.has(file)) recordCache.delete(file)
   return { records, deleted }
 }
 
@@ -501,7 +611,7 @@ async function scanThreads() {
       desktopSessionIds: s.sessionId ? [s.sessionId] : [],
       titled: Boolean(s.title),
       bridgeSessionId: (s.bridgeSessionIds && s.bridgeSessionIds[0]) || '',
-      title: s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || meta?.firstPrompt || 'Untitled thread',
+      title: s.title || meta?.customTitle || meta?.aiTitle || meta?.summary || meta?.promptTitle || 'Untitled thread',
       preview: meta?.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,
@@ -550,7 +660,7 @@ async function scanThreads() {
       desktopSessionIds: [],
       titled: Boolean(meta.customTitle || meta.aiTitle),
       bridgeSessionId: '',
-      title: meta.customTitle || meta.aiTitle || meta.summary || meta.firstPrompt || 'Untitled thread',
+      title: meta.customTitle || meta.aiTitle || meta.summary || meta.promptTitle || 'Untitled thread',
       preview: meta.firstPrompt ? meta.firstPrompt.slice(0, 240) : '',
       project,
       projectPath,
@@ -697,6 +807,12 @@ async function openThread(ref) {
  * written: the desktop app just opens an empty session with that folder as its workspace.
  */
 async function newSession(dir) {
+  // The Scratch plot's folder holds the desktop app's own scratch sessions. A session opened on
+  // it, or the CLI run in it, would work inside the app's data rather than in a repo of yours.
+  if (SCRATCH_ROOT.test(dir)) {
+    return { ok: false, error: 'Scratch threads have no folder of their own; start one in the Claude app' }
+  }
+
   const url = `claude://code/new?${new URLSearchParams({ folder: dir })}`
   const bin = await cliBinary()
   const command = bin ? { argv: [bin], cwd: dir } : undefined
@@ -707,9 +823,9 @@ export default {
   id: 'claude-code',
   name: 'Claude Code',
   /** Only claim this machine if one of the two stores is actually there. */
-  detect: async () => (await exists(DESKTOP_SESSIONS)) || (await exists(CLI_PROJECTS)),
+  detect: async () => (await Promise.all(DESKTOP_STORES.map(exists))).some(Boolean) || (await exists(CLI_PROJECTS)),
   scanThreads,
   openThread,
   newSession,
-  paths: { DESKTOP_SESSIONS, CLI_PROJECTS, CLI_LIVE },
+  paths: { DESKTOP_STORES, CLI_PROJECTS, CLI_LIVE },
 }

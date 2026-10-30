@@ -15,10 +15,10 @@ import opencode from '../server/harnesses/opencode.mjs'
 
 import { HARNESSES } from '../server/harnesses/index.mjs'
 import codex from '../server/harnesses/codex.mjs'
-import claudeCode from '../server/harnesses/claude-code.mjs'
+import claudeCode, { titleFromPrompt } from '../server/harnesses/claude-code.mjs'
 import { readTail, findExecutable } from '../server/lib/fsutil.mjs'
 import { schemeOf } from '../server/lib/xdg.mjs'
-import { withEnv, withPlatform, fakeExecutable } from './support/env.mjs'
+import { withEnv, withNoCli, withPlatform, fakeExecutable } from './support/env.mjs'
 
 // ── the contract ──────────────────────────────────────────────────────────────
 
@@ -103,13 +103,10 @@ test('codex offers `codex resume <id>` in the thread cwd alongside its deep link
 })
 
 test('codex with no CLI installed offers the deep link alone', posixOnly, async () => {
-  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-nocli-'))
-  try {
-    const opened = await withEnv({ PATH: dir }, () => codex.openThread({ sessionId: SESSION_ID }))
+  await withNoCli(async () => {
+    const opened = await codex.openThread({ sessionId: SESSION_ID })
     assert.deepEqual(opened, { ok: true, url: `codex://threads/${SESSION_ID}`, command: undefined })
-  } finally {
-    await fsp.rm(dir, { recursive: true, force: true })
-  }
+  })
 })
 
 // ── a Codex install, faked on disk ────────────────────────────────────────────
@@ -232,16 +229,23 @@ async function fakeClaudeWithErrands(errandRecords) {
   return home
 }
 
+/**
+ * Both stores are named outright rather than reached through `HOME`: Windows finds the home
+ * directory through `USERPROFILE` and the desktop app through `APPDATA`, so moving `HOME` alone
+ * left this scanning the real machine's threads there. The paths are read once, at import.
+ */
 async function claudeWithErrands(home) {
-  process.env.HOME = home
-  const mod = await import(`../server/harnesses/claude-code.mjs?${home}`)
-  return mod.default
+  const env = {
+    HOME: home,
+    CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+    BOT_CROSSING_CLAUDE_DESKTOP: path.join(home, 'no-desktop-app'),
+  }
+  return withEnv(env, async () => (await import(`../server/harnesses/claude-code.mjs?${home}`)).default)
 }
 
 const midTurn = { type: 'assistant', message: { content: [{ type: 'tool_use' }], stop_reason: 'tool_use' } }
 
 test('a running subagent is reported with the brief it was given, however long that is', async () => {
-  const realHome = process.env.HOME
   // Longer than any head this could reasonably read at once: a brief that is truncated away
   // yields no task at all, because readHead drops the line it lands in the middle of.
   const brief = `repair the raster pipeline ${'x'.repeat(20 * 1024)}`
@@ -251,12 +255,10 @@ test('a running subagent is reported with the brief it was given, however long t
   assert.equal(thread.subagents?.length, 1)
   assert.equal(thread.subagents[0].id, 'agent-abc')
   assert.match(thread.subagents[0].task, /^repair the raster pipeline/)
-  process.env.HOME = realHome
   await fsp.rm(home, { recursive: true, force: true })
 })
 
 test('a subagent that has handed its answer back is finished, however recently it wrote', async () => {
-  const realHome = process.env.HOME
   const home = await fakeClaudeWithErrands([
     { type: 'user', message: { content: 'summarise the diff' } },
     { type: 'assistant', message: { content: [{ type: 'text', text: 'here it is' }], stop_reason: 'end_turn' } },
@@ -264,7 +266,6 @@ test('a subagent that has handed its answer back is finished, however recently i
   const h = await claudeWithErrands(home)
   const [thread] = await h.scanThreads()
   assert.equal(thread.subagents, undefined, 'a finished errand is not an astronaut on the map')
-  process.env.HOME = realHome
   await fsp.rm(home, { recursive: true, force: true })
 })
 
@@ -282,6 +283,23 @@ test('findExecutable refuses junk, and refuses a directory that sits on PATH', a
   assert.equal(await findExecutable(null), null)
   assert.equal(await findExecutable('.'), null)
   assert.equal(await findExecutable('definitely-not-a-real-binary-xyz'), null)
+})
+
+test('BOT_CROSSING_CLI_DIRS stands in for every install dir an adapter names, and empty means PATH alone', async () => {
+  const installed = await fsp.mkdtemp(path.join(os.tmpdir(), 'install-dir-'))
+  const emptyPath = await fsp.mkdtemp(path.join(os.tmpdir(), 'empty-path-'))
+  try {
+    const cli = await fakeExecutable(installed, 'some-cli')
+    await withEnv({ PATH: emptyPath, BOT_CROSSING_CLI_DIRS: undefined }, async () => {
+      assert.equal(await findExecutable('some-cli', [installed]), cli.file, 'unset: the adapter\'s own dirs')
+    })
+    await withEnv({ PATH: emptyPath, BOT_CROSSING_CLI_DIRS: '' }, async () => {
+      assert.equal(await findExecutable('some-cli', [installed]), null, 'empty: a real install is not found')
+    })
+  } finally {
+    await fsp.rm(installed, { recursive: true, force: true })
+    await fsp.rm(emptyPath, { recursive: true, force: true })
+  }
 })
 
 // ── Cursor, faked on disk ─────────────────────────────────────────────────────
@@ -586,6 +604,24 @@ test('Antigravity opens through antigravity:// scheme and handles invalid refs',
   await fsp.rm(home, { recursive: true, force: true })
 })
 
+test('an Antigravity session with no folder in its transcript takes the one its prompt history names', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'tidy up' }])
+  const repo = path.join(home, 'work', 'site')
+  const lines = [
+    // An older line with no conversation id says nothing about any session.
+    { display: 'hello', timestamp: 1, workspace: path.join(home, 'elsewhere') },
+    { display: 'tidy up', timestamp: 2, workspace: repo, conversationId: SESSION_ID },
+    { display: 'and the footer', timestamp: 3, workspace: path.join(home, 'later'), conversationId: SESSION_ID },
+  ]
+  await fsp.writeFile(path.join(home, 'history.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.projectPath, repo, 'the folder the conversation started in')
+  assert.equal(t.project, 'site')
+  assert.equal(t.ref.cwd, repo, 'resuming from a terminal happens there too')
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
 // ── Claude Code, faked on disk ────────────────────────────────────────────────
 
 /**
@@ -634,6 +670,37 @@ async function listing(dir) {
   return out.sort()
 }
 
+test('on a duplicate session id across two project dirs, the newer file wins', async () => {
+  // A session id is only unique per directory it has run in: resuming one from a git worktree
+  // writes a second `<id>.jsonl` under a different project dir rather than moving the first,
+  // and relocating it back out leaves the worktree's copy stale. Directory names are chosen so
+  // that a plain "last one written to the map wins" (no mtime check at all) would pick the
+  // stale one — `-tmp-worktree` sorts after `-tmp-live` in `readdir`'s own order.
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-dup-'))
+  const configDir = path.join(root, 'claude')
+  const liveProject = path.join(configDir, 'projects', '-tmp-live')
+  const staleProject = path.join(configDir, 'projects', '-tmp-worktree')
+  await fsp.mkdir(liveProject, { recursive: true })
+  await fsp.mkdir(staleProject, { recursive: true })
+  await fsp.writeFile(
+    path.join(liveProject, `${SESSION_ID}.jsonl`),
+    `${JSON.stringify(typed('the live session, still being written'))}\n`
+  )
+  await fsp.writeFile(
+    path.join(staleProject, `${SESSION_ID}.jsonl`),
+    `${JSON.stringify(typed('stale copy left behind in a worktree'))}\n`
+  )
+  const now = Date.now()
+  await fsp.utimes(path.join(staleProject, `${SESSION_ID}.jsonl`), new Date(now - 60_000), new Date(now - 60_000))
+  await fsp.utimes(path.join(liveProject, `${SESSION_ID}.jsonl`), new Date(now), new Date(now))
+
+  const h = await claudeWith({ configDir, desktop: path.join(root, 'claude-code-sessions') })
+  const threads = await h.scanThreads()
+  assert.equal(threads.length, 1, 'one session id is one thread, whichever directory won')
+  assert.equal(threads[0].preview, 'the live session, still being written')
+  await fsp.rm(root, { recursive: true, force: true })
+})
+
 test('a thread deleted in the desktop app is reported archived, not dropped', async () => {
   const fx = await fakeClaude({ transcript: [typed('tidy the ledger')] })
   const h = await claudeWith(fx)
@@ -675,6 +742,139 @@ test('a record the app still holds outranks a leftover deletion marker', async (
   assert.equal(t.source, 'desktop')
   assert.equal(t.title, 'Back again')
   assert.equal(t.archived, false, 'a record that exists is the newer truth')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test('every desktop profile is read, not only the first folder that has records', async () => {
+  // A leftover `Claude` with one record beside the profile in use. Reading only the first had the
+  // colony miss nearly every titled thread on the machine this was found on.
+  const fx = await fakeClaude({ transcript: [typed('ship the profile fix')] })
+  const config = path.join(fx.root, 'xdg')
+  const record = (sessionId, extra) => ({ sessionId, cwd: '/tmp/demo', createdAt: 1, lastActivityAt: 2, ...extra })
+  const stores = {
+    Claude: record('local_11111111-1111-4111-8111-111111111111', { title: 'From the old install' }),
+    'Claude-work': record('local_22222222-2222-4222-8222-222222222222', { title: 'From the profile', cliSessionId: SESSION_ID }),
+    'Claude Notes': null,
+  }
+  for (const [name, r] of Object.entries(stores)) {
+    const org = path.join(config, name, ...(r ? ['claude-code-sessions', 'account', 'org'] : []))
+    await fsp.mkdir(org, { recursive: true })
+    if (r) await fsp.writeFile(path.join(org, `${r.sessionId}.json`), JSON.stringify(r))
+  }
+  const env = { XDG_CONFIG_HOME: config, CLAUDE_CONFIG_DIR: fx.configDir, BOT_CROSSING_CLAUDE_DESKTOP: undefined }
+  const h = await withEnv(env, () =>
+    withPlatform('linux', async () => (await import(`../server/harnesses/claude-code.mjs?profiles-${fx.root}`)).default)
+  )
+  assert.equal(h.paths.DESKTOP_STORES.length, 2, 'only folders holding a session store count')
+  const titles = (await h.scanThreads()).map((t) => t.title).sort()
+  assert.deepEqual(titles, ['From the old install', 'From the profile'])
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test("the desktop app's scratch sessions share one plot instead of one each", async () => {
+  const scratch = (name) => path.join('/x', 'Claude', 'scratch-workspaces', 'acct', 'org', name)
+  const fx = await fakeClaude({ transcript: [{ ...typed('a quick question'), cwd: scratch('scratch-2026-09-22-a1b2c3') }] })
+  const h = await claudeWith(fx)
+  const [t] = await h.scanThreads()
+  assert.equal(t.project, 'Scratch')
+  assert.equal(t.projectPath, path.join('/x', 'Claude', 'scratch-workspaces'))
+  assert.equal(t.worktree, 'scratch-2026-09-22-a1b2c3')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test("a new thread is not started in the scratch plot's folder, which is the desktop app's own", async () => {
+  // The Scratch plot stands on `<userData>/scratch-workspaces`, so New conversation there would
+  // open a session, or run the CLI, inside the Claude app's data. Every other folder still opens.
+  const scratch = path.join('/x', 'Claude', 'scratch-workspaces', 'acct', 'org', 'scratch-2026-09-22-a1b2c3')
+  const fx = await fakeClaude({ transcript: [{ ...typed('a quick question'), cwd: scratch }] })
+  const h = await claudeWith(fx)
+  const [t] = await h.scanThreads()
+  const refused = await h.newSession(t.projectPath)
+  assert.equal(refused.ok, false)
+  assert.match(refused.error, /Claude app/)
+  assert.equal((await h.newSession('/tmp/demo')).ok, true)
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+// ── Cursor's encoded folder names ─────────────────────────────────────────────
+
+/**
+ * Cursor turns every run of anything but a letter or digit into one dash, so `C:\` is `c-` and
+ * `data_pipeline_v2` is `data-pipeline-v2`. Only the folders on disk can say which dash
+ * was which.
+ */
+test('Cursor folder names decode against the disk, underscores and drive letters included', async () => {
+  const { decodeFolder } = await import('../server/harnesses/cursor.mjs')
+  const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'cursor-decode-'))
+  try {
+    await fsp.mkdir(path.join(root, 'Users', 'me', 'projects', 'data_pipeline_v2'), { recursive: true })
+    await fsp.mkdir(path.join(root, 'Users', 'me', 'emra-app-builder'), { recursive: true })
+    const at = (...parts) => path.join(root, ...parts)
+
+    const windows = { windows: true, root }
+    assert.equal(await decodeFolder('c-Users-me-projects-data-pipeline-v2', windows), at('Users', 'me', 'projects', 'data_pipeline_v2'))
+    assert.equal(await decodeFolder('C-users-ME-emra-app-builder', windows), at('Users', 'me', 'emra-app-builder'), 'case is folded on Windows')
+
+    const posix = { windows: false, root }
+    assert.equal(await decodeFolder('Users-me-emra-app-builder', posix), at('Users', 'me', 'emra-app-builder'))
+    // Gone from disk: the deepest folder that still exists, and the rest as one dashed name.
+    assert.equal(await decodeFolder('Users-me-old-site-2025', posix), at('Users', 'me', 'old-site-2025'))
+  } finally {
+    await fsp.rm(root, { recursive: true, force: true })
+  }
+})
+
+// ── finding a CLI on Windows ──────────────────────────────────────────────────
+
+test('on Windows a bare name finds the .cmd npm installs, never the shell script beside it', async () => {
+  const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'pathext-'))
+  try {
+    // What `npm i -g` leaves: an extensionless script for Git Bash, and the one Windows can run.
+    await fsp.writeFile(path.join(dir, 'claude'), '#!/bin/sh\n', { mode: 0o755 })
+    await fsp.writeFile(path.join(dir, 'claude.cmd'), '@echo off\r\n', { mode: 0o755 })
+    const found = await withEnv({ PATH: dir }, () => withPlatform('win32', () => findExecutable('claude')))
+    assert.equal(found, path.join(dir, 'claude.cmd'))
+    // A name that already carries its extension is taken as written.
+    const named = await withEnv({ PATH: dir }, () => withPlatform('win32', () => findExecutable('claude.cmd')))
+    assert.equal(named, path.join(dir, 'claude.cmd'))
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('a desktop record is re-read only when it changes, and a mid-write keeps the last good copy', async () => {
+  const record = {
+    sessionId: 'local_2df3987c-02d3-405e-b8f5-da30e3835213',
+    cliSessionId: SESSION_ID,
+    cwd: '/tmp/demo',
+    title: 'First title',
+    createdAt: 1,
+    lastActivityAt: 2,
+    lastFocusedAt: 3,
+    // What makes real records a megabyte each. Must not survive into the thread.
+    remoteMcpServersConfig: { padding: 'x'.repeat(4096) },
+  }
+  const fx = await fakeClaude({ transcript: [typed('hello')], records: [record] })
+  const file = path.join(fx.org, `${record.sessionId}.json`)
+  const h = await claudeWith(fx)
+
+  let [t] = await h.scanThreads()
+  assert.equal(t.title, 'First title')
+  assert.equal(t.remoteMcpServersConfig, undefined, 'only the fields the scan reads are kept')
+
+  // A real change to the record, with an mtime the cache cannot mistake for the old one.
+  await fsp.writeFile(file, JSON.stringify({ ...record, title: 'Second title' }))
+  await fsp.utimes(file, new Date(), new Date(Date.now() + 5000))
+  ;[t] = await h.scanThreads()
+  assert.equal(t.title, 'Second title', 'a changed mtime invalidates the cache')
+
+  // The app mid-save: the file is momentarily not JSON. Before the cache this thread dropped off
+  // the map for a poll; now the previous read stands in until the write completes.
+  await fsp.writeFile(file, '{"sessionId": "local_2df3987c-02d3-405e-b8f5-da30e3835213", "title": "Th')
+  await fsp.utimes(file, new Date(), new Date(Date.now() + 10000))
+  ;[t] = await h.scanThreads()
+  assert.equal(t.title, 'Second title', 'a half-written record is not a missing thread')
+
   await fsp.rm(fx.root, { recursive: true, force: true })
 })
 
@@ -835,4 +1035,27 @@ test('kilocode refuses untrusted refs and opens the repo folder in VS Code', asy
     delete process.env.KILO_DB
     await fsp.rm(home, { recursive: true, force: true })
   }
+})
+
+// ── a title is a line ─────────────────────────────────────────────────────────
+
+test('a scanned thread with no title of its own is named by the first line of its prompt', async () => {
+  // Through the scan, not just the helper: the prompt the adapter keeps has its whitespace
+  // collapsed, so a helper that only ever saw that text could never find a line in it.
+  const prompt = 'Fix the login bug\n\nIt fails when the session sat idle for an hour'
+  const fx = await fakeClaude({ transcript: [typed(prompt)] })
+  const [thread] = await (await claudeWith(fx)).scanThreads()
+  assert.equal(thread.title, 'Fix the login bug')
+  assert.equal(thread.preview, prompt.replace(/\s+/g, ' '), 'the preview keeps the whole prompt')
+  await fsp.rm(fx.root, { recursive: true, force: true })
+})
+
+test('a thread the desktop never named takes the first line of its prompt, and no more than 120 of it', () => {
+  assert.equal(titleFromPrompt('Fix the login bug\n\nIt fails when…'), 'Fix the login bug')
+  assert.equal(titleFromPrompt('\n\n  second line is the first that says anything\nthird'), 'second line is the first that says anything')
+  const long = 'The block above is live local git activity, read just now. ' + 'x'.repeat(4000)
+  assert.equal(titleFromPrompt(long).length, 120)
+  assert.equal(titleFromPrompt(''), 'Untitled thread')
+  assert.equal(titleFromPrompt(undefined), 'Untitled thread')
+  assert.equal(titleFromPrompt('   \n  '), 'Untitled thread')
 })

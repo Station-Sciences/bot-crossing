@@ -6,7 +6,12 @@
  * from, and hands back a single list sorted by recency. Everything harness-specific lives
  * in `server/harnesses/` — see the README there.
  */
+import fsp from 'node:fs/promises'
+import path from 'node:path'
 import { HARNESSES, detectedHarnesses, harnessById } from './harnesses/index.mjs'
+
+/** `\\?\C:\…` to `C:\…`. Only where a drive follows: `\\?\UNC\server\share` is a different animal. */
+const dropLongPrefix = (p) => (/^\\\\\?\\[A-Za-z]:[\\/]/.test(p) ? p.slice(4) : p)
 
 /**
  * A project's ground is keyed on its name, and a name is the last segment of its path — so two
@@ -32,7 +37,7 @@ export function disambiguateProjects(threads) {
   // but only where a drive follows it: `\\?\UNC\server\share` is a different animal, and
   // folding its first character would be wrong.
   const canonical = (p) => {
-    const s = /^\\\\\?\\[A-Za-z]:[\\/]/.test(p) ? p.slice(4) : p
+    const s = dropLongPrefix(p)
     return /^[A-Za-z]:[\\/]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s
   }
 
@@ -74,6 +79,56 @@ export function disambiguateProjects(threads) {
 }
 
 /**
+ * A linked git worktree belongs on its repository's plot.
+ *
+ * Claude Code's own `.claude/worktrees/<name>` is recognised by its adapter from the path alone.
+ * A harness that keeps worktrees somewhere of its own is not: Codex puts them under
+ * `~/.codex/worktrees/<id>/<repo>`, which gave the repo a second plot under its own name, and the
+ * disambiguation above then renamed both plots to tell them apart. The checkout itself says where
+ * it belongs — a linked worktree's `.git` is a file reading `gitdir: <repo>/.git/worktrees/<name>`
+ * — so that is read, rather than any harness's folder layout guessed at. A submodule's `.git`
+ * file points into `.git/modules` instead, and is left alone.
+ *
+ * Kept per folder for the life of the process: a checkout does not change which repository it
+ * belongs to, and the scan runs on a short poll.
+ */
+const linkedWorktrees = new Map()
+async function linkedWorktree(dir) {
+  if (linkedWorktrees.has(dir)) return linkedWorktrees.get(dir)
+  let found = null
+  try {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(await fsp.readFile(path.join(dir, '.git'), 'utf8'))
+    const gitdir = m ? path.resolve(dir, m[1]) : ''
+    const at = gitdir.search(/[\\/]\.git[\\/]worktrees[\\/][^\\/]+$/)
+    if (at > 0) found = { root: gitdir.slice(0, at), name: path.basename(gitdir) }
+  } catch {
+    /* `.git` is a directory, or there is none: not a linked worktree */
+  }
+  linkedWorktrees.set(dir, found)
+  return found
+}
+
+/**
+ * A worktree that has since been removed has no `.git` left to read. One made by Claude Code still
+ * says where it belonged, because it sits inside the repository at `.claude/worktrees/<name>` —
+ * and other harnesses get run in those too.
+ */
+const NESTED_WORKTREE = /^(.+?)[\\/]\.claude[\\/]worktrees[\\/]([^\\/]+)[\\/]?$/
+
+/** Threads an adapter already placed in a worktree are left as they are. */
+export async function placeWorktrees(threads) {
+  return Promise.all(
+    threads.map(async (t) => {
+      if (t.worktree || !t.projectPath || !path.isAbsolute(t.projectPath)) return t
+      const nested = NESTED_WORKTREE.exec(t.projectPath)
+      const linked = (await linkedWorktree(t.projectPath)) || (nested && { root: nested[1], name: nested[2] })
+      if (!linked) return t
+      return { ...t, project: path.basename(linked.root), projectPath: linked.root, worktree: linked.name }
+    })
+  )
+}
+
+/**
  * Every thread from every detected harness.
  *
  * A harness that throws is skipped rather than allowed to take the scan down with it: one
@@ -92,7 +147,9 @@ export async function scanThreads() {
       }
     })
   )
-  const threads = disambiguateProjects(lists.flat())
+  // The prefix goes before anything reads the path, so a plot's folder is one a person would type.
+  const flat = lists.flat().map((t) => (t.projectPath ? { ...t, projectPath: dropLongPrefix(t.projectPath) } : t))
+  const threads = disambiguateProjects(await placeWorktrees(flat))
   threads.sort((a, b) => b.lastActivityAt - a.lastActivityAt)
   return threads
 }

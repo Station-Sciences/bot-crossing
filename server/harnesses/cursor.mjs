@@ -52,37 +52,90 @@ const isDir = async (p) => {
  * `emra-app-builder` came back as `emra/app/builder`, `personal-site-2025` as
  * `personal/site/2025`. Since `project` is what claims a hex zone, that is not cosmetic.
  *
- * So the disk decides. Walk the tokens and, at each step, take the longest run of them that
- * names a directory that actually exists, backtracking when a greedy match leads nowhere. A
- * repository that has since been deleted cannot be resolved by anyone, and falls back to
+ * It is lossier than dashes alone. Any run of characters that is not a letter or a digit became
+ * one dash — `C:\` is `c-`, `data_pipeline_v2` is `data-pipeline-v2` — so a folder cannot
+ * be found by turning tokens back into a name and asking whether it exists. Instead each folder
+ * on disk is encoded the same way and compared with what is left of the name, longest first,
+ * backtracking when a greedy match leads nowhere. On Windows the walk starts from the drive the
+ * leading letter names; the drive letter's case is whatever the path was opened with, so it and
+ * every other comparison there ignores case, as the filesystem does.
+ *
+ * A repository that has since been deleted cannot be resolved by anyone, and falls back to
  * attaching the rest as a single dashed name — the likelier reading, since a folder name with
  * dashes in it is far more common than four nested single-word folders.
  */
-async function resolvePath(tokens, from = '') {
-  if (!tokens.length) return from
-  for (let take = tokens.length; take >= 1; take--) {
-    const candidate = `${from}/${tokens.slice(0, take).join('-')}`
+export const encodeFolderName = (name) => name.replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '')
+
+/** The folders under `dir` as `[encoded, name]`, longest encoding first, read once per decode. */
+async function encodedChildren(dir, seen) {
+  if (seen.has(dir)) return seen.get(dir)
+  let out = []
+  try {
+    out = (await fsp.readdir(dir, { withFileTypes: true }))
+      .filter((e) => e.isDirectory() || e.isSymbolicLink())
+      .map((e) => [encodeFolderName(e.name), e.name])
+      .filter(([encoded]) => encoded)
+      .sort((a, b) => b[0].length - a[0].length)
+  } catch {
+    /* unreadable or gone */
+  }
+  seen.set(dir, out)
+  return out
+}
+
+async function resolveEncoded(rest, from, fold, seen) {
+  if (!rest) return from
+  const key = fold ? rest.toLowerCase() : rest
+  for (const [encoded, name] of await encodedChildren(from, seen)) {
+    const e = fold ? encoded.toLowerCase() : encoded
+    if (key !== e && !key.startsWith(`${e}-`)) continue
+    const candidate = path.join(from, name)
     if (!(await isDir(candidate))) continue
-    const rest = await resolvePath(tokens.slice(take), candidate)
-    if (rest) return rest
+    const found = await resolveEncoded(rest.slice(e.length + 1), candidate, fold, seen)
+    if (found) return found
   }
   return ''
 }
 
+/**
+ * The folder an encoded name stands for. `root` and `windows` exist for the tests; the scan takes
+ * the machine's own.
+ */
+export async function decodeFolder(name, { windows = process.platform === 'win32', root } = {}) {
+  const drive = windows ? /^([A-Za-z])(?:-(.*))?$/.exec(name) : null
+  const start = root || (drive ? `${drive[1].toUpperCase()}:${path.win32.sep}` : path.parse(process.cwd()).root)
+  const rest = drive ? drive[2] || '' : name.replace(/^-+/, '')
+  const seen = new Map()
+  const resolved = await resolveEncoded(rest, start, windows, seen)
+  if (resolved) return resolved
+
+  // Nothing on disk answers to it any more: keep the deepest ancestor that does and let the
+  // remainder stand as one name.
+  let dir = start
+  let left = rest
+  for (;;) {
+    const key = windows ? left.toLowerCase() : left
+    const next = (await encodedChildren(dir, seen)).find(([encoded]) => {
+      const e = windows ? encoded.toLowerCase() : encoded
+      return key.startsWith(`${e}-`)
+    })
+    if (!next) break
+    dir = path.join(dir, next[1])
+    left = left.slice(next[0].length + 1)
+  }
+  return left ? path.join(dir, left) : dir
+}
+
+/**
+ * Cursor files a window with no folder open under `empty-window`. That is not a project, and
+ * decoded it became a zone called "empty-window" at the root of the disk.
+ */
+const NO_FOLDER = new Set(['empty-window'])
+
 const decodeCache = new Map()
 async function decodeProjectDir(name) {
   if (decodeCache.has(name)) return decodeCache.get(name)
-  const tokens = name.split('-').filter(Boolean)
-  const resolved = await resolvePath(tokens)
-  // Nothing on disk answers to it any more: keep the deepest ancestor that does and let the
-  // remainder stand as one name.
-  let out = resolved
-  if (!out) {
-    let dir = ''
-    let i = 0
-    while (i < tokens.length && (await isDir(`${dir}/${tokens[i]}`))) dir = `${dir}/${tokens[i++]}`
-    out = i < tokens.length ? `${dir}/${tokens.slice(i).join('-')}` : dir
-  }
+  const out = NO_FOLDER.has(name) ? '' : await decodeFolder(name)
   decodeCache.set(name, out)
   return out
 }
