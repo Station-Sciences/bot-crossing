@@ -9,12 +9,13 @@
 import antigravity from './antigravity.mjs'
 import claudeCode from './claude-code.mjs'
 import codex from './codex.mjs'
+import copilotChat from './copilot-chat.mjs'
 import cursor from './cursor.mjs'
 import hermes from './hermes.mjs'
 import kilocode from './kilocode.mjs'
 import opencode from './opencode.mjs'
 
-export const HARNESSES = [claudeCode, codex, cursor, antigravity, hermes, kilocode, opencode]
+export const HARNESSES = [claudeCode, codex, cursor, antigravity, hermes, kilocode, opencode, copilotChat]
 
 export const harnessById = (id) => HARNESSES.find((h) => h.id === id) || null
 
