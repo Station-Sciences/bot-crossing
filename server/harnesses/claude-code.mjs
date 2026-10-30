@@ -390,8 +390,35 @@ async function transcriptMeta(entry) {
   } catch {
     meta = readTranscriptMeta([])
   }
+  if (!meta.firstPrompt && entry.size > HEAD_BYTES) Object.assign(meta, await firstPromptPastHead(entry))
   metaCache.set(entry.id, { mtime: entry.mtime, meta })
   return meta
+}
+
+/**
+ * How far to look for a first prompt the head did not reach. A prompt with a pasted screenshot
+ * carries the image inline as base64, so the one record that names the thread can be hundreds of
+ * KB by itself, and `readHead` drops it whole as a partial line. Attachments the CLI writes ahead
+ * of it push it further out. 15 of 95 transcripts on this machine had their first prompt past the
+ * head, between 291 KB and 1.2 MB in, bar one at 6.7 MB.
+ */
+const PROMPT_BYTES = 2 * 1024 * 1024
+
+/** A first prompt never changes once written, so unlike `metaCache` this one ignores mtime. */
+const promptCache = new Map()
+async function firstPromptPastHead(entry) {
+  if (promptCache.has(entry.id)) return promptCache.get(entry.id)
+  let prompt = { firstPrompt: '', promptTitle: '' }
+  try {
+    const { firstPrompt, promptTitle } = readTranscriptMeta(
+      jsonLines(await readHead(entry.file, Math.min(entry.size, PROMPT_BYTES)))
+    )
+    prompt = { firstPrompt, promptTitle }
+  } catch {
+    /* unreadable right now — the next change to the file tries again */
+  }
+  if (prompt.firstPrompt) promptCache.set(entry.id, prompt)
+  return prompt
 }
 
 /**
