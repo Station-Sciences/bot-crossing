@@ -87,3 +87,28 @@ test('a missing DISPLAY is a refusal on Linux and nothing at all on macOS', posi
     assert.equal(onMac.ok, true)
   })
 })
+
+// Linux throughout: on macOS a tab that opens also brings the real WezTerm app to the front.
+test('a running WezTerm gets a new tab rather than a second window', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    const wezterm = await fakeExecutable(dir, 'wezterm')
+    const env = { ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: wezterm.file }
+    const result = await withPlatform('linux', () => withEnv(env, () => openInTerminal(ARGV, dir)))
+    assert.equal(result.ok, true)
+    // The log keeps only the last call, so this also says `wezterm start` never ran after it.
+    assert.deepEqual(await wezterm.argv(), ['cli', '--no-auto-start', 'spawn', '--cwd', dir, '--', ...ARGV])
+  })
+})
+
+test('with no WezTerm running, it falls back to starting one', posixOnly, async () => {
+  await withTmp(async (dir) => {
+    // `cli spawn` finds no GUI and refuses, as the real one does; anything else is recorded.
+    const file = path.join(dir, 'wezterm')
+    const log = `${file}.argv`
+    await fsp.writeFile(file, `#!/bin/sh\n[ "$1" = cli ] && exit 1\nprintf '%s\\n' "$@" > '${log}'\nexit 0\n`, { mode: 0o755 })
+    const env = { ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: file }
+    const result = await withPlatform('linux', () => withEnv(env, () => openInTerminal(ARGV, dir)))
+    assert.equal(result.ok, true)
+    assert.deepEqual((await fsp.readFile(log, 'utf8')).split('\n').filter(Boolean), ['start', '--cwd', dir, '--', ...ARGV])
+  })
+})
