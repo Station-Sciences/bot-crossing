@@ -232,7 +232,9 @@ for good if you would rather the view stayed put.
 - **Archive** retires the thread *here*: the bot walks back up the ramp and boards the
   ship. Nothing is written to the harness — see [Keeping it local](#keeping-it-local). A thread
   you archive in the harness's own app goes home on the next poll too, because the scan reads
-  that flag.
+  that flag. Changed your mind? The toast offers Undo for a few seconds, and each zone keeps a
+  folded list of what was archived here, with Restore on every thread. One archived in the
+  harness's own app is restored there.
 - **Hide** takes a whole repo off the map without touching a single thread. It comes back from
   the list at the foot of the sidebar, onto the same ground it left.
 
