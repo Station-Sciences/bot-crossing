@@ -313,18 +313,28 @@ under **View → Return to isometric**.
 | --- | --- |
 | `H` / `⌘\` | **Hide every panel.** The colony still reads: status lives above the bots' heads |
 | `S` | Settings |
-| `N` | Fly to the next bot waiting on you |
+| `N` | Fly to the next bot waiting on you — errors first, then replies, longest-waiting first |
+| `J` | Next bot |
+| `K` | Next zone |
+| `B` | Busiest bot that is building or stuck on you, then the next busiest on each press. Idle and sleeping bots are skipped |
+| `/` / `F` | Find a thread in the open zone by its title or worktree |
+| `R` | Rename the selected bot. The name lives only in this colony; the harness keeps its own |
 | `Enter` / `A` | Open / archive the selected thread |
 | `V` | Mark the selected thread viewed, so it stops asking |
 | `C` | New conversation in the open zone's folder |
 | `O` | Orbit mode |
-| `Tab` | Next planet |
+| `Tab` / `⇧Tab` | Next / previous planet |
 | `L` | Next time of day |
 | `M` | Mute |
 | `P` | Screenshot |
 | `0` | Reset the view |
 | `Esc` | Deselect, and close the zone sidebar |
 | `?` | Help |
+
+`N`, `J` and `B` stay inside the open zone; hold shift to look everywhere *else* instead.
+With no zone open, all three mean the whole colony. Repeated `N` or `B` presses walk the ranking
+as it stood on the first press, so bots do not get skipped or revisited as activity shifts;
+click somebody or change zone and the next press starts from the top again.
 
 ## Planets and light
 
