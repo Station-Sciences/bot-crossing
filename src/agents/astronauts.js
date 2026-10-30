@@ -8,6 +8,7 @@ import { bendPoint, withCurve } from '../core/curve.js'
 import { Props, CHECK_LEN, CHECK_EVERY, pickProp } from './props.js'
 import { projectHitPoint, bodyHitDistance } from './picking.js'
 import { helmetGeometry, visorGeometry, screenGeometry } from './model.js'
+import { CARRY_LIFT, grab, carryTo, followCarry, release, homeRunFactor, isAirborne, startFall, fallStep, FLAIL_RATE, stepCarryPose } from './carry.js'
 
 /**
  * Every astronaut in the colony, batched into a fixed set of instanced draw calls.
@@ -605,6 +606,7 @@ export class Astronauts {
       eye: new THREE.Color(1, 1, 1),
       trim: new THREE.Color(0xffffff),
       hop: 0,
+      homeRun: false, // set when dropped after a carry: the walk back is hurried
       // Ground tracking. `groundAt` is the height last sampled and `groundY` the eased value
     // actually stood on; both start null so the first frame snaps instead of easing up.
       groundAt: walksOut ? airlock.y : null,
@@ -703,7 +705,7 @@ export class Astronauts {
     }
     // A spawning agent keeps walking out of the ship, a queued one stays inside it;
     // everyone else re-targets at once.
-    if (agent.state !== 'spawning' && agent.state !== 'queued') agent.state = 'walking'
+    if (agent.state !== 'spawning' && agent.state !== 'queued' && agent.state !== 'held') agent.state = 'walking'
     agent.stateAge = 0
     agent.pathVersion = -1
   }
@@ -857,7 +859,7 @@ export class Astronauts {
     const fromZ = agent.pos.z
     agent.blocked = false
     // Distance is always measured to the real goal; steering follows the route to it.
-    const steer = agent.state === 'at-site' ? this._wp.copy(agent.site) : this._steerTarget(agent, this._wp)
+    const steer = agent.state === 'at-site' || agent.state === 'held' ? this._wp.copy(agent.site) : this._steerTarget(agent, this._wp)
     const toSite = this._v.set(steer.x - agent.pos.x, 0, steer.z - agent.pos.z)
     const dist = Math.hypot(agent.site.x - agent.pos.x, agent.site.z - agent.pos.z)
 
@@ -887,7 +889,16 @@ export class Astronauts {
 
       case 'walking': {
         agent.scale = Math.min(1, agent.scale + dt * 3)
-        this._walk(agent, toSite, dist, dt, 1)
+        // Dropped from a carry: it finishes the drop, kicking, and only sets off once its feet
+        // are down.
+        if (isAirborne(agent)) {
+          agent.vel.set(0, 0, 0)
+          agent.hop = THREE.MathUtils.damp(agent.hop, 0, 14, dt)
+          break
+        }
+        // Dropped far from home: the further it has to go, the harder it runs.
+        this._walk(agent, toSite, dist, dt, agent.homeRun ? homeRunFactor(dist) : 1)
+        agent.hop = THREE.MathUtils.damp(agent.hop, 0, 10, dt)
         // Close enough — settle into whatever this thread is actually doing. Or close
         // enough to *give up*: a site that something was built on top of between polls can
         // never be reached, and an astronaut shouldering a wall forever is worse than one
@@ -914,6 +925,7 @@ export class Astronauts {
           }
           agent.state = agent.status === 'leaving' ? 'leaving' : 'at-site'
           agent.stateAge = 0
+          agent.homeRun = false
         }
         break
       }
@@ -935,6 +947,25 @@ export class Astronauts {
           this._settle(agent, dt)
         }
         this._sitePose(agent, dt, elapsed, anim)
+        break
+      }
+
+      case 'held': {
+        // Dangling from the pointer: nothing here moves the bot, and the lift eases up.
+        // `corr` swallows the glide itself so the legs are not read as a walk.
+        agent.vel.set(0, 0, 0)
+        followCarry(agent, dt)
+        agent.hop = THREE.MathUtils.damp(agent.hop, CARRY_LIFT, 14, dt)
+        agent.corr = Infinity
+        break
+      }
+
+      case 'falling': {
+        // Over the edge of the island with nothing under it. Past the clouds it is back in the
+        // ship's queue, and comes out of the airlock like a thread that has just appeared.
+        agent.vel.set(0, 0, 0)
+        if (fallStep(agent, dt)) this._requeue(agent)
+        agent.corr = Infinity
         break
       }
 
@@ -968,6 +999,7 @@ export class Astronauts {
     agent.walkAmp = THREE.MathUtils.damp(agent.walkAmp || 0, Math.min(1, agent.groundSpeed / WALK_SPEED), 8, dt)
 
     agent.yaw = angleDamp(agent.yaw, agent.targetYaw, TURN_RATE, dt)
+    stepCarryPose(agent, dt)
 
     // Stand on the ground rather than on y=0. A plot's deck is a raised slab and the terrain
     // between plots rolls by half a metre either way, so a crew pinned to zero is buried for
@@ -1388,6 +1420,7 @@ export class Astronauts {
     const speed = agent.groundSpeed || 0
     let key
     if (agent.state === 'spawning') key = 'spawn'
+    else if (isAirborne(agent)) key = 'run'
     else if (speed > 0.12) key = speed > WALK_SPEED * 1.25 ? 'run' : 'walk'
     else {
       switch (agent.status) {
@@ -1426,7 +1459,11 @@ export class Astronauts {
     if (!clip) return
 
     // Stride rate follows the ground, everything else runs at its authored speed.
-    const rate = key === 'walk' || key === 'run' ? THREE.MathUtils.clamp(speed / WALK_SPEED, 0.4, 2.1) : 1
+    const rate = isAirborne(agent)
+      ? FLAIL_RATE
+      : key === 'walk' || key === 'run'
+        ? THREE.MathUtils.clamp(speed / WALK_SPEED, 0.4, 2.1)
+        : 1
     agent.clipTime += dt * anim * rate
 
     if (key === 'sitDown' && agent.clipTime >= clip.duration) {
@@ -1481,8 +1518,24 @@ export class Astronauts {
       e.set(0, agent.yaw, 0)
       q.setFromEuler(e)
       v.set(agent.pos.x, agent.pos.y, agent.pos.z)
-      root.compose(v, q, one.setScalar(s * CREW_SCALE))
-      one.setScalar(1)
+      const base = s * CREW_SCALE
+      const stretch = agent.stretch ?? 1
+      if (agent.tiltX || agent.tiltZ || stretch !== 1) {
+        // The carry's cartoon: swing about the head, since that is where it is held, and
+        // stretch tall while keeping the volume, so a pop is thin and a landing is wide.
+        _poseQ.setFromEuler(_poseE.set(agent.tiltX || 0, 0, agent.tiltZ || 0))
+        q.premultiply(_poseQ)
+        const hang = HANG_HEIGHT * s
+        _poseV.set(0, hang, 0).applyQuaternion(_poseQ)
+        v.x -= _poseV.x
+        v.y += hang - _poseV.y
+        v.z -= _poseV.z
+        const girth = base / Math.sqrt(stretch)
+        root.compose(v, q, _poseS.set(girth, base * stretch, girth))
+      } else {
+        root.compose(v, q, one.setScalar(base))
+        one.setScalar(1)
+      }
 
       if (crew) {
         crew.setMatrixAt(i, root)
@@ -1694,6 +1747,42 @@ export class Astronauts {
     agent.hop = 0.25
   }
 
+  /** Back inside the ship, to be let out again in turn. */
+  _requeue(agent) {
+    agent.state = 'queued'
+    agent.scale = 0
+    agent.hop = 0
+    agent.fallV = 0
+    agent.stateAge = 0
+    agent.ramp = 0
+    agent.tiltX = agent.tiltZ = agent.tiltVX = agent.tiltVZ = agent.stretchV = 0
+    agent.stretch = 1
+    agent.wasAirborne = false
+    // A bot that was already outside when the page loaded never walked a ramp, so it has none.
+    agent.rampFrom ||= new THREE.Vector3()
+    agent.rampTo ||= new THREE.Vector3()
+    agent.clipKey = null
+    this._queue.push(agent)
+  }
+
+  /** Pick an agent up under the pointer. False if it is not one that can be carried. */
+  grab(agent) {
+    return grab(agent)
+  }
+
+  /** Move a carried agent to a ground point. */
+  carry(agent, x, z) {
+    carryTo(agent, x, z)
+  }
+
+  /** Let go: it walks — or, from far enough away, runs — back to its own site. */
+  release(agent) {
+    const world = this.world
+    // On a floating island there is nothing to stand on past the edge: it goes over.
+    if (world?.onIsland && !world.onIsland(agent.pos.x, agent.pos.z)) return startFall(agent)
+    return release(agent)
+  }
+
   dispose() {
     for (const mesh of Object.values(this.parts)) {
       mesh.geometry.dispose()
@@ -1709,6 +1798,12 @@ export class Astronauts {
 // ── helpers ───────────────────────────────────────────────────────────────────────────
 
 const _cq = new THREE.Quaternion()
+const _poseQ = new THREE.Quaternion()
+const _poseE = new THREE.Euler()
+const _poseV = new THREE.Vector3()
+const _poseS = new THREE.Vector3()
+/** Where on the body a carried bot hangs from, in metres at full size: roughly the top of the helmet. */
+const HANG_HEIGHT = 1.1
 const _ce = new THREE.Euler()
 const _cv = new THREE.Vector3()
 const _cs = new THREE.Vector3(1, 1, 1)
