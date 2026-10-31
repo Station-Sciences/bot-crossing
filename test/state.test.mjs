@@ -278,3 +278,44 @@ test('war merges whole: whichever tab changed it wins', () => {
   assert.deepEqual(mergeState({ war: peace }, { war: mine }, { war: peace }).war, mine)
   assert.deepEqual(mergeState({ war: peace }, { war: peace }, { war: mine }).war, mine)
 })
+
+// ── names ─────────────────────────────────────────────────────────────────────
+
+test('a rename in one tab and a rename in the other both survive, and a cleared one stays cleared', () => {
+  const merged = mergeState(
+    { names: { a: 'old', gone: 'x' } },
+    { names: { a: 'mine' } },
+    { names: { a: 'old', gone: 'x', b: 'theirs' } },
+  )
+  assert.deepEqual(merged.names, { a: 'mine', b: 'theirs' })
+})
+
+test('names are read back trimmed, and blank or non-string ones are dropped', async () => {
+  await withServer(async ({ call, dir }) => {
+    await fsp.writeFile(
+      path.join(dir, 'colony.json'),
+      JSON.stringify({ version: 2, names: { a: '  Scout  ', b: '   ', c: 7 }, updatedAt: 1 })
+    )
+    const state = await (await call('/api/state')).json()
+    assert.deepEqual(state.names, { a: 'Scout' })
+  })
+})
+
+test('colony.json is written readable by its owner only — it names every repo you work in', async () => {
+  await withServer(async ({ put, dir }) => {
+    assert.equal((await put({ archived: ['t1'] })).status, 200)
+    const mode = (await fsp.stat(path.join(dir, 'colony.json'))).mode & 0o777
+    assert.equal(mode, 0o600)
+    // And stays so on the next write: a fresh temp file every time, renamed into place.
+    assert.equal((await put({ archived: ['t1', 't2'] })).status, 200)
+    assert.equal((await fsp.stat(path.join(dir, 'colony.json'))).mode & 0o777, 0o600)
+  })
+})
+
+test('every JSON answer says it is JSON and nothing else', async () => {
+  await withServer(async ({ call }) => {
+    const res = await call('/api/state')
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(res.headers.get('cache-control'), 'no-store')
+  })
+})

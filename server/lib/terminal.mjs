@@ -1,10 +1,10 @@
 /**
  * Put a command in a new terminal window.
  *
- * Only `server/api.mjs` uses this, on Linux and macOS. It is split out because it is a page of
- * terminal-emulator trivia with nothing to do with HTTP, and nothing in here knows about a
- * particular harness — an adapter never imports it. An adapter hands the server an argv; the
- * server decides whether a terminal is the right place for it.
+ * Only `server/api.mjs` uses this, and Windows is handed on to `win-terminal.mjs` at the door.
+ * It is split out because it is a page of terminal-emulator trivia with nothing to do with HTTP,
+ * and nothing in here knows about a particular harness — an adapter never imports it. An adapter
+ * hands the server an argv; the server decides whether a terminal is the right place for it.
  */
 import { spawn } from 'node:child_process'
 import fsp from 'node:fs/promises'

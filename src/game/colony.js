@@ -32,7 +32,7 @@ import { MAX_AGENT_CAP } from '../core/settings.js'
 import { Particles } from '../agents/particles.js'
 import { Navigation } from '../agents/navigation.js'
 import { liveThreadsForColony } from './hidden-projects.js'
-import { statusFor } from './status.js'
+import { isAlarming, statusFor } from './status.js'
 import { WarDirector } from './war-director.js'
 import { SocialDirector } from './social-director.js'
 
@@ -45,7 +45,7 @@ export { statusFor }
  * flags — errored, then running, then merged, then unread — so an astronaut can only ever be
  * telling you one thing, and the loudest true thing wins.
  *
- *   errored        → blocked, red eyes, a `!` over its head
+ *   errored        → blocked, red eyes, a `!` over its head; after three quiet days, asleep
  *   running        → hammering away at its building, sparks flying
  *   PR merged      → celebrating, confetti, a `✓`
  *   unread         → stopped and waiting on you, a bobbing `?` — click it to open the thread
@@ -1370,7 +1370,7 @@ export class Colony {
   /** A site somebody is standing at: running, or stopped waiting on you. */
   _isActive(id) {
     const thread = this.threads.get(id) || this.neighborThreads.get(id)
-    return Boolean(thread && (thread.running || thread.unread || thread.hasError))
+    return Boolean(thread && (thread.running || thread.unread || isAlarming(thread)))
   }
 
   _badgeFor(agent) {

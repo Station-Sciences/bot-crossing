@@ -136,7 +136,10 @@ Verified on a real machine:
 
 - **Claude Code** — desktop records in
   `~/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_*.json`
-  (`%APPDATA%\Claude\claude-code-sessions\…` on Windows), and in the same folder a
+  (`%APPDATA%\Claude\claude-code-sessions\…` on Windows). The app folder is not always called
+  `Claude`: it is `Claude-3p` on some macOS installs, and each extra desktop profile gets its own
+  `Claude-<profile>` beside the first, so every `Claude*` folder holding a store is read. In the
+  same folder sits a
   `deleted_<cliSessionId>` marker for every thread deleted in the app, holding the deletion time
   in epoch ms — the record goes, the CLI transcript stays, and the marker is all that tells a
   deleted thread from one started in a terminal, so the adapter reports it as `archived`; CLI

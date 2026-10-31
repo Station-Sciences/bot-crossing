@@ -2,6 +2,7 @@ import { PRESETS, PLANETS_ORDER } from './hud-data.js'
 import { PLANETS } from '../world/planet.js'
 import { TIMES, systemTimeOfDay } from '../world/sky.js'
 import { STATUS_LABEL } from '../game/colony.js'
+import { searchThreads } from '../game/search.js'
 import { FACE, FRAME_COLS, FRAME_ROWS } from '../agents/faces.js'
 import { PLOT_PALETTE, hashString } from '../world/plots.js'
 import { describeNeighbor } from '../game/neighbors.js'
@@ -41,6 +42,7 @@ const ICON = {
   archive: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18v3H3z"/><path d="M5 9v10h14V9"/><path d="M10 13h4"/></svg>`,
   close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>`,
   back: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>`,
+  chev: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9 12 15.5 18.5 9"/></svg>`,
   plus: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 11.7a8 8 0 0 1-8.5 8 9.3 9.3 0 0 1-2.7-.4L4.5 21l1.4-4.1a7.9 7.9 0 0 1-2.4-5.7A8 8 0 0 1 12 3.6a8 8 0 0 1 8.5 8.1z"/><path d="M12 8.6v5.4M9.3 11.3h5.4"/></svg>`,
   folder: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.4A1.4 1.4 0 0 1 4.4 6h4.2l2 2.5h7A1.4 1.4 0 0 1 19 9.9v7.7a1.4 1.4 0 0 1-1.4 1.4H4.4A1.4 1.4 0 0 1 3 17.6z"/></svg>`,
   copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>`,
@@ -57,6 +59,9 @@ const STAT_DEFS = [
   { key: 'celebrating', label: 'shipped', cls: 'done' },
   { key: 'agents', label: 'bots', cls: 'idle' },
 ]
+
+/** How many archived threads a zone lists before "Show all". */
+const ARCHIVE_PEEK = 8
 
 export class Hud {
   constructor(root, settings, actions) {
@@ -506,7 +511,7 @@ export class Hud {
     on('#btn-help', 'click', () => this.toggleHelp())
     on('#btn-shot', 'click', () => this.actions.screenshot?.())
     on('#btn-home', 'click', () => this.actions.resetView?.())
-    on('#btn-next', 'click', () => this.actions.focusStatus?.('waiting'))
+    on('#btn-next', 'click', () => this.actions.focusNeedsYou?.())
     on('#btn-orbit', 'click', () => this.setOrbit(this.actions.toggleOrbit?.()))
     on('#btn-planet', 'click', () => this.actions.cyclePlanet?.())
     on('#btn-time', 'click', () => this.actions.cycleTime?.())
@@ -514,6 +519,7 @@ export class Hud {
     on('#btn-open', 'click', () => this.actions.openThread?.())
     on('#btn-viewed', 'click', () => this.actions.markViewed?.())
     on('#btn-archive', 'click', () => this.actions.archiveThread?.())
+    on('.thread-pop .title', 'dblclick', () => this.startRename())
     on('#btn-deselect', 'click', () => this.actions.select?.(null))
     on('#btn-follow', 'click', () => this.settings.set('followSelected', !this.settings.get('followSelected')))
     on('#btn-new-session', 'click', () => this.actions.newConversation?.())
@@ -563,12 +569,14 @@ export class Hud {
    * it is a list now because the sidebar is where all the chrome lives, and because a list
    * can carry a count and an alarm without running out of room at eleven repos.
    */
-  setLegend(projects, activeName = null, hidden = [], folded = []) {
+  setLegend(projects, activeName = null, hidden = [], folded = [], offMap = []) {
+    this._legendArgs = [projects, activeName, hidden, folded, offMap]
     const signature =
       projects.map((p) => `${p.name}:${p.count}:${p.accent}:${p.urgent ? 1 : 0}`).join('|') +
       `~${activeName}~` +
       hidden.map((p) => `${p.name}:${p.count}`).join('|') +
-      `~${folded.length}`
+      `~${folded.length}~` +
+      offMap.map((t) => `${t.id}:${t.title}`).join('|')
     if (this._last.legend === signature) return
     this._last.legend = signature
 
@@ -593,7 +601,7 @@ export class Hud {
     // The hidden list is its own block at the foot of the sidebar: collapsed by default, because
     // the whole point of hiding a repo is not to look at it.
     const block = this.$('.hidden-block')
-    block.hidden = hidden.length === 0 && folded.length === 0
+    block.hidden = hidden.length === 0 && folded.length === 0 && offMap.length === 0
     const hiddenWrap = this.$('.hidden-projects')
     hiddenWrap.innerHTML = ''
     for (const p of hidden) {
@@ -633,7 +641,20 @@ export class Hud {
       hiddenWrap.appendChild(row)
     }
 
-    const total = hidden.length + folded.length
+    // Repos that left the map because every thread in them was archived. Only reachable from
+    // here — with no zone, there is no zone sidebar to hold their archived list.
+    this._appendArchived(hiddenWrap, offMap, {
+      key: 'offMap',
+      label: `${offMap.length} archived thread${offMap.length === 1 ? '' : 's'}`,
+      withProject: true,
+      redraw: () => {
+        this._last.legend = null
+        this.setLegend(...this._legendArgs)
+      },
+    })
+
+    const gone = new Set(offMap.map((t) => t.project)).size
+    const total = hidden.length + folded.length + gone
     this.$('#btn-hidden-toggle .label').textContent = `${total} off the map`
     this._syncHiddenList()
   }
@@ -762,6 +783,14 @@ export class Hud {
    */
   setProject(project) {
     const panel = this.$('.side')
+    // An archived list folds back up once you leave where it was opened: the zone's when the
+    // zone changes, the off-the-map one as soon as any zone is opened.
+    this._archive ||= {}
+    if (this._archiveZone !== project?.name) {
+      this._archiveZone = project?.name
+      delete this._archive.zone
+      if (project) delete this._archive.offMap
+    }
     if (!project) {
       this.project = null
       if (this._last.project === null) return
@@ -784,7 +813,8 @@ export class Hud {
     // you leave the panel open.
     const signature =
       `${project.name}~${project.path}~${project.accent}~${project.selectedId}~${Math.floor(Date.now() / 60000)}~` +
-      project.threads.map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}`).join('|')
+      project.threads.map((t) => `${t.id}:${t.status}:${t.title}:${t.lastActivityAt}`).join('|') +
+      `~${(project.archived || []).map((t) => `${t.id}:${t.title}`).join('|')}`
     panel.classList.add('drilled')
     if (this._last.project === signature) return
     this._last.project = signature
@@ -839,8 +869,68 @@ export class Hud {
         })
       }
     }
+    const archived = project.archived || []
+    this._appendArchived(list, archived, {
+      key: 'zone',
+      label: `${archived.length} archived`,
+      redraw: () => {
+        this._last.project = null
+        this.setProject(this.project)
+      },
+    })
     list.scrollTop = scroll
     if (!project.selectedId) this._scrolledTo = null
+  }
+
+  /**
+   * A folded list of archived threads with Restore on each: one line until asked — a busy
+   * repo collects hundreds, and the sidebar is for what is happening now — then the most
+   * recent few, then all of them. `key` names whose list it is; whoever owns that key folds
+   * it back up by forgetting it (leaving the zone, or opening one from the repo list).
+   */
+  _appendArchived(parent, archived, { key, label, withProject = false, redraw }) {
+    if (!archived.length) return
+    this._archive ||= {}
+    const view = this._archive[key] || { open: false, all: false }
+    const set = (next) => {
+      this._archive[key] = { ...view, ...next }
+      redraw()
+    }
+    const shown = view.all ? archived : archived.slice(0, ARCHIVE_PEEK)
+
+    const toggle = document.createElement('button')
+    toggle.type = 'button'
+    toggle.className = 'archived-toggle'
+    toggle.setAttribute('aria-expanded', String(view.open))
+    toggle.innerHTML = `<span>${escapeHtml(label)}</span>${ICON.chev}`
+    toggle.addEventListener('click', () => set({ open: !view.open, all: false }))
+    parent.appendChild(toggle)
+    if (!view.open) return
+
+    for (const t of shown) {
+      const row = document.createElement('div')
+      row.className = 'thread archived-row'
+      row.innerHTML =
+        `<span class="t">${escapeHtml(t.title || 'Untitled thread')}` +
+        (withProject ? ` <span class="p">· ${escapeHtml(t.project || '')}</span>` : '') +
+        `</span><span class="when">${ago(t.archivedAt)}</span>`
+      const restore = document.createElement('button')
+      restore.type = 'button'
+      restore.className = 'btn ghost restore'
+      restore.title = 'Put this thread back on the map'
+      restore.textContent = 'Restore'
+      restore.addEventListener('click', () => this.actions.unarchiveThread?.(t.id))
+      row.appendChild(restore)
+      parent.appendChild(row)
+    }
+    if (shown.length < archived.length) {
+      const more = document.createElement('button')
+      more.type = 'button'
+      more.className = 'archived-more'
+      more.textContent = `Show all ${archived.length}`
+      more.addEventListener('click', () => set({ all: true }))
+      parent.appendChild(more)
+    }
   }
 
   /**
@@ -852,6 +942,9 @@ export class Hud {
     const card = this.$('.thread-pop')
     // Only ever one accent button in the panel: whichever action is the immediate one.
     this.$('#btn-new-session').classList.toggle('primary', !agent || !thread)
+    // A rename in progress survives a poll repainting its own card; anything else ends it.
+    const renaming = this._rename && thread && this._rename.id === thread.id
+    if (this._rename && !renaming) this._rename.finish(false)
     if (!agent || !thread) {
       card.classList.remove('on')
       this.selected = null
@@ -865,7 +958,7 @@ export class Hud {
     // A friend's bot says whose it is and what it is up to, and offers nothing to press.
     const neighbor = thread.neighbor || null
     card.classList.toggle('readonly', Boolean(neighbor))
-    this.$('.thread-pop .title').textContent = neighbor
+    if (!renaming) this.$('.thread-pop .title').textContent = neighbor
       ? `${neighbor.name} · ${thread.project}`
       : thread.title || 'Untitled thread'
     const status =
@@ -896,6 +989,41 @@ export class Hud {
     // crowd the two that are always worth having, and "Viewed" on a thread that is not asking
     // for anything is a control with no effect.
     this.$('#btn-viewed').hidden = !thread.unread
+  }
+
+  /**
+   * Swap the card's title for a field. Enter or clicking away keeps it, Esc throws it away,
+   * and an empty field hands the thread back its harness's own title.
+   */
+  startRename() {
+    if (!this.selected || this._rename) return
+    const { thread } = this.selected
+    const title = this.$('.thread-pop .title')
+    const input = document.createElement('input')
+    input.className = 'rename'
+    input.value = thread.title || ''
+    input.placeholder = thread.originalTitle ?? (thread.title || 'Untitled thread')
+    input.maxLength = 120
+    input.spellcheck = false
+    input.setAttribute('aria-label', 'Rename this bot')
+
+    const finish = (keep) => {
+      if (this._rename?.input !== input) return
+      this._rename = null
+      title.textContent = thread.title || 'Untitled thread'
+      if (keep) this.actions.renameThread?.(thread.id, input.value)
+    }
+    this._rename = { id: thread.id, input, finish }
+    input.addEventListener('keydown', (e) => {
+      // Kept inside the field: the page's own Esc would deselect the bot underneath it.
+      e.stopPropagation()
+      if (e.key === 'Enter') finish(true)
+      else if (e.key === 'Escape') finish(false)
+    })
+    input.addEventListener('blur', () => finish(true))
+    title.replaceChildren(input)
+    input.focus()
+    input.select()
   }
 
   /**
@@ -1040,6 +1168,88 @@ export class Hud {
       (extra ? `<br>${extra}` : '')
   }
 
+  /**
+   * Type-to-find over `threads` (one repo's). Arrows move, Enter picks, Esc or clicking
+   * away closes. `onPick(id)` is handed the chosen thread; the box closes first.
+   */
+  openSearch(threads, onPick) {
+    const box = this.$('.finder')
+    const input = this.$('.finder-input')
+    const list = this.$('.finder-list')
+    let shown = []
+    let at = 0
+
+    const paint = () => {
+      list.replaceChildren(
+        ...shown.slice(0, 8).map((t, i) => {
+          const row = document.createElement('div')
+          row.className = 'finder-row' + (i === at ? ' on' : '')
+          row.setAttribute('role', 'option')
+          const name = document.createElement('span')
+          name.className = 'finder-title'
+          name.textContent = t.title || 'Untitled thread'
+          const meta = document.createElement('span')
+          meta.className = 'finder-meta'
+          meta.textContent = [t.worktree, STATUS_LABEL[t.status] ?? t.status].filter(Boolean).join(' · ')
+          row.append(name, meta)
+          row.addEventListener('pointerdown', (e) => {
+            e.preventDefault()
+            pick(t)
+          })
+          return row
+        })
+      )
+      if (!shown.length) {
+        const none = document.createElement('div')
+        none.className = 'finder-none'
+        none.textContent = 'No matching threads'
+        list.append(none)
+      }
+    }
+    const refresh = () => {
+      shown = searchThreads(threads, input.value)
+      at = 0
+      paint()
+    }
+    const close = () => {
+      if (box.hidden) return
+      box.hidden = true
+      input.removeEventListener('input', refresh)
+      input.onkeydown = null
+      input.onblur = null
+    }
+    const pick = (t) => {
+      close()
+      onPick(t.id)
+    }
+    this._closeSearch = close
+
+    input.value = ''
+    input.addEventListener('input', refresh)
+    input.onkeydown = (e) => {
+      // Kept inside the field: the page's own keys must not run on what is being typed.
+      e.stopPropagation()
+      if (e.key === 'Escape') close()
+      else if (e.key === 'Enter' && shown[at]) pick(shown[at])
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        const n = Math.min(shown.length, 8)
+        if (n) at = (at + (e.key === 'ArrowDown' ? 1 : n - 1)) % n
+        paint()
+      }
+    }
+    input.onblur = close
+    box.hidden = false
+    refresh()
+    input.focus()
+  }
+
+  closeSearch() {
+    const open = !this.$('.finder').hidden
+    this._closeSearch?.()
+    return open
+  }
+
   hint(text, ms = 3200) {
     const el = this.$('.hint-pill')
     el.textContent = text
@@ -1048,15 +1258,32 @@ export class Hud {
     this._hintTimer = setTimeout(() => el.classList.remove('on'), ms)
   }
 
-  toast(message, kind = '') {
+  /**
+   * A passing message. `action` adds one button to it — `{ label, run }` — and keeps it up a
+   * little longer, since a button you have to race is not much of an offer.
+   */
+  toast(message, kind = '', action = null) {
     const el = document.createElement('div')
     el.className = `toast panel ${kind}`
     el.textContent = message
-    this.$('.toasts').appendChild(el)
-    setTimeout(() => {
+    const leave = () => {
+      if (el.classList.contains('leaving')) return
       el.classList.add('leaving')
       setTimeout(() => el.remove(), 260)
-    }, 3600)
+    }
+    if (action) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'toast-action'
+      b.textContent = action.label
+      b.addEventListener('click', () => {
+        leave()
+        action.run()
+      })
+      el.appendChild(b)
+    }
+    this.$('.toasts').appendChild(el)
+    setTimeout(leave, action ? 7000 : 3600)
   }
 
   // ── visibility ──────────────────────────────────────────────────────────────────────
@@ -1326,6 +1553,10 @@ const TEMPLATE = `
 <div class="toasts"></div>
 <div class="fps panel"></div>
 <div class="hint-pill panel"></div>
+<div class="finder panel" role="dialog" aria-label="Find a thread" hidden>
+  <input class="finder-input" type="text" spellcheck="false" autocomplete="off" placeholder="Find a thread in this repo…" aria-label="Find a thread" />
+  <div class="finder-list" role="listbox"></div>
+</div>
 
 <div class="help">
   <div class="sheet panel">
@@ -1339,24 +1570,30 @@ const TEMPLATE = `
         <div class="k"><span>Zoom to cursor</span><kbd>scroll</kbd></div>
         <div class="k"><span>Move / zoom</span><kbd>arrows</kbd> <kbd>+ −</kbd></div>
         <div class="k"><span>Reset view</span><kbd>0</kbd></div>
+        <div class="k"><span>Orbit mode</span><kbd>O</kbd></div>
+        <div class="k"><span>Next / previous planet</span><kbd>Tab</kbd> <kbd>⇧Tab</kbd></div>
+        <div class="k"><span>Time of day</span><kbd>L</kbd></div>
         <div class="k"><span>Hide all UI</span><kbd>H</kbd> <kbd>${IS_MAC ? '⌘' : 'Ctrl'}\\</kbd></div>
         <div class="k"><span>Settings</span><kbd>S</kbd></div>
         <div class="k"><span>Screenshot</span><kbd>P</kbd></div>
+        <div class="k"><span>Mute</span><kbd>M</kbd></div>
       </div>
       <div>
-        <div class="k"><span>Next needing you</span><kbd>N</kbd></div>
+        <div class="k"><span>Next needing you</span><kbd>N</kbd> <kbd>⇧N</kbd></div>
+        <div class="k"><span>Next bot</span><kbd>J</kbd> <kbd>⇧J</kbd></div>
+        <div class="k"><span>Busiest bot</span><kbd>B</kbd> <kbd>⇧B</kbd></div>
+        <div class="k"><span>Next repo</span><kbd>K</kbd></div>
+        <div class="k"><span>Find a thread in this repo</span><kbd>/</kbd> <kbd>F</kbd></div>
         <div class="k"><span>Open thread</span><kbd>Enter</kbd></div>
         <div class="k"><span>Mark viewed</span><kbd>V</kbd></div>
+        <div class="k"><span>Rename</span><kbd>R</kbd></div>
         <div class="k"><span>Archive</span><kbd>A</kbd></div>
         <div class="k"><span>New conversation</span><kbd>C</kbd></div>
-        <div class="k"><span>Orbit mode</span><kbd>O</kbd></div>
-        <div class="k"><span>Change planet</span><kbd>Tab</kbd></div>
-        <div class="k"><span>Time of day</span><kbd>L</kbd></div>
-        <div class="k"><span>Mute</span><kbd>M</kbd></div>
         <div class="k"><span>Deselect</span><kbd>Esc</kbd></div>
         <div class="k"><span>This sheet</span><kbd>?</kbd></div>
       </div>
     </div>
+    <p class="sub" style="margin-top:10px">N, J and B stay in the open zone; add ⇧ to jump to the other zones instead.</p>
     <div style="margin-top:16px">
       <div class="legend-row"><i class="badge" style="background:#1a2b46;color:#8fb4ee">?</i> waiting on your reply — click to open the thread</div>
       <div class="legend-row"><i class="badge" style="background:#3d1c1c;color:#e88b8b">!</i> the session hit an error</div>
