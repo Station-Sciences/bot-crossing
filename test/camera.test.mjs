@@ -201,3 +201,16 @@ test('tilted depth of field reconstructs the same point with an off-center proje
   }
   for (const pass of effect.passes) pass.dispose()
 })
+
+test('the camera may travel as far as the furthest neighbour, and no further', () => {
+  const { rig } = fixture()
+  rig.setFollow(null)
+  rig.focus(new THREE.Vector3(150, 0, 0))
+  assert.ok(Math.abs(rig.desiredTarget.x - 82) < 1e-9, 'clamped to the home colony by default')
+  rig.setWorldLimit(200)
+  rig.focus(new THREE.Vector3(150, 0, 0))
+  assert.equal(rig.desiredTarget.x, 150)
+  rig.setWorldLimit(10)
+  rig.focus(new THREE.Vector3(150, 0, 0))
+  assert.ok(Math.abs(rig.desiredTarget.x - 82) < 1e-9, 'never tighter than the home colony')
+})

@@ -8,8 +8,8 @@ export async function withServer(run) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'bot-crossing-test-'))
   process.env.BOT_CROSSING_DATA = dir
   // Imported per-server so DATA_DIR is read fresh; the query string defeats the module cache.
-  const { apiMiddleware } = await import(`../../server/api.mjs?${dir}`)
-  const server = http.createServer((req, res) => apiMiddleware(req, res, null))
+  const api = await import(`../../server/api.mjs?${dir}`)
+  const server = http.createServer((req, res) => api.apiMiddleware(req, res, null))
   await new Promise((r) => server.listen(0, '127.0.0.1', r))
   const port = server.address().port
   const call = (p, opts) =>
@@ -21,6 +21,8 @@ export async function withServer(run) {
     return await run({ call, dir, put: (b) => call('/api/state', { method: 'PUT', body: JSON.stringify(b) }) })
   } finally {
     server.close()
+    // A test that turned sharing on would otherwise leave its port open for the rest of the run.
+    await api.stopSharing?.()
     await fsp.rm(dir, { recursive: true, force: true })
   }
 }

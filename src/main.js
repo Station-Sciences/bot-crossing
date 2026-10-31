@@ -17,6 +17,8 @@ import { shorelinePoints } from './world/planet.js'
 import { shipPosition } from './world/plots.js'
 import {
   fetchThreads,
+  fetchNeighbors,
+  fetchSharing,
   fetchState,
   saveState,
   openThread,
@@ -28,6 +30,13 @@ import { withErrands } from './game/errands.js'
 import { ACTIVE, JumpRun, NEEDS_YOU, busiestOrder, crewOrder, inScope, needsYouOrder, nextInRing } from './game/jumps.js'
 import { archivedInProject, restorableArchives, unarchive, withLocalArchive } from './game/archive.js'
 import { canGrab } from './agents/carry.js'
+import { NEIGHBOR_CAP, addNeighbor, hydrateNeighbors, newShareKey, removeNeighbor, shareLink } from './game/neighbors.js'
+import { LINGER_MS, battleLive, newBattle, planBattle, scoreAt, warTag } from './game/war.js'
+import { eligibleFighters } from './game/war-director.js'
+import {
+  attackBlocker, bannerPhase, formatRecord, friendFighters, friendInBattle, incomingBattle, isFriend, ownBattleFate,
+  recordResult, resultText,
+} from './game/war-page.js'
 
 /**
  * Boot and the outer game loop.
@@ -39,6 +48,11 @@ import { canGrab } from './agents/carry.js'
  */
 
 const POLL_MS = 15000
+/**
+ * Friends run on a shorter clock than your own scan. Their machine reads its threads afresh for
+ * every request, so this interval is how stale a friend's settlement can get.
+ */
+const NEIGHBOR_POLL_MS = 5000
 const app = document.getElementById('app')
 
 app.insertAdjacentHTML(
@@ -64,7 +78,7 @@ engine.setPlanetGrade(PLANETS[settings.get('planet')]?.grade)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, names: {} }
+let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, names: {}, sharing: { enabled: false, key: '', name: '' }, neighbors: [], war: { enabled: false, battle: null, tally: {}, seen: [], busyUntil: 0 } }
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -80,6 +94,34 @@ const jumpRun = new JumpRun()
 const restoring = new Set()
 let pendingSave = 0
 const hoverGround = new THREE.Vector3()
+/** What our server last fetched from each friend — `GET /api/neighbors`. */
+let neighborResults = []
+/** Whether our own share port is open, and on what address — `GET /api/sharing`. */
+let sharingInfo = null
+/** Friends as last handed to the colony: their hydrated threads, their battle, and our record against them. */
+let hydrated = []
+/**
+ * War tags are SHA-256, and `crypto.subtle` only exists on a secure origin. localhost is one; the
+ * page opened by LAN address is not. Without it there is no attacking and no noticing an attack,
+ * and the page says so rather than throwing.
+ */
+const warSecure = Boolean(globalThis.crypto?.subtle)
+/**
+ * Our own war tag for each friend's battle, by battle id: what that battle names when it is aimed
+ * at us. The tag is salted per battle, so it is hashed once per battle (and again if our key
+ * changes), not once per poll. An id maps to '' while its hash is still on the way.
+ */
+let warTagFor = { key: null, byId: new Map() }
+/** The battle on screen — `{ battle, side, neighborId, plan }` — or null. */
+let warNow = null
+/**
+ * When each friend's last battle on us ended, by friend id. A battle of theirs that starts before
+ * it is ignored, so a friend cannot announce an already-finished battle under a fresh id every poll
+ * and hand us a loss each time. Memory is enough: `seen` still stops a recount after a reload.
+ */
+const warEndedAt = Object.create(null)
+let attacking = false
+let lastWarSync = 0
 
 // ── actions the HUD can trigger ────────────────────────────────────────────────────────
 
@@ -461,8 +503,152 @@ const actions = {
   // The card's bar is about the *thread*, not about how much of its building has risen —
   // those were the same number while construction was drawn by burying the structure.
   progressFor: (id) => {
-    const thread = threads.find((t) => t.id === id)
+    const thread = threads.find((t) => t.id === id) || colony.neighborThreads.get(id)
     return thread ? transcriptProgress(thread) : 0
+  },
+
+  // ── neighbors ──────────────────────────────────────────────────────────────────────
+
+  /** On makes a key if there is none; off keeps it, so turning back on reuses the same link. */
+  toggleSharing: async () => {
+    const previous = state.sharing
+    const current = previous || { enabled: false, key: '', name: '' }
+    const enabled = !current.enabled
+    state.sharing = {
+      enabled,
+      key: enabled && !/^[0-9a-f]{32}$/.test(current.key || '') ? newShareKey() : current.key || '',
+      name: current.name || sharingInfo?.defaultName || '',
+    }
+    // The port follows the file, so a switch that did not save did not happen.
+    if (!(await saveNow())) {
+      state.sharing = previous
+      return
+    }
+    await refreshSharing()
+  },
+
+  setShareName: (name) => {
+    state.sharing = { ...(state.sharing || {}), name: String(name || '').trim().slice(0, 40) }
+    queueSave()
+    hud.setNeighbors(neighborModel())
+  },
+
+  rotateShareKey: async () => {
+    if (!state.sharing?.enabled) return
+    const previous = state.sharing
+    state.sharing = { ...state.sharing, key: newShareKey() }
+    // Unsaved, the old key is still the one being served; showing the new link would be a lie.
+    if (!(await saveNow())) {
+      state.sharing = previous
+      return
+    }
+    await refreshSharing()
+    hud.toast('New link made — the old one no longer works')
+  },
+
+  copyShareLink: async () => {
+    const link = neighborModel().sharing.link
+    if (!link) return
+    try {
+      await navigator.clipboard.writeText(link)
+      hud.toast('Link copied')
+    } catch {
+      const copied = copyFallback(link)
+      hud.toast(copied ? 'Link copied' : 'Could not reach the clipboard', copied ? '' : 'err')
+    }
+  },
+
+  addNeighbor: async (text) => {
+    const { list, error, updated } = addNeighbor(state.neighbors || [], text)
+    if (error) {
+      hud.toast(error, 'err')
+      return false
+    }
+    const previous = state.neighbors
+    state.neighbors = list
+    // The server fetches friends from the file, so one that did not save would never be reached.
+    if (!(await saveNow())) {
+      state.neighbors = previous
+      return false
+    }
+    await poll() // reach them now rather than on the next tick
+    hud.toast(updated ? 'Link updated' : 'Neighbor added — they appear once their machine answers')
+    return true
+  },
+
+  removeNeighbor: async (id) => {
+    state.neighbors = removeNeighbor(state.neighbors || [], id)
+    neighborResults = neighborResults.filter((r) => r.id !== id)
+    await saveNow()
+    applyThreads(threads)
+    syncWar() // a battle with them stops now, uncounted, rather than on the next tick
+    hud.setNeighbors(neighborModel())
+  },
+
+  // ── war ────────────────────────────────────────────────────────────────────────────
+
+  /** Consent, published as `warReady`. Turning it off also calls off a battle you started, and stops showing one you were defending. */
+  toggleWar: async () => {
+    const previous = state.war
+    const current = previous || { enabled: false, battle: null, tally: {}, seen: [], busyUntil: 0 }
+    const enabled = !current.enabled
+    state.war = { ...current, enabled, battle: enabled ? current.battle : null, busyUntil: enabled ? current.busyUntil : 0 }
+    // Friends read it off the share port, which follows the file: unsaved, it did not happen.
+    if (!(await saveNow())) {
+      state.war = previous
+      hud.setNeighbors(neighborModel())
+      return
+    }
+    syncWar()
+    hud.setNeighbors(neighborModel())
+    hud.hint(enabled ? 'War mode on — attack a friend from the sidebar' : 'War mode off')
+  },
+
+  attack: async (id) => {
+    if (attacking) return
+    const entry = neighborModel().neighbors.find((n) => n.id === id)
+    const saved = (state.neighbors || []).find((n) => n.id === id)
+    if (!entry || !saved) return
+    if (entry.attack) {
+      hud.hint(entry.attack)
+      return
+    }
+    attacking = true
+    try {
+      // Counted again here, on the numbers that go into the battle: a side with nobody on it is
+      // not a battle, and `newBattle` itself does not refuse one.
+      const attackers = eligibleFighters(colony.astronauts.agents, null).length
+      const defenders = friendFighters(hydrated.find((n) => n.id === id)?.threads)
+      if (attackers < 1 || defenders < 1) {
+        hud.hint('Nobody free to fight right now — busy bots never fight')
+        return
+      }
+      const battle = await newBattle({ targetNeighborId: id, targetKey: saved.key, attackers, defenders })
+      const previous = state.war
+      state.war = { ...(state.war || {}), battle }
+      // The friend learns of it from our snapshot, which is read from the file.
+      if (!(await saveNow())) {
+        state.war = previous
+        return
+      }
+      syncWar()
+      hud.hint(`Your bots are marching on ${entry.name}`)
+    } catch (err) {
+      hud.toast(err.message || 'Could not start the battle', 'err')
+    } finally {
+      attacking = false
+      hud.setNeighbors(neighborModel())
+    }
+  },
+
+  focusNeighbor: (id) => {
+    const site = colony.neighborSites.find((s) => s.id === id)
+    if (!site) {
+      hud.hint('Not reached yet — nothing to fly to')
+      return
+    }
+    if (rig.following) select(null, {})
+    rig.focus(new THREE.Vector3(site.x, 0, site.z), { distance: Math.max(30, site.r * 2.2) })
   },
 }
 
@@ -484,7 +670,8 @@ let lastPhrase = 0
 
 /** The crew as the jump keys see them — see game/jumps.js. */
 function jumpCandidates() {
-  return colony.astronauts.agents.filter(onTheMap).map((a) => ({
+  // A friend's bot is theirs to answer: N, J, B and the status buttons only ever reach your own.
+  return colony.astronauts.agents.filter((a) => onTheMap(a) && !a.neighbor).map((a) => ({
     id: a.id,
     status: a.status,
     project: a.thread?.project,
@@ -502,7 +689,7 @@ function projectOrder() {
 /** Still on the surface, and (if asked) still in the state the jump was looking for. */
 function isCandidate(id, qualifies) {
   const agent = colony.agentFor(id)
-  if (!agent || !onTheMap(agent)) return false
+  if (!agent || !onTheMap(agent) || agent.neighbor) return false
   return !qualifies || qualifies({ id, status: agent.status, project: agent.thread?.project })
 }
 
@@ -539,7 +726,7 @@ function select(id, { fly = false } = {}) {
     ambience.play(`select-${n}`, { x: agent.pos.x, y: agent.pos.y + 0.8, z: agent.pos.z, gain: 0.9 })
   }
   // Picking somebody is also picking the zone they are standing on: the sidebar follows.
-  if (thread?.project && colony.plots.has(thread.project)) selectedProject = thread.project
+  if (!thread?.neighbor && thread?.project && colony.plots.has(thread.project)) selectedProject = thread.project
   syncProject()
   if (fly) {
     rig.focus(new THREE.Vector3(agent.pos.x, 0, agent.pos.z), { distance: Math.min(rig.desiredDistance, 26) })
@@ -973,11 +1160,11 @@ engine.canvas.addEventListener('pointerdown', (e) => {
   const agent = colony.pick(p.x, p.y, p.aspect)
   if (agent) {
     // Held, it picks up; let go early and it was a selection all along.
-    if (!canGrab(agent)) return
+    if (!canGrab(agent) || agent.neighbor) return
     drag.candidateAgent = agent
   } else {
     const plot = plotUnder(e, p)
-    if (!plot) return
+    if (!plot || plot.neighbor) return
     drag.candidate = plot.name
   }
   drag.startX = e.clientX
@@ -1040,7 +1227,12 @@ engine.canvas.addEventListener('pointerup', (e) => {
   // opens that repo's sidebar, and bare ground closes that too.
   if (selectedId) select(null, {})
   const plot = plotUnder(e, p)
-  if (plot) selectProject(plot.name, {})
+  if (plot?.neighbor) {
+    // A friend's zone has no folder here and nothing to do to it — say whose it is and stop.
+    let bots = 0
+    for (const t of colony.neighborThreads.values()) if (t.neighbor.id === plot.neighbor.id && t.project === plot.name) bots++
+    hud.hint(`${plot.neighbor.name} · ${plot.name} · ${bots} bot${bots === 1 ? '' : 's'}`)
+  } else if (plot) selectProject(plot.name, {})
   else actions.closeProject()
 })
 
@@ -1243,7 +1435,10 @@ function applyThreads(list) {
   for (const id of restoring) known.delete(id)
   restoring.clear()
 
-  const stats = colony.setThreads(list, archivedSet, hiddenSet, known)
+  const tally = state.war?.tally || {}
+  hydrated = hydrateNeighbors(state.neighbors, neighborResults).map((n) => ({ ...n, record: formatRecord(tally[n.id]) }))
+  const stats = colony.setThreads(list, archivedSet, hiddenSet, known, hydrated)
+  rig.setWorldLimit(colony.worldReach())
   hud.setStats(stats)
   chimeForNewWaiting(list, archivedSet, hiddenSet)
 
@@ -1309,8 +1504,17 @@ async function poll() {
   if (polling) return
   polling = true
   try {
-    const res = await fetchThreads()
+    // Friends ride the same clock as your own threads. A failed neighbour fetch keeps what we
+    // had: their settlement going quiet is the server's call, made per friend.
+    const wantNeighbors = (state.neighbors || []).length > 0
+    const [res, nb] = await Promise.all([
+      fetchThreads(),
+      wantNeighbors ? fetchNeighbors().catch(() => null) : Promise.resolve({ neighbors: [] }),
+    ])
+    if (nb) neighborResults = nb.neighbors || []
     applyThreads(res.threads || [])
+    syncWar()
+    hud.setNeighbors(neighborModel())
     hud.removeBoot()
   } catch (err) {
     hud.toast(err.message || 'Could not reach the thread scanner', 'err')
@@ -1318,6 +1522,231 @@ async function poll() {
   } finally {
     polling = false
   }
+}
+
+/**
+ * Friends between full polls. Re-applies the threads already in hand rather than rescanning your
+ * own harnesses, so a friend's bot changing state shows up within seconds without your machine
+ * doing its own scan three times as often.
+ */
+let pollingNeighbors = false
+async function pollNeighbors() {
+  if (polling || pollingNeighbors || document.hidden || !(state.neighbors || []).length) return
+  pollingNeighbors = true
+  try {
+    const nb = await fetchNeighbors().catch(() => null)
+    if (!nb) return
+    neighborResults = nb.neighbors || []
+    applyThreads(threads)
+    syncWar()
+    hud.setNeighbors(neighborModel())
+  } finally {
+    pollingNeighbors = false
+  }
+}
+
+/**
+ * Save now rather than in half a second: the share port follows the file, and the page asks about
+ * it next. False when the save failed, so a caller can put its change back rather than carry on.
+ */
+async function saveNow() {
+  clearTimeout(pendingSave)
+  try {
+    state = await saveState(state)
+    return true
+  } catch (err) {
+    hud.toast(err.message || 'Could not save the colony', 'err')
+    return false
+  }
+}
+
+/** Ask our own server whether the share port is open, then redraw the panel. */
+async function refreshSharing() {
+  sharingInfo = await fetchSharing().catch(() => null)
+  hud.setNeighbors(neighborModel())
+}
+
+const hostOf = (url) => {
+  try {
+    return new URL(url).hostname
+  } catch {
+    return 'Neighbor'
+  }
+}
+
+/** Everything Settings → Neighbors and the sidebar list show, from state plus the last fetch. */
+function neighborModel() {
+  const sharing = state.sharing || {}
+  const war = state.war || {}
+  const info = sharingInfo
+  const byId = new Map(neighborResults.map((r) => [r.id, r]))
+  const noAddress = sharing.enabled && info?.listening && !info.lanAddress
+  const homeFighters = eligibleFighters(colony.astronauts.agents, null).length
+  const now = Date.now()
+  const busy = Boolean(warNow) || battleLive(war.battle, now)
+  return {
+    sharing: {
+      enabled: Boolean(sharing.enabled),
+      name: sharing.name || info?.defaultName || '',
+      error: sharing.enabled ? info?.error || (noAddress ? 'No Wi-Fi address found on this machine' : '') : '',
+      link: sharing.enabled && info?.listening ? shareLink({ lanAddress: info.lanAddress, port: info.port, key: sharing.key }) : '',
+    },
+    neighbors: (state.neighbors || []).map((n) => {
+      const r = byId.get(n.id)
+      const name = r?.snapshot?.name || hostOf(n.url)
+      const attack = attackBlocker({
+        secure: warSecure,
+        enabled: war.enabled === true,
+        sharing: Boolean(sharing.enabled),
+        result: r,
+        name,
+        busy,
+        friendBusy: friendInBattle(r?.snapshot, now),
+        homeFighters,
+        friendFighters: friendFighters(hydrated.find((h) => h.id === n.id)?.threads),
+      })
+      return {
+        id: n.id,
+        name,
+        status: r?.status || 'unreachable',
+        lastSeenAt: r?.lastSeenAt || 0,
+        record: formatRecord(war.tally?.[n.id]),
+        attack,
+      }
+    }),
+    full: (state.neighbors || []).length >= NEIGHBOR_CAP,
+    war: { enabled: war.enabled === true },
+  }
+}
+
+/** A friend's name as their own snapshot gives it, or their address before they have answered. */
+function friendName(id) {
+  const r = neighborResults.find((x) => x.id === id)
+  const saved = (state.neighbors || []).find((n) => n.id === id)
+  return r?.snapshot?.name || (saved ? hostOf(saved.url) : 'Neighbor')
+}
+
+/**
+ * Hash our share key into the tag each friend's battle would carry if it were aimed at us. Ids no
+ * friend announces any more are dropped, so the cache is never bigger than the battles on show.
+ */
+function refreshWarTags() {
+  const key = state.sharing?.key || ''
+  if (!warSecure) return
+  if (key !== warTagFor.key) warTagFor = { key, byId: new Map() }
+  if (!key) return
+  const ids = new Set(hydrated.map((f) => f.battle?.id).filter(Boolean))
+  for (const id of warTagFor.byId.keys()) if (!ids.has(id)) warTagFor.byId.delete(id)
+  const cache = warTagFor
+  for (const id of ids) {
+    if (cache.byId.has(id)) continue
+    cache.byId.set(id, '')
+    warTag(key, id)
+      .then((tag) => {
+        if (warTagFor === cache && cache.byId.has(id)) cache.byId.set(id, tag)
+      })
+      .catch(() => {
+        /* no tag, so this battle is not seen as ours: the colony carries on as if nobody attacked */
+      })
+  }
+}
+
+/**
+ * War mode's one loop, run on every poll and a few times a second from the frame. Decides which
+ * battle is on screen — our own attack first, else a friend's attack aimed at us — hands it to the
+ * colony, keeps the banner's score and clock current, and counts the result once when it ends.
+ */
+function syncWar(now = Date.now()) {
+  lastWarSync = now
+  refreshWarTags()
+  const own = state.war?.battle
+  const fate = ownBattleFate(own, state.neighbors, now)
+  // Our own battle, gone past its linger, leaves the file. Counted first in case this page was
+  // closed through its end: the plan is the same whenever it is run, so the result still stands.
+  // One on a friend we have since removed just leaves, uncounted.
+  if (fate === 'over') countResult({ battle: own, side: 'attack', neighborId: own.targetNeighborId })
+  if (fate === 'over' || fate === 'called-off') {
+    state.war = { ...state.war, battle: null }
+    queueSave()
+  }
+
+  let next = null
+  if (state.war?.battle) {
+    const b = state.war.battle
+    next = { battle: b, side: 'attack', neighborId: b.targetNeighborId }
+  } else if (state.war?.enabled && warTagFor.key) {
+    // One battle at a time: we only look for an attack on us while we are not attacking anyone.
+    // `hydrated` can trail a removal by a frame, so friends are checked against the list itself.
+    const friends = hydrated.filter((f) => isFriend(state.neighbors, f.id))
+    const hit = incomingBattle(friends, (id) => warTagFor.byId.get(id), now, {
+      current: warNow?.side === 'defend' ? warNow : null,
+      seen: state.war?.seen,
+      endedAt: warEndedAt,
+    })
+    if (hit) next = { battle: hit.battle, side: 'defend', neighborId: hit.neighborId }
+  }
+
+  if (!next?.neighborId) {
+    if (warNow) {
+      warNow = null
+      colony.setBattle(null)
+      hud.setBattleBanner(null)
+      hud.setNeighbors(neighborModel())
+    }
+    return
+  }
+  if (warNow?.battle.id !== next.battle.id || warNow.side !== next.side || warNow.neighborId !== next.neighborId) {
+    warNow = { ...next, plan: planBattle(next.battle) }
+    if (next.side === 'defend') {
+      // The battle is in the attacker's snapshot, not ours: say in ours that we are busy until it
+      // has lingered, or a third friend would see us free and start a fight we never show.
+      const busyUntil = next.battle.startedAt + warNow.plan.durationMs + LINGER_MS
+      if (state.war?.busyUntil !== busyUntil) {
+        state.war = { ...state.war, busyUntil }
+        queueSave()
+      }
+    }
+    hud.setNeighbors(neighborModel())
+  }
+  // From here on, only `warNow`: the battle as first seen, which its plan was made from. The
+  // colony, the banner and the score all run off the same numbers, whatever the snapshot says now.
+  const { battle, side, neighborId, plan } = warNow
+  colony.setBattle(battle, { side, enemyNeighborId: neighborId })
+
+  const view = bannerPhase(plan, battle.startedAt, now)
+  if (!view) {
+    hud.setBattleBanner(null)
+    if (side === 'defend') warEndedAt[neighborId] = Math.max(warEndedAt[neighborId] || 0, battle.startedAt + plan.durationMs)
+    countResult(warNow)
+    return
+  }
+  hud.setBattleBanner({
+    side,
+    name: friendName(neighborId),
+    score: scoreAt(plan, battle.startedAt, now),
+    label: view.label,
+  })
+}
+
+/**
+ * A finished battle into the tally — once per battle id, whichever tab or reload sees it end. Runs
+ * on every war tick through the linger, so a battle already counted stops at the `seen` check
+ * rather than re-planning first.
+ */
+function countResult({ battle, side, neighborId, plan }) {
+  // A friend removed since: no tally entry for someone who is gone, and no toast naming their address.
+  if (!isFriend(state.neighbors, neighborId) || state.war?.seen?.includes(battle.id)) return
+  const planned = plan || planBattle(battle)
+  const result = recordResult(state.war, { battle, side, neighborId }, planned)
+  if (!result) return
+  state.war = result.war
+  queueSave()
+  // On screen only: the losers sulk and bicker for a minute, the winners play. Nothing is saved.
+  colony.social.noteWarResult({ won: result.won, enemyId: neighborId, endedAt: battle.startedAt + planned.durationMs })
+  hud.toast(resultText(friendName(neighborId), result))
+  // The record is on their ship's sign, which is drawn with the roster.
+  applyThreads(threads)
+  hud.setNeighbors(neighborModel())
 }
 
 function queueSave() {
@@ -1367,8 +1796,11 @@ async function boot() {
   colony.astronauts.setRig(crewRig())
   if (!kitError) colony.onAssetsReady()
 
+  // The settings panel needs the share address before it can show a link.
+  refreshSharing()
   await poll()
   setInterval(poll, POLL_MS)
+  setInterval(pollNeighbors, NEIGHBOR_POLL_MS)
   window.addEventListener('focus', poll)
   // A tab that was hidden for an hour should catch up the moment it comes back.
   document.addEventListener('visibilitychange', () => {
@@ -1401,6 +1833,9 @@ settings.onChange((changed, scope) => {
   // rebuilt from the list rather than merely re-rendered.
   if (changed.has('hideDormant')) applyThreads(threads)
   if (changed.has('maxAgents')) applyThreads(threads)
+  // Friends sit on different sides of each world (only landward on Shoreline), so they move now
+  // rather than on the next poll.
+  if (changed.has('planet')) applyThreads(threads)
 })
 
 // ── frame ─────────────────────────────────────────────────────────────────────────────
@@ -1415,6 +1850,9 @@ engine.add({
     // colony projects anything to the screen.
     setCurveView(rig.target, rig.azimuth, settings.get('worldCurve') * CURVE_FULL)
     colony.update(dt, elapsed, rig.target)
+    // The banner's clock ticks in seconds; four looks a second keep it, and the moment a battle is
+    // counted, within a quarter second of the plan on both screens.
+    if (Date.now() - lastWarSync > 250) syncWar()
     // Whatever the camera is orbiting is what should be in focus.
     engine.setFocusDistance(rig.distance)
 
