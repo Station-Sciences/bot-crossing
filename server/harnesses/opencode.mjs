@@ -204,6 +204,157 @@ async function sessionFacts(db, sessionId, timeUpdated) {
   return facts
 }
 
+/** One session row plus its derived facts, in the thread shape every harness hands the scanner. */
+function toThread(r, prompt, facts) {
+  const { projectPath, project, cwd } = projectOf(r.directory)
+  const { model, effort } = parseModel(r.model)
+  const title = clean(r.title) || prompt || 'Untitled thread'
+  return {
+    id: ID(r.id),
+    title: title.slice(0, 120),
+    preview: prompt.slice(0, 240),
+    project,
+    projectPath,
+    // OpenCode has no worktree concept of its own, and guessing one from
+    // the path would put a branch name on a thread that never had one.
+    worktree: '',
+    cwd,
+    gitBranch: '',
+    model,
+    effort,
+    createdAt: num(r.time_created),
+    lastActivityAt: num(r.time_updated),
+    // No focus history, so "have you looked at this" is unknowable — not false.
+    lastFocusedAt: 0,
+    unread: false,
+    running: facts.running,
+    hasError: facts.hasError,
+    starred: false,
+    routine: '',
+    prState: '',
+    archived: r.time_archived !== null && r.time_archived !== undefined,
+    // Bytes, like every other harness: the field is a shared log scale
+    // across the whole map, and a token count would make OpenCode
+    // buildings taller than Claude ones for the same work.
+    sizeBytes: facts.sizeBytes,
+    source: typeof r.agent === 'string' ? r.agent : '',
+    canOpen: false,
+    ref: { sessionId: r.id, cwd }
+  }
+}
+
+/** The original store: `session`, with turns split across `message` and `part`. */
+async function scanV1(db, tables) {
+  if (!tables.has('session') || !tables.has('message') || !tables.has('part')) return []
+  // Undocumented private state that drifts between versions — probe every
+  // column before naming it, or one renamed column costs the whole harness.
+  const cols = new Set(db.prepare(`PRAGMA table_info(session)`).all().map((r) => r.name))
+  for (const need of ['id', 'directory', 'title', 'time_created', 'time_updated']) {
+    if (!cols.has(need)) return []
+  }
+  const rows = db
+    .prepare(
+      `SELECT id, directory, title, agent, model, time_created, time_updated, time_archived FROM session ${cols.has('parent_id') ? 'WHERE parent_id IS NULL' : ''} ORDER BY time_updated DESC`
+    )
+    .all()
+  const out = []
+  for (const r of rows) {
+    if (typeof r.id !== 'string' || !r.id) continue
+    const prompt = await firstUserText(db, r.id)
+    const facts = await sessionFacts(db, r.id, num(r.time_updated))
+    out.push(toThread(r, prompt, facts))
+  }
+  return out
+}
+
+/**
+ * The 1.5 store: `session_v2`, with one `session_message` row per event — `user`
+ * (its text inline), `assistant` (content inline, stamped `time.completed` when
+ * the turn ends) and `idle` (the turn is over, with an `outcome`). New sessions
+ * are written here only, so a 1.5 install leaves the old tables empty.
+ */
+async function firstUserTextV2(db, sessionId) {
+  if (previewCache.has(sessionId)) return previewCache.get(sessionId)
+  let out = ''
+  try {
+    const row = db
+      .prepare(`SELECT data FROM session_message WHERE session_id = ? AND type = 'user' ORDER BY seq ASC LIMIT 1`)
+      .get(sessionId)
+    if (row?.data) out = clean(JSON.parse(row.data)?.text)
+  } catch {
+    out = ''
+  }
+  previewCache.set(sessionId, out)
+  return out
+}
+
+async function sessionFactsV2(db, tables, r) {
+  const timeUpdated = num(r.time_updated)
+  const key = `v2:${r.id}`
+  const hit = factsCache.get(key)
+  if (hit && hit.timeUpdated === timeUpdated && hit.idle === r.time_idle) return hit.facts
+  const facts = { running: false, hasError: false, sizeBytes: 0 }
+  try {
+    const m = db.prepare(`SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM session_message WHERE session_id = ?`).get(r.id)
+    facts.sizeBytes = num(m?.n)
+    if (tables.has('session_part')) {
+      const p = db.prepare(`SELECT COALESCE(SUM(LENGTH(data)), 0) AS n FROM session_part WHERE session_id = ?`).get(r.id)
+      facts.sizeBytes += num(p?.n)
+    }
+  } catch {
+    /* keep what was counted */
+  }
+  try {
+    const last = db
+      .prepare(
+        `SELECT type, data FROM session_message WHERE session_id = ? AND type IN ('user', 'assistant', 'idle') ORDER BY seq DESC LIMIT 1`
+      )
+      .get(r.id)
+    let d = {}
+    try {
+      d = last?.data ? JSON.parse(last.data) : {}
+    } catch {
+      d = {}
+    }
+    const msgError = typeof d?.error?.name === 'string' ? d.error.name : ''
+    // `time_busy` past `time_idle` is OpenCode's own "a turn is in flight"; the
+    // trailing message is the fallback for a row that predates those columns.
+    const busy = r.time_busy != null && (r.time_idle == null || num(r.time_busy) > num(r.time_idle))
+    const open =
+      last?.type === 'user' || (last?.type === 'assistant' && !d?.time?.completed && !d?.finish && !msgError)
+    facts.running = (busy || open) && Date.now() - timeUpdated < ACTIVE_WINDOW_MS
+    const outcome = typeof r.idle_outcome === 'string' ? r.idle_outcome : typeof d?.outcome === 'string' ? d.outcome : ''
+    // An abort is the user pressing escape, not a failure — same rule as the old store.
+    facts.hasError = (/error|fail/i.test(outcome) || Boolean(msgError)) && !/abort|cancel/i.test(`${outcome} ${msgError}`)
+  } catch {
+    /* mid-write, or gone */
+  }
+  factsCache.set(key, { timeUpdated, idle: r.time_idle, facts })
+  return facts
+}
+
+async function scanV2(db, tables) {
+  if (!tables.has('session_v2') || !tables.has('session_message')) return []
+  const cols = new Set(db.prepare(`PRAGMA table_info(session_v2)`).all().map((r) => r.name))
+  for (const need of ['id', 'directory', 'title', 'time_created', 'time_updated']) {
+    if (!cols.has(need)) return []
+  }
+  const pick = (c) => (cols.has(c) ? c : `NULL AS ${c}`)
+  const rows = db
+    .prepare(
+      `SELECT id, directory, title, ${['agent', 'model', 'time_archived', 'time_busy', 'time_idle', 'idle_outcome'].map(pick).join(', ')}, time_created, time_updated FROM session_v2 ${cols.has('parent_id') ? 'WHERE parent_id IS NULL' : ''} ORDER BY time_updated DESC`
+    )
+    .all()
+  const out = []
+  for (const r of rows) {
+    if (typeof r.id !== 'string' || !r.id) continue
+    const prompt = await firstUserTextV2(db, r.id)
+    const facts = await sessionFactsV2(db, tables, r)
+    out.push(toThread(r, prompt, facts))
+  }
+  return out
+}
+
 async function scanThreads() {
   const file = await dbPath()
   if (!file) return []
@@ -222,58 +373,11 @@ async function scanThreads() {
     const tables = new Set(
       db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all().map((r) => r.name)
     )
-    if (!tables.has('session') || !tables.has('message') || !tables.has('part')) return []
-    // Undocumented private state that drifts between versions — probe every
-    // column before naming it, or one renamed column costs the whole harness.
-    const cols = new Set(db.prepare(`PRAGMA table_info(session)`).all().map((r) => r.name))
-    for (const need of ['id', 'directory', 'title', 'time_created', 'time_updated']) {
-      if (!cols.has(need)) return []
-    }
-    const rows = db
-      .prepare(
-        `SELECT id, directory, title, agent, model, time_created, time_updated, time_archived FROM session ${cols.has('parent_id') ? 'WHERE parent_id IS NULL' : ''} ORDER BY time_updated DESC`
-      )
-      .all()
-    const out = []
-    for (const r of rows) {
-      if (typeof r.id !== 'string' || !r.id) continue
-      const { projectPath, project, cwd } = projectOf(r.directory)
-      const { model, effort } = parseModel(r.model)
-      const prompt = await firstUserText(db, r.id)
-      const title = clean(r.title) || prompt || 'Untitled thread'
-      const facts = await sessionFacts(db, r.id, num(r.time_updated))
-      out.push({
-        id: ID(r.id),
-        title: title.slice(0, 120),
-        preview: prompt.slice(0, 240),
-        project,
-        projectPath,
-        // OpenCode has no worktree concept of its own, and guessing one from
-        // the path would put a branch name on a thread that never had one.
-        worktree: '',
-        cwd,
-        gitBranch: '',
-        model,
-        effort,
-        createdAt: num(r.time_created),
-        lastActivityAt: num(r.time_updated),
-        // No focus history, so "have you looked at this" is unknowable — not false.
-        lastFocusedAt: 0,
-        unread: false,
-        running: facts.running,
-        hasError: facts.hasError,
-        starred: false,
-        routine: '',
-        prState: '',
-        archived: r.time_archived !== null && r.time_archived !== undefined,
-        // Bytes, like every other harness: the field is a shared log scale
-        // across the whole map, and a token count would make OpenCode
-        // buildings taller than Claude ones for the same work.
-        sizeBytes: facts.sizeBytes,
-        source: typeof r.agent === 'string' ? r.agent : '',
-        canOpen: false,
-        ref: { sessionId: r.id, cwd }
-      })
+    // Each store is read on its own, so a drifted schema in one never costs the other.
+    const out = await scanV1(db, tables).catch(() => [])
+    const seen = new Set(out.map((t) => t.id))
+    for (const t of await scanV2(db, tables).catch(() => [])) {
+      if (!seen.has(t.id)) out.push(t)
     }
     return out
   } catch {

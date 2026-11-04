@@ -504,6 +504,51 @@ test('a turn the user stopped is not an error — denial and abort must not redd
   }
 })
 
+test('opencode 1.5 sessions live in session_v2 while the old tables sit empty', async () => {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'opencode-v2-'))
+  const dbFile = path.join(home, 'opencode.db')
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(dbFile)
+  // The shape 1.5.0 leaves on disk: the old tables still exist, but nothing new is written to them.
+  db.exec(`CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER)`)
+  db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE session_v2 (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, directory TEXT NOT NULL, title TEXT NOT NULL, agent TEXT, model TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, time_archived INTEGER, time_idle INTEGER, idle_outcome TEXT, time_busy INTEGER)`)
+  db.exec(`CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, seq INTEGER NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  db.exec(`CREATE TABLE session_part (message_id TEXT NOT NULL, session_id TEXT NOT NULL, ordinal INTEGER NOT NULL, type TEXT NOT NULL, call_id TEXT, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL)`)
+  const now = Date.now()
+  const model = JSON.stringify({ id: 'local-model', providerID: 'local' })
+  const ins = db.prepare(`INSERT INTO session_v2 (id, project_id, parent_id, directory, title, agent, model, time_created, time_updated, time_archived, time_idle, idle_outcome, time_busy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  ins.run('ses_done', 'global', null, '/tmp/site', 'Explain the project', 'build', model, now - 60000, now - 1000, null, now - 1000, 'succeeded', now - 59000)
+  ins.run('ses_busy', 'global', null, '/tmp/site', 'Still going', 'build', model, now - 30000, now, null, null, null, now - 29000)
+  ins.run('ses_child', 'global', 'ses_busy', '/tmp/site', 'Subtask (@general subagent)', 'general', null, now - 20000, now, null, null, null, now - 20000)
+  const mins = db.prepare(`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+  mins.run('m1', 'ses_done', 'user', 4, now - 60000, now - 60000, JSON.stringify({ time: { created: now - 60000 }, text: '  explain what  this project does ' }))
+  mins.run('m2', 'ses_done', 'assistant', 7, now - 59000, now - 1000, JSON.stringify({ time: { created: now - 59000, completed: now - 1000 }, content: [{ type: 'text', text: 'A Hugo site.' }] }))
+  mins.run('m3', 'ses_done', 'idle', 9, now - 1000, now - 1000, JSON.stringify({ time: { created: now - 1000 }, outcome: 'succeeded' }))
+  mins.run('m4', 'ses_busy', 'user', 1, now - 30000, now - 30000, JSON.stringify({ time: { created: now - 30000 }, text: 'keep going' }))
+  mins.run('m5', 'ses_busy', 'assistant', 2, now - 29000, now, JSON.stringify({ time: { created: now - 29000 }, content: [] }))
+  db.close()
+  process.env.OPENCODE_DB = dbFile
+  try {
+    const threads = await opencode.scanThreads()
+    const byId = new Map(threads.map((t) => [t.id, t]))
+    assert.equal(threads.length, 2, 'subagent rows stay off the map in the new store too')
+    const done = byId.get('opencode:ses_done')
+    assert.equal(done.title, 'Explain the project')
+    assert.equal(done.preview, 'explain what this project does')
+    assert.equal(done.project, 'site')
+    assert.equal(done.model, 'local-model')
+    assert.equal(done.running, false)
+    assert.equal(done.hasError, false)
+    assert.ok(done.sizeBytes > 0)
+    assert.equal(byId.get('opencode:ses_busy').running, true, 'busy past idle is a turn in flight')
+  } finally {
+    delete process.env.OPENCODE_DB
+    await fsp.rm(home, { recursive: true, force: true })
+  }
+})
+
 test('a message-level abort is the user stopping, but a provider error is a failure', async () => {
   const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'opencode-msgerr-'))
   const dbFile = path.join(home, 'opencode.db')
