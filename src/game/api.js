@@ -15,6 +15,7 @@ const post = (url, payload) =>
   })
 
 export const fetchThreads = () => req('/api/threads')
+export const fetchHarnesses = () => req('/api/harnesses')
 
 /**
  * The colony file, and the base every later save is measured against.
