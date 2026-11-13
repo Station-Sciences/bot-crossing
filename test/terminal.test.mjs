@@ -63,13 +63,13 @@ test('a named terminal the table does not know is skipped, not guessed at', posi
   })
 })
 
-test('kaku is driven with wezterm flags', posixOnly, async () => {
+test('kaku is asked for a tab in the window already open', posixOnly, async () => {
   await withTmp(async (dir) => {
     const kaku = await fakeExecutable(dir, 'kaku')
     const env = { ...nothingInstalled(dir), BOT_CROSSING_TERMINAL: kaku.file }
     const result = await withEnv(env, () => openInTerminal(ARGV, dir))
     assert.equal(result.ok, true)
-    assert.deepEqual(await kaku.argv(), ['start', '--cwd', dir, '--', ...ARGV])
+    assert.deepEqual(await kaku.argv(), ['start', '--new-tab', '--cwd', dir, '--', ...ARGV])
   })
 })
 

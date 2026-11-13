@@ -32,9 +32,10 @@ const TERMINALS = {
   alacritty: (dir, cmd) => ['--working-directory', dir, '-e', ...cmd],
   ghostty: (dir, cmd) => [`--working-directory=${dir}`, '-e', ...cmd],
   wezterm: (dir, cmd) => ['start', '--cwd', dir, '--', ...cmd],
-  // A wezterm fork, and it takes wezterm's flags unchanged. It needs a key of its own anyway,
-  // since this table is looked up by the name of the binary.
-  kaku: (dir, cmd) => ['start', '--cwd', dir, '--', ...cmd],
+  // A wezterm fork, so wezterm's flags, plus `--new-tab`: without it a thread opens in a window
+  // of its own even when Kaku is already on screen. Kaku honours it from 0.22; before that it
+  // was inert, and harmless either way.
+  kaku: (dir, cmd) => ['start', '--new-tab', '--cwd', dir, '--', ...cmd],
   foot: (dir, cmd) => [`--working-directory=${dir}`, ...cmd],
   terminator: (dir, cmd) => [`--working-directory=${dir}`, '-x', ...cmd],
   xterm: (_dir, cmd) => ['-e', ...cmd],
