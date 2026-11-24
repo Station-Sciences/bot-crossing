@@ -1010,6 +1010,125 @@ body {
   min-width: 0;
 }
 
+/* The zone's swatch doubles as its colour menu. Bigger than the list swatch so it reads as
+   something to press, with a caret so it reads as a menu rather than a status light. */
+.side .swatch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  padding: 0 4px 0 6px;
+  margin-left: -6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  flex: none;
+}
+
+.side .swatch-btn:hover,
+.side .swatch-btn:focus-visible {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.side .swatch-btn .swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 4px;
+}
+
+.side .swatch-btn svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.color-menu {
+  position: fixed;
+  z-index: 60;
+  width: 214px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel-solid);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.color-menu .cm-head {
+  padding: 2px 4px 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.color-menu .cm-swatches {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+
+.color-menu .cm-swatches button {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  box-shadow: 0 0 8px -2px currentColor;
+}
+
+.color-menu .cm-swatches button:hover {
+  transform: scale(1.1);
+}
+
+.color-menu .cm-swatches button[aria-checked='true'],
+.color-menu .cm-swatches button:focus-visible {
+  border-color: var(--text);
+  outline: none;
+}
+
+.color-menu .cm-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.color-menu .cm-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.color-menu .cm-item input[type='color'] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  cursor: pointer;
+}
+
 .side .name {
   font-weight: 650;
   font-size: 15px;

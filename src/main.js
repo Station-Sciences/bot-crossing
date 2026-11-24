@@ -64,7 +64,7 @@ engine.setPlanetGrade(PLANETS[settings.get('planet')]?.grade)
 const rig = new CameraRig(engine.camera, engine.canvas, settings)
 const colony = new Colony(engine.scene, settings, engine.camera, engine.renderer)
 
-let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, names: {} }
+let state = { archived: [], archivedAt: {}, opened: [], plots: {}, seen: {}, hiddenProjects: [], viewedAt: {}, names: {}, zoneColors: {} }
 let threads = []
 /** Last legend built for the bottom bar, kept so the open zone's chip can light up between polls. */
 let legendProjects = []
@@ -371,6 +371,17 @@ const actions = {
     hud.toast(`Showing ${name} again`)
   },
 
+  /** Recolour a zone, or hand it back to the palette with `null`. Colony-only, like hiding. */
+  setZoneColor: (name, color) => {
+    if (!name) return
+    const zoneColors = { ...(state.zoneColors || {}) }
+    if (color === null) delete zoneColors[name]
+    else zoneColors[name] = { color }
+    state.zoneColors = zoneColors
+    queueSave()
+    applyZoneColors()
+  },
+
   copyProjectPath: async () => {
     const folder = selectedProject && pathForProject(selectedProject)
     if (!folder) return
@@ -611,7 +622,7 @@ function pathForProject(name) {
 
 /** Push the open zone's current contents at the sidebar. Closes it if the zone is gone. */
 function syncProject() {
-  const hidden = hiddenCatalog(state.hiddenProjects || [], threads)
+  const hidden = hiddenCatalog(state.hiddenProjects || [], threads).map((p) => ({ ...p, accent: colony.accentFor(p.name) }))
   // Folded-away repos are listed alongside the ones you hid by hand. Same principle: nothing
   // leaves the map without somewhere on screen saying where it went.
   const folded = hiddenCatalog([...(colony.dormantProjects || [])], threads)
@@ -1320,6 +1331,13 @@ async function poll() {
   }
 }
 
+function applyZoneColors() {
+  const colors = Object.fromEntries(Object.entries(state.zoneColors || {}).map(([name, c]) => [name, c.color]))
+  // Not before the first roster: an empty apply would count as the colony's first look at the
+  // world, and the real one after it would chime for every thread already waiting.
+  if (colony.setZoneColors(colors) && threads.length) applyThreads(threads)
+}
+
 function queueSave() {
   clearTimeout(pendingSave)
   pendingSave = setTimeout(async () => {
@@ -1346,6 +1364,7 @@ async function boot() {
         state = s
         // Before the first roster: zones come back to the ground they were on last time.
         colony.restoreLayout(state.plots)
+        applyZoneColors()
         // And the settings, but only for a browser that has none of its own — an explicit
         // choice made here always outranks the file.
         if (!hasStoredSettings() && state.settings) settings.applyAll(state.settings)

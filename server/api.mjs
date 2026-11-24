@@ -61,6 +61,7 @@ const emptyState = () => ({
   hiddenProjects: [],
   viewedAt: {},
   names: {},
+  zoneColors: {},
   settings: null,
   updatedAt: 0,
 })
@@ -73,6 +74,18 @@ const asNames = (v) =>
     Object.entries(asObject(v))
       .filter(([, name]) => typeof name === 'string' && name.trim())
       .map(([id, name]) => [id, name.trim().slice(0, 120)]),
+  )
+/**
+ * Colours you picked for zones, keyed by project name like `plots`: `{ color }`, a 24-bit RGB
+ * integer. An object rather than a bare number so a zone colour can grow a field later without
+ * another migration.
+ */
+const asZoneColors = (v) =>
+  Object.fromEntries(
+    Object.entries(asObject(v))
+      .map(([name, c]) => [name, asObject(c)])
+      .filter(([name, c]) => name && Number.isInteger(c.color) && c.color >= 0 && c.color <= 0xffffff)
+      .map(([name, c]) => [name, { color: c.color }]),
   )
 
 async function readState() {
@@ -88,6 +101,7 @@ async function readState() {
       hiddenProjects: asArray(raw.hiddenProjects).map(String).filter(Boolean),
       viewedAt: asObject(raw.viewedAt),
       names: asNames(raw.names),
+      zoneColors: asZoneColors(raw.zoneColors),
       settings: raw.settings && typeof raw.settings === 'object' ? raw.settings : null,
       updatedAt: Number(raw.updatedAt) || 0,
     }
@@ -124,6 +138,7 @@ async function writeState(next) {
     hiddenProjects: asArray(next.hiddenProjects).map(String).filter(Boolean),
     viewedAt: asObject(next.viewedAt),
     names: asNames(next.names),
+    zoneColors: asZoneColors(next.zoneColors),
     settings: next.settings && typeof next.settings === 'object' ? next.settings : null,
     updatedAt: Date.now(),
   }
