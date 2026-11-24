@@ -1,9 +1,10 @@
 /**
- * Harness adapter: Antigravity CLI (Google).
+ * Harness adapter: Antigravity (Google) — the CLI and the desktop app.
  *
- * Antigravity CLI stores sessions under `~/.gemini/antigravity-cli/brain/<sessionId>/`.
- * Transcripts are JSONL files located at `.system_generated/logs/transcript.jsonl`
- * or `transcript.jsonl` inside the session directory.
+ * Both keep sessions under `<home>/brain/<sessionId>/`, with the transcript at
+ * `.system_generated/logs/transcript.jsonl` or `transcript.jsonl` inside the session directory.
+ * They differ only in the home: `~/.gemini/antigravity-cli` for the CLI, `~/.gemini/antigravity`
+ * for the app. Both are read, so a machine with either — or both — gets every conversation.
  *
  * Read-only, no subprocess, and no modifications to harness files.
  */
@@ -13,10 +14,18 @@ import os from 'node:os'
 import { exists, jsonLines, listDirs, readHead, readTail, findExecutable } from '../lib/fsutil.mjs'
 
 const HOME = os.homedir()
-const ANTIGRAVITY_HOME =
-  process.env.BOT_CROSSING_ANTIGRAVITY_HOME ||
-  process.env.ANTIGRAVITY_HOME ||
-  path.join(HOME, '.gemini', 'antigravity-cli')
+/**
+ * Every home to read. An explicit override is the whole list, which is how the tests fake an
+ * install. `source` is what the thread reports: the app's sessions are `desktop`, the CLI's `cli`.
+ */
+const OVERRIDE = process.env.BOT_CROSSING_ANTIGRAVITY_HOME || process.env.ANTIGRAVITY_HOME
+const HOMES = OVERRIDE
+  ? [{ dir: OVERRIDE, source: 'cli' }]
+  : [
+      { dir: path.join(HOME, '.gemini', 'antigravity-cli'), source: 'cli' },
+      { dir: path.join(HOME, '.gemini', 'antigravity'), source: 'desktop' },
+    ]
+const ANTIGRAVITY_HOME = HOMES[0].dir
 const BRAIN_DIR = path.join(ANTIGRAVITY_HOME, 'brain')
 
 const HEAD_BYTES = 96 * 1024
@@ -64,15 +73,16 @@ function extractCwd(text) {
  *
  * The folder a conversation started in wins. Re-read only when the file changes.
  */
-const HISTORY = path.join(ANTIGRAVITY_HOME, 'history.jsonl')
-let history = { mtime: -1, workspaces: new Map() }
-async function workspaces() {
-  const st = await fsp.stat(HISTORY).catch(() => null)
+const historyCache = new Map()
+async function workspaces(home) {
+  const file = path.join(home, 'history.jsonl')
+  const st = await fsp.stat(file).catch(() => null)
   if (!st) return new Map()
-  if (st.mtimeMs === history.mtime) return history.workspaces
+  const history = historyCache.get(file)
+  if (history && st.mtimeMs === history.mtime) return history.workspaces
   const out = new Map()
   try {
-    for (const r of jsonLines(await fsp.readFile(HISTORY, 'utf8'))) {
+    for (const r of jsonLines(await fsp.readFile(file, 'utf8'))) {
       const id = r?.conversationId
       const dir = r?.workspace
       if (typeof id === 'string' && typeof dir === 'string' && path.isAbsolute(dir) && !out.has(id)) out.set(id, dir)
@@ -80,8 +90,93 @@ async function workspaces() {
   } catch {
     /* mid-write, or gone */
   }
-  history = { mtime: st.mtimeMs, workspaces: out }
+  historyCache.set(file, { mtime: st.mtimeMs, workspaces: out })
   return out
+}
+
+/**
+ * The desktop app's own index, `conversation_summaries.db`: one row per conversation with the
+ * title it shows, the workspace it was opened on, and whether it is running. The app writes no
+ * `history.jsonl`, and its transcripts do not name a folder, so without this every app session
+ * lands in "unknown" under its first prompt instead of where you were working.
+ *
+ * Opened read-only and closed straight away. `node:sqlite` is imported lazily, as in
+ * `opencode.mjs`, so a Node without it loses the titles and folders rather than the harness.
+ * Cached against the database *and* its WAL: the app writes in WAL mode, where a change can sit
+ * in `-wal` for a while without the main file's mtime moving.
+ */
+let sqlitePromise
+const sqliteApi = () => (sqlitePromise ??= import('node:sqlite').catch(() => null))
+const summaryCache = new Map()
+
+function folderOfUris(raw) {
+  try {
+    for (const uri of JSON.parse(raw)) {
+      if (typeof uri !== 'string' || !uri.startsWith('file://')) continue
+      const dir = decodeURIComponent(new URL(uri).pathname)
+      if (path.isAbsolute(dir)) return dir
+    }
+  } catch {
+    /* not the JSON list it usually is */
+  }
+  return ''
+}
+
+const timeOf = (v) => {
+  const t = Date.parse(String(v || '').replace(' ', 'T'))
+  return Number.isNaN(t) ? 0 : t
+}
+
+async function summaries(home) {
+  const file = path.join(home, 'conversation_summaries.db')
+  const [db, wal] = await Promise.all([fsp.stat(file).catch(() => null), fsp.stat(`${file}-wal`).catch(() => null)])
+  if (!db) return new Map()
+  const stamp = `${db.mtimeMs}:${db.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}`
+  const hit = summaryCache.get(file)
+  if (hit?.stamp === stamp) return hit.rows
+
+  const rows = new Map()
+  const sqlite = await sqliteApi()
+  if (sqlite?.DatabaseSync) {
+    let handle
+    try {
+      handle = new sqlite.DatabaseSync(file, { readOnly: true })
+      // Private state that drifts between versions: probe the columns before naming them.
+      const cols = new Set(handle.prepare(`PRAGMA table_info(conversation_summaries)`).all().map((r) => r.name))
+      if (cols.has('conversation_id')) {
+        const want = ['title', 'workspace_uris', 'status', 'killed', 'last_modified_time', 'parent_conversation_id', 'not_fully_idle', 'last_user_input_time']
+        const pick = want.filter((c) => cols.has(c))
+        const sql = `SELECT conversation_id${pick.map((c) => `, ${c}`).join('')} FROM conversation_summaries`
+        for (const r of handle.prepare(sql).all()) {
+          if (typeof r.conversation_id !== 'string') continue
+          rows.set(r.conversation_id, {
+            title: clean(r.title),
+            cwd: folderOfUris(r.workspace_uris),
+            status: String(r.status || ''),
+            killed: Boolean(Number(r.killed)),
+            updatedAt: timeOf(r.last_modified_time),
+            child: Boolean(r.parent_conversation_id),
+            // Idle as far as the model goes, but something it started is still going — a command
+            // left running in the background, say.
+            busy: Boolean(Number(r.not_fully_idle)),
+            // When you last sent it something. A sub-agent's is the zero date, which is no time.
+            userInputAt: Math.max(0, timeOf(r.last_user_input_time) || 0),
+          })
+        }
+      }
+    } catch {
+      /* locked mid-checkpoint, or a shape this does not know: try again next poll */
+      return hit?.rows ?? rows
+    } finally {
+      try {
+        handle?.close()
+      } catch {
+        /* already closed */
+      }
+    }
+  }
+  summaryCache.set(file, { stamp, rows })
+  return rows
 }
 
 async function findTranscriptFile(sessionDir) {
@@ -95,9 +190,9 @@ async function findTranscriptFile(sessionDir) {
   return null
 }
 
-async function scanTranscripts() {
+async function scanTranscripts(home) {
   const out = []
-  for (const sessionDir of await listDirs(BRAIN_DIR)) {
+  for (const sessionDir of await listDirs(path.join(home, 'brain'))) {
     const id = path.basename(sessionDir)
     if (!UUID.test(id)) continue
     const file = await findTranscriptFile(sessionDir)
@@ -155,46 +250,194 @@ async function facts(entry) {
   return value
 }
 
+/**
+ * Whether a conversation is stopped on you: a step waiting for approval, such as reading a file
+ * outside the workspace or running a command. The summary index cannot say — it keeps reporting
+ * `RUNNING` the whole time — and the transcript only has steps that finished. The app's own
+ * per-conversation database, `conversations/<id>.db`, has every step with a numeric status;
+ * finished steps are 3, queued ones 1, and the one sitting on Allow/Deny is 9.
+ *
+ * That 9 is read off a real app session, not a published enum, so only the newest few steps are
+ * looked at and only for conversations that claim to be running. Read-only, closed straight
+ * away, and cached against the database and its WAL.
+ */
+const STEP_AWAITING_USER = 9
+/**
+ * A step still under way. Seen on a `run_command` left running in the background: the model ends
+ * its turn and the summary goes IDLE, but the command — a crawler fanning out into a dozen worker
+ * processes, say — is the work, and it is still going.
+ */
+const STEP_RUNNING = 2
+const stepCache = new Map()
+
+/** What a background command is called on a drone: its summary if it gave one, else its script. */
+function commandName(payload) {
+  const summary = /"toolSummary":"([^"]{1,80})"/.exec(payload)
+  if (summary) return summary[1]
+  const line = /"CommandLine":"([^"]{1,400})"/.exec(payload)
+  if (!line) return 'Background command'
+  const words = line[1].split(/\s+/)
+  const script = words.find((w) => /\.(py|sh|js|mjs|ts|rb)$/.test(w))
+  return path.basename(script || words[0] || 'command')
+}
+
+/**
+ * The newest steps of a conversation, from the app's own per-conversation database: whether one
+ * is waiting for approval, and which background commands are still running (as errands, so they
+ * fly as drones over the bot that started them). Read-only, closed straight away, and cached
+ * against the database and its WAL. Only the newest steps are looked at — old ones are history.
+ */
+async function stepState(home, id) {
+  const none = { waiting: false, background: [] }
+  if (!UUID.test(id)) return none
+  const file = path.join(home, 'conversations', `${id}.db`)
+  const [db, wal] = await Promise.all([fsp.stat(file).catch(() => null), fsp.stat(`${file}-wal`).catch(() => null)])
+  if (!db) return none
+  const stamp = `${db.mtimeMs}:${db.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}`
+  const hit = stepCache.get(file)
+  if (hit?.stamp === stamp) return hit.state
+
+  const sqlite = await sqliteApi()
+  if (!sqlite?.DatabaseSync) return none
+  let handle
+  const state = { waiting: false, background: [] }
+  try {
+    handle = new sqlite.DatabaseSync(file, { readOnly: true })
+    const cols = new Set(handle.prepare(`PRAGMA table_info(steps)`).all().map((r) => r.name))
+    if (cols.has('idx') && cols.has('status')) {
+      const payload = cols.has('step_payload') ? ', step_payload' : ''
+      for (const r of handle.prepare(`SELECT idx, status${payload} FROM steps ORDER BY idx DESC LIMIT 40`).all()) {
+        const status = Number(r.status)
+        if (status === STEP_AWAITING_USER) state.waiting = true
+        if (status !== STEP_RUNNING || !r.step_payload) continue
+        const text = Buffer.from(r.step_payload).toString('latin1')
+        if (!text.includes('run_command')) continue
+        state.background.push({ id: `cmd-${r.idx}`, task: commandName(text) })
+      }
+    }
+  } catch {
+    return hit?.state ?? none
+  } finally {
+    try {
+      handle?.close()
+    } catch {
+      /* already closed */
+    }
+  }
+  stepCache.set(file, { stamp, state })
+  return state
+}
+
+/**
+ * A summary row's status is the app saying outright whether it is working, which beats guessing
+ * from the transcript's last line. Only the words are trusted, not the full enum: it is private
+ * and has already been renamed once (`CASCADE_RUN_STATUS_*`).
+ */
+const RUNNING_STATUS = /RUNNING|BUSY|ACTIVE|PENDING|WAITING/i
+const ERROR_STATUS = /ERROR|FAIL/i
+
+/**
+ * How long a finished turn keeps its hand up. After that it is history rather than a reply
+ * waiting for you, and the bot dozes off like any other quiet thread (the colony's three days).
+ */
+const REPLY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
+
+/** Idle, nothing left running, and it spoke after you last did, within the window. */
+function endedOnReply(summary, thread, now) {
+  if (!summary || thread.running || summary.killed || summary.busy) return false
+  if (RUNNING_STATUS.test(summary.status)) return false
+  if (!summary.userInputAt || !summary.updatedAt || summary.updatedAt <= summary.userInputAt) return false
+  return now - summary.updatedAt < REPLY_WINDOW_MS
+}
+
 async function scanThreads() {
-  const [entries, where] = await Promise.all([scanTranscripts(), workspaces()])
   const now = Date.now()
   const threads = []
+  const seen = new Set()
 
-  for (const entry of entries) {
-    const f = await facts(entry)
-    const cwd = f.cwd || where.get(entry.id) || ''
-    const projectPath = cwd
-    const project = cwd ? path.basename(cwd) : 'unknown'
-    const prompt = f.prompt
-
-    threads.push({
-      id: ID(entry.id),
-      title: (prompt || 'Untitled thread').slice(0, 120),
-      preview: prompt.slice(0, 240),
-      project,
-      projectPath,
-      worktree: '',
-      cwd,
-      gitBranch: '',
-      model: 'antigravity',
-      effort: '',
-      createdAt: f.startedAt || entry.born || entry.mtime,
-      lastActivityAt: entry.mtime,
-      lastFocusedAt: 0,
-      unread: false,
-      running: !f.closed && now - entry.mtime < ACTIVE_WINDOW_MS,
-      hasError: f.errored,
-      starred: false,
-      routine: '',
-      prState: '',
-      archived: false,
-      sizeBytes: entry.size,
-      source: 'cli',
-      canOpen: true,
-      ref: { sessionId: entry.id, cwd },
-    })
+  for (const home of HOMES) {
+    const [entries, where, index] = await Promise.all([
+      scanTranscripts(home.dir),
+      workspaces(home.dir),
+      summaries(home.dir),
+    ])
+    for (const entry of entries) {
+      // The same conversation in both homes would be one bot drawn twice; the first home wins.
+      if (seen.has(entry.id)) continue
+      seen.add(entry.id)
+      const summary = index.get(entry.id)
+      // A sub-agent's own conversation is an errand of its parent, not a thread of its own.
+      if (summary?.child) continue
+      // The step log only matters for a conversation the app says is doing something: running,
+      // or idle with something it started still going.
+      const live = !summary?.killed && (RUNNING_STATUS.test(summary?.status || '') || summary?.busy)
+      const steps = live ? await stepState(home.dir, entry.id) : { waiting: false, background: [] }
+      const blocked = steps.waiting && RUNNING_STATUS.test(summary?.status || '')
+      const thread = await threadOf(entry, home, where, summary, now, blocked)
+      // A command left running in the background is work in progress, whatever the model's own
+      // status says, and each one is an errand of the thread that started it (see `subagents` in
+      // server/harnesses/README.md).
+      if (steps.background.length && !blocked) {
+        thread.running = true
+        thread.subagents = steps.background.map((b) => ({ ...b, lastActivityAt: thread.lastActivityAt }))
+      }
+      // An orchestrator hands the work to its sub-agents and marks itself IDLE while they run,
+      // keeping only `not_fully_idle` set. That flag on a conversation touched recently is the
+      // thread still at work, not one waiting for you.
+      const recent = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
+      if (!blocked && !summary?.killed && recent && summary?.busy) thread.running = true
+      // A turn that has ended on a reply is the thread waiting on you: a question, or a report
+      // to read. The app keeps no record of you having looked, so it waves until you answer, or
+      // until "Viewed" on its card says you have seen it (the page clears it until it moves on).
+      if (endedOnReply(summary, thread, now)) thread.unread = true
+      threads.push(thread)
+    }
   }
   return threads
+}
+
+async function threadOf(entry, home, where, summary, now, blocked = false) {
+  const f = await facts(entry)
+  const cwd = f.cwd || where.get(entry.id) || summary?.cwd || ''
+  const projectPath = cwd
+  const project = cwd ? path.basename(cwd) : 'unknown'
+  const prompt = f.prompt
+  const title = summary?.title || prompt || 'Untitled thread'
+  const lastActivityAt = Math.max(entry.mtime, summary?.updatedAt || 0)
+  const fresh = now - lastActivityAt < ACTIVE_WINDOW_MS
+  // Blocked on an approval is not working, however the index labels it, and it wants you.
+  const running = blocked
+    ? false
+    : summary?.status
+      ? RUNNING_STATUS.test(summary.status) && !summary.killed && fresh
+      : !f.closed && fresh
+
+  return {
+    id: ID(entry.id),
+    title: title.slice(0, 120),
+    preview: prompt.slice(0, 240),
+    project,
+    projectPath,
+    worktree: '',
+    cwd,
+    gitBranch: '',
+    model: 'antigravity',
+    effort: '',
+    createdAt: f.startedAt || entry.born || entry.mtime,
+    lastActivityAt,
+    lastFocusedAt: 0,
+    unread: blocked,
+    running,
+    hasError: f.errored || ERROR_STATUS.test(summary?.status || ''),
+    starred: false,
+    routine: '',
+    prState: '',
+    archived: false,
+    sizeBytes: entry.size,
+    source: home.source,
+    canOpen: true,
+    ref: { sessionId: entry.id, cwd },
+  }
 }
 
 async function openThread(ref) {
@@ -224,14 +467,28 @@ async function newSession(dir) {
   return { ok: true, url, command }
 }
 
-const detect = () => exists(BRAIN_DIR)
+async function detect() {
+  for (const home of HOMES) if (await exists(path.join(home.dir, 'brain'))) return true
+  return false
+}
+
+async function diagnostic() {
+  const app = HOMES.find((h) => h.source === 'desktop')
+  if (app && (await exists(path.join(app.dir, 'conversation_summaries.db'))) && !(await sqliteApi())?.DatabaseSync) {
+    return 'Antigravity app sessions need node:sqlite (Node 22.13+) for their titles and folders'
+  }
+  return ''
+}
 
 export default {
+  // The id stays `antigravity` and the thread ids stay `antigravity:<uuid>`: colony.json keys on
+  // both, and a CLI user's saved layout must not move because the app is now read too.
   id: 'antigravity',
-  name: 'Antigravity CLI',
+  name: 'Antigravity',
   detect,
+  diagnostic,
   scanThreads,
   openThread,
   newSession,
-  paths: { ANTIGRAVITY_HOME, BRAIN_DIR },
+  paths: { ANTIGRAVITY_HOME, BRAIN_DIR, HOMES: HOMES.map((h) => h.dir) },
 }

@@ -592,6 +592,155 @@ test('an open Antigravity turn is reported as running', async () => {
   await fsp.rm(home, { recursive: true, force: true })
 })
 
+/** The desktop app's `conversation_summaries.db`, with only the columns the adapter reads. */
+async function fakeAntigravitySummaries(home, rows) {
+  const { DatabaseSync } = await import('node:sqlite')
+  const db = new DatabaseSync(path.join(home, 'conversation_summaries.db'))
+  db.exec(`CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text, workspace_uris text,
+    status text, killed numeric, last_modified_time datetime, parent_conversation_id text)`)
+  const insert = db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?, ?, ?)')
+  for (const r of rows) {
+    insert.run(r.id, r.title ?? '', JSON.stringify(r.workspaces ?? []), r.status ?? '', 0, r.updated ?? '', r.parent ?? '')
+  }
+  db.close()
+}
+
+test('an Antigravity app session takes its title, folder and status from the app index', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'build a crawler' }])
+  const repo = path.join(home, 'work', 'crawler')
+  await fakeAntigravitySummaries(home, [
+    {
+      id: SESSION_ID,
+      title: 'Web Crawler For Broken Links',
+      workspaces: [`file://${repo}`],
+      status: 'CASCADE_RUN_STATUS_RUNNING',
+      updated: new Date().toISOString().replace('T', ' '),
+    },
+  ])
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.title, 'Web Crawler For Broken Links')
+  assert.equal(t.preview, 'build a crawler')
+  assert.equal(t.projectPath, repo)
+  assert.equal(t.project, 'crawler')
+  assert.equal(t.running, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an idle Antigravity app session is not running, whatever its transcript ends on', async () => {
+  const home = await fakeAntigravity([
+    { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'still typing', created_at: new Date().toISOString() },
+  ])
+  await fakeAntigravitySummaries(home, [{ id: SESSION_ID, status: 'CASCADE_RUN_STATUS_IDLE' }])
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, false)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity app session stopped on an approval wants you, though the index says running', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'read the report' }])
+  await fakeAntigravitySummaries(home, [
+    { id: SESSION_ID, status: 'CASCADE_RUN_STATUS_RUNNING', updated: new Date().toISOString().replace('T', ' ') },
+  ])
+  const { DatabaseSync } = await import('node:sqlite')
+  await fsp.mkdir(path.join(home, 'conversations'), { recursive: true })
+  const db = new DatabaseSync(path.join(home, 'conversations', `${SESSION_ID}.db`))
+  db.exec('CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer, status integer)')
+  // Done, done, waiting on Allow/Deny, then two queued behind it — as the app left a real one.
+  for (const [idx, status] of [[8, 3], [9, 3], [10, 9], [11, 1], [12, 1]]) {
+    db.prepare('INSERT INTO steps VALUES (?, 132, ?)').run(idx, status)
+  }
+  db.close()
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, false)
+  assert.equal(t.unread, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity orchestrator the app marks not fully idle is still working', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'remediate the library' }])
+  // As the app left a real one: IDLE while its browser sub-agent ran, with not_fully_idle set.
+  const { DatabaseSync } = await import('node:sqlite')
+  const idx = new DatabaseSync(path.join(home, 'conversation_summaries.db'))
+  idx.exec(`CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text, workspace_uris text,
+    status text, killed numeric, last_modified_time datetime, parent_conversation_id text, not_fully_idle numeric)`)
+  idx.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, 0, ?, ?, 1)').run(
+    SESSION_ID, 'Library Remediator', '[]', 'CASCADE_RUN_STATUS_IDLE', new Date().toISOString().replace('T', ' '), ''
+  )
+  idx.close()
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity turn that has ended on a reply wants you; one you answered last, or old, does not', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'curate the library' }])
+  const at = (minsAgo) => new Date(Date.now() - minsAgo * 60e3).toISOString().replace('T', ' ')
+  const { DatabaseSync } = await import('node:sqlite')
+  const write = async (rows) => {
+    const file = path.join(home, 'conversation_summaries.db')
+    await fsp.rm(file, { force: true })
+    const idx = new DatabaseSync(file)
+    idx.exec(`CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text, workspace_uris text,
+      status text, killed numeric, last_modified_time datetime, parent_conversation_id text, not_fully_idle numeric,
+      last_user_input_time datetime)`)
+    const ins = idx.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)')
+    for (const r of rows) ins.run(SESSION_ID, 'Library Curation Hub', '[]', r.status, r.updated, '', r.busy ? 1 : 0, r.input)
+    idx.close()
+  }
+  const scan = async () => (await (await antigravityWith(home)).scanThreads())[0]
+  // As the app left a real one: IDLE twelve minutes after you last wrote, on its question.
+  await write([{ status: 'CASCADE_RUN_STATUS_IDLE', updated: at(9), input: at(21) }])
+  let t = await scan()
+  assert.equal(t.running, false)
+  assert.equal(t.unread, true)
+  // Still running, or something left going in the background: working, not asking.
+  await write([{ status: 'CASCADE_RUN_STATUS_IDLE', updated: at(9), input: at(21), busy: true }])
+  assert.equal((await scan()).unread, false)
+  // A reply four days old is history; the bot sleeps rather than waving.
+  await write([{ status: 'CASCADE_RUN_STATUS_IDLE', updated: at(4 * 1440), input: at(4 * 1440 + 5) }])
+  assert.equal((await scan()).unread, false)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('an Antigravity command left running in the background is work, and an errand of its thread', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'run the bulk crawl' }])
+  // The model has ended its turn — IDLE — but the app marks it not fully idle.
+  const { DatabaseSync } = await import('node:sqlite')
+  const idx = new DatabaseSync(path.join(home, 'conversation_summaries.db'))
+  idx.exec(`CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text, workspace_uris text,
+    status text, killed numeric, last_modified_time datetime, parent_conversation_id text, not_fully_idle numeric)`)
+  idx.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, 0, ?, ?, 1)').run(
+    SESSION_ID, 'Crawler Swarm', '[]', 'CASCADE_RUN_STATUS_IDLE', new Date().toISOString().replace('T', ' '), ''
+  )
+  idx.close()
+  await fsp.mkdir(path.join(home, 'conversations'), { recursive: true })
+  const db = new DatabaseSync(path.join(home, 'conversations', `${SESSION_ID}.db`))
+  db.exec('CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer, status integer, step_payload blob)')
+  const step = (text) => Buffer.from(text, 'latin1')
+  db.prepare('INSERT INTO steps VALUES (?, 132, ?, ?)').run(10, 3, step('run_command {"CommandLine":"pytest -v"}'))
+  db.prepare('INSERT INTO steps VALUES (?, 132, ?, ?)').run(
+    11, 2, step('run_command {"CommandLine":".venv/bin/python scripts/run_swarm_bulk.py --books 3","toolSummary":"Run bulk swarm"}')
+  )
+  db.close()
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, true)
+  assert.deepEqual(t.subagents.map((s) => s.task), ['Run bulk swarm'])
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test("an Antigravity sub-agent's own conversation is not a thread of its own", async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'subtask' }])
+  await fakeAntigravitySummaries(home, [{ id: SESSION_ID, parent: '11111111-2222-3333-4444-555555555555' }])
+  const h = await antigravityWith(home)
+  assert.deepEqual(await h.scanThreads(), [])
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
 test('Antigravity opens through antigravity:// scheme and handles invalid refs', async () => {
   const home = await fakeAntigravity([])
   const h = await antigravityWith(home)
