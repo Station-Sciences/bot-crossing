@@ -5,6 +5,8 @@ import { STATUS_LABEL } from '../game/colony.js'
 import { searchThreads } from '../game/search.js'
 import { FACE, FRAME_COLS, FRAME_ROWS } from '../agents/faces.js'
 import { PLOT_PALETTE, hashString } from '../world/plots.js'
+import { HARNESS_TINTS } from '../agents/astronauts.js'
+import { DEFAULTS } from '../core/settings.js'
 
 /**
  * The whole HUD, in plain DOM.
@@ -271,6 +273,14 @@ export class Hud {
       )
     )
     view.append(
+      this._toggle(
+        'Tint bots by AI tool',
+        'tintByHarness',
+        'Suits take a colour from the tool the thread runs in. Eyes and lights still show what the bot is doing.'
+      ),
+      ...Object.values(HARNESS_TINTS).map(({ key, label }) => this._color(label, key, 'tintByHarness'))
+    )
+    view.append(
       this._toggle('Follow selected bot', 'followSelected', 'Tracks the selected bot until you deselect. Drag to pan, right-drag to orbit, and scroll to zoom.'),
       this._toggle('Return to isometric', 'autoFrame', 'Eases the angle back when you stop dragging.'),
       this._slider('Field of view', 'fov', 20, 60, 1, (v) => `${v}°`),
@@ -352,6 +362,43 @@ export class Hud {
       sync: () => {
         b.setAttribute('aria-checked', String(Boolean(this.settings.get(key))))
         row.classList.toggle('overridden', this.settings.isOverridden(key))
+      },
+    })
+    return row
+  }
+
+  /**
+   * A colour well, and a reset beside it once the colour has moved off its default. `enabledBy`
+   * dims the row while the toggle it belongs to is off. Live on `input`: recolouring suits is a
+   * handful of instance writes, so the bots can follow the picker as you drag.
+   */
+  _color(label, key, enabledBy) {
+    const row = this._row(label)
+    row.classList.add('color-row')
+    const wrap = document.createElement('div')
+    wrap.className = 'color-wrap'
+    const reset = document.createElement('button')
+    reset.type = 'button'
+    reset.className = 'btn ghost reset'
+    reset.textContent = 'Reset'
+    reset.title = 'Back to the default colour'
+    reset.addEventListener('click', () => this.settings.set(key, DEFAULTS[key]))
+    const input = document.createElement('input')
+    input.type = 'color'
+    input.className = 'color-well'
+    input.setAttribute('aria-label', `${label} colour`)
+    input.addEventListener('input', () => this.settings.set(key, parseInt(input.value.slice(1), 16)))
+    wrap.append(reset, input)
+    row.appendChild(wrap)
+    this.controls.push({
+      el: row,
+      sync: () => {
+        const v = this.settings.get(key)
+        if (document.activeElement !== input) input.value = hex(v)
+        reset.hidden = v === DEFAULTS[key]
+        const on = !enabledBy || Boolean(this.settings.get(enabledBy))
+        row.classList.toggle('disabled', !on)
+        input.disabled = !on
       },
     })
     return row
