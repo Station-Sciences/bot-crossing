@@ -269,6 +269,48 @@ test('a subagent that has handed its answer back is finished, however recently i
   await fsp.rm(home, { recursive: true, force: true })
 })
 
+// ── live status ───────────────────────────────────────────────────────────────
+
+/** One live CLI session whose registry file says `live`, and a transcript of `records`. */
+async function fakeClaudeLive(live, records) {
+  const home = await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-live-'))
+  const session = '11111111-2222-4333-8444-666666666666'
+  const project = path.join(home, '.claude', 'projects', '-tmp-demo')
+  await fsp.mkdir(project, { recursive: true })
+  await fsp.mkdir(path.join(home, '.claude', 'sessions'), { recursive: true })
+  await fsp.writeFile(path.join(project, `${session}.jsonl`), records.map((r) => `${JSON.stringify(r)}\n`).join(''))
+  await fsp.writeFile(
+    path.join(home, '.claude', 'sessions', `${process.pid}.json`),
+    JSON.stringify({ pid: process.pid, sessionId: session, cwd: '/tmp/demo', ...live })
+  )
+  return home
+}
+
+const asked = { type: 'user', cwd: '/tmp/demo', message: { content: 'log in to the bank' } }
+
+test('a session sitting on a permission prompt wants you, though its transcript looks mid-tool', async () => {
+  const home = await fakeClaudeLive({ status: 'waiting', waitingFor: 'permission prompt' }, [asked, midTurn])
+  const [thread] = await (await claudeWithErrands(home)).scanThreads()
+  assert.equal(thread.running, false)
+  assert.equal(thread.unread, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('a busy session is working, even mid-tool', async () => {
+  const home = await fakeClaudeLive({ status: 'busy' }, [asked, midTurn])
+  const [thread] = await (await claudeWithErrands(home)).scanThreads()
+  assert.equal(thread.running, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
+test('with no status from the CLI, a pending tool call still reads as working', async () => {
+  const home = await fakeClaudeLive({}, [asked, midTurn])
+  const [thread] = await (await claudeWithErrands(home)).scanThreads()
+  assert.equal(thread.running, true)
+  assert.equal(thread.unread, false)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
 // ── shared helpers ────────────────────────────────────────────────────────────
 
 test('readTail drops the partial line it lands in the middle of', async () => {

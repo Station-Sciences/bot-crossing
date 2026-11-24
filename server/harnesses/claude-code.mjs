@@ -422,11 +422,18 @@ async function firstPromptPastHead(entry) {
 }
 
 /**
- * Sessions with a CLI process actually alive right now. The registry keeps files for
- * processes that have exited, so every pid is probed before it counts.
+ * Sessions with a CLI process actually alive right now, mapped to what the CLI says it is doing.
+ * The registry keeps files for processes that have exited, so every pid is probed before it
+ * counts.
+ *
+ * Recent CLIs keep `status` current in the same file: `busy` mid-turn, `idle` at the prompt, and
+ * `waiting` with `waitingFor: "permission prompt"` while a tool call sits on Allow/Deny. That
+ * last one is the case the transcript cannot see — the pending call is already written as a
+ * `tool_use`, exactly like a tool that is still running, and nothing more is written until you
+ * answer. An older CLI writes no `status`, and the transcript test below is all there is.
  */
 async function scanLiveSessions() {
-  const live = new Set()
+  const live = new Map()
   for (const file of await cliLiveFiles()) {
     let record
     try {
@@ -437,7 +444,7 @@ async function scanLiveSessions() {
     if (!record.sessionId || !record.pid) continue
     try {
       process.kill(record.pid, 0) // signal 0 only tests for existence
-      live.add(record.sessionId)
+      live.set(record.sessionId, typeof record.status === 'string' ? record.status : '')
     } catch {
       /* process is gone */
     }
@@ -628,6 +635,7 @@ function mergeThread(existing, next) {
     lastFocusedAt: Math.max(existing.lastFocusedAt || 0, next.lastFocusedAt || 0),
     hasError: existing.hasError || next.hasError,
     hasLiveProcess: existing.hasLiveProcess || next.hasLiveProcess,
+    liveStatus: existing.liveStatus || next.liveStatus,
     starred: existing.starred || next.starred,
     routine: existing.routine || next.routine,
     prState: existing.prState || next.prState,
@@ -645,7 +653,7 @@ function mergeThread(existing, next) {
 function toThread(t) {
   const {
     desktopSessionId, desktopSessionIds, cliSessionId, bridgeSessionId,
-    titled, hasLiveProcess, transcriptFile, recordActivityAt, ...rest
+    titled, hasLiveProcess, liveStatus, transcriptFile, recordActivityAt, ...rest
   } = t
   return {
     ...rest,
@@ -712,6 +720,7 @@ async function scanThreads() {
       recordActivityAt: num(s.lastActivityAt) || num(s.lastFocusedAt) || num(s.createdAt) || 0,
       lastFocusedAt: num(s.lastFocusedAt),
       hasLiveProcess: live.has(cliSessionId),
+      liveStatus: live.get(cliSessionId) || '',
       hasError: Boolean(s.error),
       starred: s.isStarred === true,
       routine: s.scheduledTaskId || '',
@@ -751,6 +760,7 @@ async function scanThreads() {
       lastActivityAt: entry.mtime,
       lastFocusedAt: 0,
       hasLiveProcess: live.has(id),
+      liveStatus: live.get(id) || '',
       hasError: false,
       starred: false,
       routine: '',
@@ -798,9 +808,16 @@ async function scanThreads() {
     const seenAt = thread.recordActivityAt ?? thread.lastActivityAt
     thread.unread = thread.desktopSessionIds.length > 0 && seenAt > thread.lastFocusedAt
     const fresh = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
+    // The CLI's own word first, when it gives one. `waiting` is a permission prompt (or any other
+    // block on you): not working, and it wants you whatever the transcript ends on. `busy` is
+    // working even through a long silent tool call. Anything else falls back to the transcript.
+    const status = thread.hasLiveProcess ? thread.liveStatus : ''
     const waiting =
-      thread.hasLiveProcess && fresh && thread.transcriptFile ? await awaitingReply(thread.transcriptFile) : false
-    thread.running = thread.hasLiveProcess && fresh && !waiting
+      status === 'waiting' ||
+      (status !== 'busy' && thread.hasLiveProcess && fresh && thread.transcriptFile
+        ? await awaitingReply(thread.transcriptFile)
+        : false)
+    thread.running = status === 'busy' || (thread.hasLiveProcess && fresh && !waiting && status !== 'idle')
     // A thread that handed the turn back wants you, whether or not the desktop app has ever seen
     // it — the only way a terminal-only thread can ask for anything at all.
     if (waiting) thread.unread = true
