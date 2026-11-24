@@ -144,7 +144,7 @@ async function summaries(home) {
       // Private state that drifts between versions: probe the columns before naming them.
       const cols = new Set(handle.prepare(`PRAGMA table_info(conversation_summaries)`).all().map((r) => r.name))
       if (cols.has('conversation_id')) {
-        const want = ['title', 'workspace_uris', 'status', 'killed', 'last_modified_time', 'parent_conversation_id', 'not_fully_idle']
+        const want = ['title', 'workspace_uris', 'status', 'killed', 'last_modified_time', 'parent_conversation_id', 'not_fully_idle', 'last_user_input_time']
         const pick = want.filter((c) => cols.has(c))
         const sql = `SELECT conversation_id${pick.map((c) => `, ${c}`).join('')} FROM conversation_summaries`
         for (const r of handle.prepare(sql).all()) {
@@ -159,6 +159,8 @@ async function summaries(home) {
             // Idle as far as the model goes, but something it started is still going — a command
             // left running in the background, say.
             busy: Boolean(Number(r.not_fully_idle)),
+            // When you last sent it something. A sub-agent's is the zero date, which is no time.
+            userInputAt: Math.max(0, timeOf(r.last_user_input_time) || 0),
           })
         }
       }
@@ -334,6 +336,20 @@ async function stepState(home, id) {
 const RUNNING_STATUS = /RUNNING|BUSY|ACTIVE|PENDING|WAITING/i
 const ERROR_STATUS = /ERROR|FAIL/i
 
+/**
+ * How long a finished turn keeps its hand up. After that it is history rather than a reply
+ * waiting for you, and the bot dozes off like any other quiet thread (the colony's three days).
+ */
+const REPLY_WINDOW_MS = 3 * 24 * 60 * 60 * 1000
+
+/** Idle, nothing left running, and it spoke after you last did, within the window. */
+function endedOnReply(summary, thread, now) {
+  if (!summary || thread.running || summary.killed || summary.busy) return false
+  if (RUNNING_STATUS.test(summary.status)) return false
+  if (!summary.userInputAt || !summary.updatedAt || summary.updatedAt <= summary.userInputAt) return false
+  return now - summary.updatedAt < REPLY_WINDOW_MS
+}
+
 async function scanThreads() {
   const now = Date.now()
   const threads = []
@@ -370,6 +386,10 @@ async function scanThreads() {
       // thread still at work, not one waiting for you.
       const recent = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
       if (!blocked && !summary?.killed && recent && summary?.busy) thread.running = true
+      // A turn that has ended on a reply is the thread waiting on you: a question, or a report
+      // to read. The app keeps no record of you having looked, so it waves until you answer, or
+      // until "Viewed" on its card says you have seen it (the page clears it until it moves on).
+      if (endedOnReply(summary, thread, now)) thread.unread = true
       threads.push(thread)
     }
   }
