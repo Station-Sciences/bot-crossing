@@ -163,6 +163,8 @@ export class Colony {
     this.buildingSurfaces = new BuildingSurfaces(this.buildings, (x, z) => this.surfaceAt(x, z))
     this.threads = new Map()
     this.usedAccents = new Set()
+    /** Colours picked by hand, project name → RGB. Wins over the palette; see `setZoneColors`. */
+    this.zoneColors = new Map()
 
     this.worldGroup = new THREE.Group()
     this.worldGroup.name = 'world'
@@ -717,8 +719,44 @@ export class Colony {
     return level !== undefined && ground < level ? level : ground
   }
 
-  /** A stable colour per repo, probing forward on a collision so no two plots match. */
+  /**
+   * Hand-picked zone colours, as a `{ name: rgb }` map. A zone whose colour changed is marked
+   * stale rather than repainted here: the next `setThreads` rebuilds it through the same path a
+   * zone that moved takes, deck, kerb, lamps and label together, and `_syncBuilding` catches its
+   * buildings up. Returns whether anything changed, so the caller knows to re-apply.
+   */
+  setZoneColors(colors) {
+    const next = new Map(Object.entries(colors || {}).filter(([, c]) => Number.isInteger(c)))
+    let changed = false
+    for (const [name, plot] of this.plots) {
+      const want = next.get(name)
+      const had = this.zoneColors.get(name)
+      if (want === had) continue
+      changed = true
+      plot.signature = null
+    }
+    if (!changed && next.size === this.zoneColors.size && [...next].every(([k, v]) => this.zoneColors.get(k) === v)) {
+      return false
+    }
+    this.zoneColors = next
+    return true
+  }
+
+  /** The colour a repo is drawn in, or would be — for lists of repos that are not on the map. */
+  accentFor(name) {
+    return this.zoneColors.get(name) ?? this.plots.get(name)?.accent ?? PLOT_PALETTE[hashString(name) % PLOT_PALETTE.length]
+  }
+
+  /**
+   * A stable colour per repo, probing forward on a collision so no two plots match. A colour you
+   * picked is taken as given, even if another zone already wears it: it was a choice.
+   */
   _pickAccent(name) {
+    const picked = this.zoneColors.get(name)
+    if (picked !== undefined) {
+      this.usedAccents.add(picked)
+      return picked
+    }
     const start = hashString(name) % PLOT_PALETTE.length
     for (let i = 0; i < PLOT_PALETTE.length; i++) {
       const accent = PLOT_PALETTE[(start + i) % PLOT_PALETTE.length]
@@ -759,6 +797,8 @@ export class Colony {
     }
 
     entry.target = target
+    // A zone recoloured since this building went up: its trim and night glow follow.
+    if (entry.accent !== plot.accent) entry.mesh.userData.uniforms?.uAccent.value.setHex(plot.accent)
     entry.accent = plot.accent
     entry.retiring = false
     return entry

@@ -5,6 +5,7 @@ import { STATUS_LABEL } from '../game/colony.js'
 import { searchThreads } from '../game/search.js'
 import { FACE, FRAME_COLS, FRAME_ROWS } from '../agents/faces.js'
 import { PLOT_PALETTE, hashString } from '../world/plots.js'
+import { ZONE_SWATCHES } from '../game/zone-colors.js'
 
 /**
  * The whole HUD, in plain DOM.
@@ -470,6 +471,17 @@ export class Hud {
     on('#btn-hide-project', 'click', () => this.actions.hideProject?.())
     on('#btn-hidden-toggle', 'click', () => this.toggleHiddenList())
     on('#btn-locate', 'click', () => this.actions.focusProject?.(this.project?.name))
+    on('#btn-zone-color', 'click', (e) => {
+      if (!this.project) return
+      if (this._colorMenu?.dataset.name === this.project.name) return this.closeColorMenu()
+      const r = e.currentTarget.getBoundingClientRect()
+      this.openColorMenu(this.project.name, this.project.accent, r.left, r.bottom + 6)
+    })
+    on('.side .who', 'contextmenu', (e) => {
+      if (!this.project) return
+      e.preventDefault()
+      this.openColorMenu(this.project.name, this.project.accent, e.clientX, e.clientY)
+    })
     on('#btn-close-project', 'click', () => this.actions.closeProject?.())
     on('.help', 'click', (e) => {
       if (e.target === this.$('.help')) this.toggleHelp(false)
@@ -507,6 +519,80 @@ export class Hud {
   }
 
   /**
+   * The zone colour menu: seven swatches, a custom colour, and back to automatic. Opened from
+   * the swatch beside an open zone's name, or by right-clicking a repo anywhere in the sidebar.
+   * One at a time, fixed to the viewport, and closed by Esc, a click elsewhere, or a choice.
+   */
+  openColorMenu(name, current, x, y) {
+    this.closeColorMenu()
+    const menu = document.createElement('div')
+    menu.className = 'color-menu'
+    menu.setAttribute('role', 'menu')
+    menu.dataset.name = name
+    const choose = (color) => {
+      this.closeColorMenu()
+      this.actions.setZoneColor?.(name, color)
+    }
+    const head = document.createElement('div')
+    head.className = 'cm-head'
+    head.textContent = name
+    const row = document.createElement('div')
+    row.className = 'cm-swatches'
+    for (const { name: label, color } of ZONE_SWATCHES) {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.setAttribute('role', 'menuitemradio')
+      b.setAttribute('aria-checked', String(color === current))
+      b.title = label
+      b.style.background = hex(color)
+      b.style.color = hex(color)
+      b.addEventListener('click', () => choose(color))
+      row.appendChild(b)
+    }
+    const custom = document.createElement('label')
+    custom.className = 'cm-item'
+    custom.innerHTML = `<input type="color" value="${hex(current ?? 0xc96442)}"><span>Custom colour…</span>`
+    // `change` rather than `input`: the native picker fires `input` on every drag of the wheel,
+    // and each one would rebuild the zone and write the folder's tags.
+    custom.querySelector('input').addEventListener('change', (e) => choose(parseInt(e.target.value.slice(1), 16)))
+    const auto = document.createElement('button')
+    auto.type = 'button'
+    auto.className = 'cm-item'
+    auto.setAttribute('role', 'menuitem')
+    auto.textContent = 'Automatic'
+    auto.title = 'Back to the colour the colony picks for this repo'
+    auto.addEventListener('click', () => choose(null))
+    menu.append(head, row, custom, auto)
+    document.body.appendChild(menu)
+    // Kept on screen: a right-click near the bottom of the sidebar opens it upward instead.
+    const r = menu.getBoundingClientRect()
+    menu.style.left = `${Math.max(8, Math.min(x, innerWidth - r.width - 8))}px`
+    menu.style.top = `${Math.max(8, y + r.height > innerHeight - 8 ? y - r.height : y)}px`
+    this._colorMenu = menu
+    this._colorMenuOff = (e) => {
+      if (e.type === 'keydown' ? e.key === 'Escape' : !menu.contains(e.target) && !e.target.closest?.('#btn-zone-color')) {
+        if (e.type === 'keydown') e.stopPropagation()
+        this.closeColorMenu()
+      }
+    }
+    // Next tick, so the click or right-click that opened it is not also the one that closes it.
+    setTimeout(() => {
+      if (this._colorMenu !== menu) return
+      document.addEventListener('pointerdown', this._colorMenuOff, true)
+      document.addEventListener('keydown', this._colorMenuOff, true)
+    })
+    row.querySelector('button')?.focus({ preventScroll: true })
+  }
+
+  closeColorMenu() {
+    if (!this._colorMenu) return
+    this._colorMenu.remove()
+    this._colorMenu = null
+    document.removeEventListener('pointerdown', this._colorMenuOff, true)
+    document.removeEventListener('keydown', this._colorMenuOff, true)
+  }
+
+  /**
    * Every repo, in the sidebar. This was a strip of chips along the bottom of the screen;
    * it is a list now because the sidebar is where all the chrome lives, and because a list
    * can carry a count and an alarm without running out of room at eleven repos.
@@ -536,6 +622,10 @@ export class Hud {
         (p.urgent ? '<i class="alarm"></i>' : '') +
         `<span class="count">${p.count}</span>`
       b.addEventListener('click', () => this.actions.pickProject?.(p.name))
+      b.addEventListener('contextmenu', (e) => {
+        e.preventDefault()
+        this.openColorMenu(p.name, p.accent, e.clientX, e.clientY)
+      })
       wrap.appendChild(b)
     }
     this.$('.sec-head span').textContent = `${projects.length} repo${projects.length === 1 ? '' : 's'}`
@@ -547,7 +637,7 @@ export class Hud {
     const hiddenWrap = this.$('.hidden-projects')
     hiddenWrap.innerHTML = ''
     for (const p of hidden) {
-      const accent = PLOT_PALETTE[hashString(p.name) % PLOT_PALETTE.length]
+      const accent = p.accent ?? PLOT_PALETTE[hashString(p.name) % PLOT_PALETTE.length]
       const row = document.createElement('div')
       row.className = 'repo hidden-repo'
       row.innerHTML =
@@ -1317,7 +1407,9 @@ const TEMPLATE = `
     <div class="project-detail">
       <button class="btn ghost back" id="btn-close-project" title="Back to every repo (Esc)">${ICON.back} All repos</button>
       <div class="who">
-        <i class="swatch"></i>
+        <button type="button" class="swatch-btn" id="btn-zone-color" title="Change this zone’s colour" aria-haspopup="menu">
+          <i class="swatch"></i><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5"/></svg>
+        </button>
         <div class="text">
           <div class="name"></div>
           <div class="path"></div>
