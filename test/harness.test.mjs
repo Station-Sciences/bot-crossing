@@ -659,6 +659,33 @@ test('an Antigravity app session stopped on an approval wants you, though the in
   await fsp.rm(home, { recursive: true, force: true })
 })
 
+test('an Antigravity command left running in the background is work, and an errand of its thread', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'run the bulk crawl' }])
+  // The model has ended its turn — IDLE — but the app marks it not fully idle.
+  const { DatabaseSync } = await import('node:sqlite')
+  const idx = new DatabaseSync(path.join(home, 'conversation_summaries.db'))
+  idx.exec(`CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text, workspace_uris text,
+    status text, killed numeric, last_modified_time datetime, parent_conversation_id text, not_fully_idle numeric)`)
+  idx.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, 0, ?, ?, 1)').run(
+    SESSION_ID, 'Crawler Swarm', '[]', 'CASCADE_RUN_STATUS_IDLE', new Date().toISOString().replace('T', ' '), ''
+  )
+  idx.close()
+  await fsp.mkdir(path.join(home, 'conversations'), { recursive: true })
+  const db = new DatabaseSync(path.join(home, 'conversations', `${SESSION_ID}.db`))
+  db.exec('CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer, status integer, step_payload blob)')
+  const step = (text) => Buffer.from(text, 'latin1')
+  db.prepare('INSERT INTO steps VALUES (?, 132, ?, ?)').run(10, 3, step('run_command {"CommandLine":"pytest -v"}'))
+  db.prepare('INSERT INTO steps VALUES (?, 132, ?, ?)').run(
+    11, 2, step('run_command {"CommandLine":".venv/bin/python scripts/run_swarm_bulk.py --books 3","toolSummary":"Run bulk swarm"}')
+  )
+  db.close()
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, true)
+  assert.deepEqual(t.subagents.map((s) => s.task), ['Run bulk swarm'])
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
 test("an Antigravity sub-agent's own conversation is not a thread of its own", async () => {
   const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'subtask' }])
   await fakeAntigravitySummaries(home, [{ id: SESSION_ID, parent: '11111111-2222-3333-4444-555555555555' }])

@@ -144,7 +144,7 @@ async function summaries(home) {
       // Private state that drifts between versions: probe the columns before naming them.
       const cols = new Set(handle.prepare(`PRAGMA table_info(conversation_summaries)`).all().map((r) => r.name))
       if (cols.has('conversation_id')) {
-        const want = ['title', 'workspace_uris', 'status', 'killed', 'last_modified_time', 'parent_conversation_id']
+        const want = ['title', 'workspace_uris', 'status', 'killed', 'last_modified_time', 'parent_conversation_id', 'not_fully_idle']
         const pick = want.filter((c) => cols.has(c))
         const sql = `SELECT conversation_id${pick.map((c) => `, ${c}`).join('')} FROM conversation_summaries`
         for (const r of handle.prepare(sql).all()) {
@@ -156,6 +156,9 @@ async function summaries(home) {
             killed: Boolean(Number(r.killed)),
             updatedAt: timeOf(r.last_modified_time),
             child: Boolean(r.parent_conversation_id),
+            // Idle as far as the model goes, but something it started is still going — a command
+            // left running in the background, say.
+            busy: Boolean(Number(r.not_fully_idle)),
           })
         }
       }
@@ -257,30 +260,61 @@ async function facts(entry) {
  * away, and cached against the database and its WAL.
  */
 const STEP_AWAITING_USER = 9
-const approvalCache = new Map()
+/**
+ * A step still under way. Seen on a `run_command` left running in the background: the model ends
+ * its turn and the summary goes IDLE, but the command — a crawler fanning out into a dozen worker
+ * processes, say — is the work, and it is still going.
+ */
+const STEP_RUNNING = 2
+const stepCache = new Map()
 
-async function awaitingApproval(home, id) {
-  if (!UUID.test(id)) return false
+/** What a background command is called on a drone: its summary if it gave one, else its script. */
+function commandName(payload) {
+  const summary = /"toolSummary":"([^"]{1,80})"/.exec(payload)
+  if (summary) return summary[1]
+  const line = /"CommandLine":"([^"]{1,400})"/.exec(payload)
+  if (!line) return 'Background command'
+  const words = line[1].split(/\s+/)
+  const script = words.find((w) => /\.(py|sh|js|mjs|ts|rb)$/.test(w))
+  return path.basename(script || words[0] || 'command')
+}
+
+/**
+ * The newest steps of a conversation, from the app's own per-conversation database: whether one
+ * is waiting for approval, and which background commands are still running (as errands, so they
+ * fly as drones over the bot that started them). Read-only, closed straight away, and cached
+ * against the database and its WAL. Only the newest steps are looked at — old ones are history.
+ */
+async function stepState(home, id) {
+  const none = { waiting: false, background: [] }
+  if (!UUID.test(id)) return none
   const file = path.join(home, 'conversations', `${id}.db`)
   const [db, wal] = await Promise.all([fsp.stat(file).catch(() => null), fsp.stat(`${file}-wal`).catch(() => null)])
-  if (!db) return false
+  if (!db) return none
   const stamp = `${db.mtimeMs}:${db.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}`
-  const hit = approvalCache.get(file)
-  if (hit?.stamp === stamp) return hit.waiting
+  const hit = stepCache.get(file)
+  if (hit?.stamp === stamp) return hit.state
 
   const sqlite = await sqliteApi()
-  if (!sqlite?.DatabaseSync) return false
+  if (!sqlite?.DatabaseSync) return none
   let handle
-  let waiting = false
+  const state = { waiting: false, background: [] }
   try {
     handle = new sqlite.DatabaseSync(file, { readOnly: true })
     const cols = new Set(handle.prepare(`PRAGMA table_info(steps)`).all().map((r) => r.name))
     if (cols.has('idx') && cols.has('status')) {
-      const recent = handle.prepare(`SELECT status FROM steps ORDER BY idx DESC LIMIT 20`).all()
-      waiting = recent.some((r) => Number(r.status) === STEP_AWAITING_USER)
+      const payload = cols.has('step_payload') ? ', step_payload' : ''
+      for (const r of handle.prepare(`SELECT idx, status${payload} FROM steps ORDER BY idx DESC LIMIT 40`).all()) {
+        const status = Number(r.status)
+        if (status === STEP_AWAITING_USER) state.waiting = true
+        if (status !== STEP_RUNNING || !r.step_payload) continue
+        const text = Buffer.from(r.step_payload).toString('latin1')
+        if (!text.includes('run_command')) continue
+        state.background.push({ id: `cmd-${r.idx}`, task: commandName(text) })
+      }
     }
   } catch {
-    return hit?.waiting ?? false
+    return hit?.state ?? none
   } finally {
     try {
       handle?.close()
@@ -288,8 +322,8 @@ async function awaitingApproval(home, id) {
       /* already closed */
     }
   }
-  approvalCache.set(file, { stamp, waiting })
-  return waiting
+  stepCache.set(file, { stamp, state })
+  return state
 }
 
 /**
@@ -318,8 +352,20 @@ async function scanThreads() {
       const summary = index.get(entry.id)
       // A sub-agent's own conversation is an errand of its parent, not a thread of its own.
       if (summary?.child) continue
-      const blocked = RUNNING_STATUS.test(summary?.status || '') && (await awaitingApproval(home.dir, entry.id))
-      threads.push(await threadOf(entry, home, where, summary, now, blocked))
+      // The step log only matters for a conversation the app says is doing something: running,
+      // or idle with something it started still going.
+      const live = !summary?.killed && (RUNNING_STATUS.test(summary?.status || '') || summary?.busy)
+      const steps = live ? await stepState(home.dir, entry.id) : { waiting: false, background: [] }
+      const blocked = steps.waiting && RUNNING_STATUS.test(summary?.status || '')
+      const thread = await threadOf(entry, home, where, summary, now, blocked)
+      // A command left running in the background is work in progress, whatever the model's own
+      // status says, and each one is an errand of the thread that started it (see `subagents` in
+      // server/harnesses/README.md).
+      if (steps.background.length && !blocked) {
+        thread.running = true
+        thread.subagents = steps.background.map((b) => ({ ...b, lastActivityAt: thread.lastActivityAt }))
+      }
+      threads.push(thread)
     }
   }
   return threads
