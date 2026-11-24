@@ -365,6 +365,11 @@ async function scanThreads() {
         thread.running = true
         thread.subagents = steps.background.map((b) => ({ ...b, lastActivityAt: thread.lastActivityAt }))
       }
+      // An orchestrator hands the work to its sub-agents and marks itself IDLE while they run,
+      // keeping only `not_fully_idle` set. That flag on a conversation touched recently is the
+      // thread still at work, not one waiting for you.
+      const recent = now - thread.lastActivityAt < ACTIVE_WINDOW_MS
+      if (!blocked && !summary?.killed && recent && summary?.busy) thread.running = true
       threads.push(thread)
     }
   }

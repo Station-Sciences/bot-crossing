@@ -659,6 +659,23 @@ test('an Antigravity app session stopped on an approval wants you, though the in
   await fsp.rm(home, { recursive: true, force: true })
 })
 
+test('an Antigravity orchestrator the app marks not fully idle is still working', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'remediate the library' }])
+  // As the app left a real one: IDLE while its browser sub-agent ran, with not_fully_idle set.
+  const { DatabaseSync } = await import('node:sqlite')
+  const idx = new DatabaseSync(path.join(home, 'conversation_summaries.db'))
+  idx.exec(`CREATE TABLE conversation_summaries (conversation_id text PRIMARY KEY, title text, workspace_uris text,
+    status text, killed numeric, last_modified_time datetime, parent_conversation_id text, not_fully_idle numeric)`)
+  idx.prepare('INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, 0, ?, ?, 1)').run(
+    SESSION_ID, 'Library Remediator', '[]', 'CASCADE_RUN_STATUS_IDLE', new Date().toISOString().replace('T', ' '), ''
+  )
+  idx.close()
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
 test('an Antigravity command left running in the background is work, and an errand of its thread', async () => {
   const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'run the bulk crawl' }])
   // The model has ended its turn — IDLE — but the app marks it not fully idle.
