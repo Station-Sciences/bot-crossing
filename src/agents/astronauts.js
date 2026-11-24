@@ -35,6 +35,36 @@ import { CARRY_LIFT, grab, carryTo, followCarry, release, homeRunFactor, isAirbo
 
 const SUIT_TONES = [0xf3f1ec, 0xe8e4dc, 0xf7f4ee, 0xdfe4e8, 0xf1e9df]
 
+/**
+ * Which AI tool a bot works for, worn on its suit: harness id → the setting holding its colour,
+ * which you can change under Settings → View. A harness not listed keeps a plain suit. Only the
+ * suit, helmet, pack and antenna take it — eyes and trim are the bot's *status*, and a tint there
+ * would make an orange "working" bot read as something else.
+ */
+export const HARNESS_TINTS = {
+  'claude-code': { key: 'tintClaudeCode', label: 'Claude Code' },
+  antigravity: { key: 'tintAntigravity', label: 'Antigravity' },
+  codex: { key: 'tintCodex', label: 'Codex' },
+}
+const TINT_KEYS = new Set(['tintByHarness', ...Object.values(HARNESS_TINTS).map((t) => t.key)])
+/**
+ * How far a suit moves from white toward its tool's colour. High, because the suits sit under
+ * bright sun and tone mapping that wash a half-tint out to peach and baby blue; at this much
+ * they read as orange and blue from the default camera height.
+ */
+const TINT_AMOUNT = 0.8
+const _tint = new THREE.Color()
+const _tone = new THREE.Color()
+
+/** A bot's suit: its own shade of white, pulled toward its tool's colour when tinting is on. */
+function suitFor(id, harness, settings) {
+  const tone = SUIT_TONES[(hash(id) >>> 3) % SUIT_TONES.length]
+  const key = settings.get('tintByHarness') ? HARNESS_TINTS[harness]?.key : undefined
+  const tint = key ? settings.get(key) : undefined
+  if (!Number.isInteger(tint)) return tone
+  return _tone.setHex(tone).lerp(_tint.setHex(tint), TINT_AMOUNT).getHex()
+}
+
 /** Trim + eye colour per behaviour. Eyes are pushed past 1.0 so the bloom pass catches them. */
 const AGENT_LOOK = {
   working: { trim: 0x4f9a63, eye: [0.35, 2.5, 1.15] },
@@ -447,6 +477,12 @@ export class Astronauts {
 
   onSettingsChanged(changed) {
     if (changed.has('shadows')) this._applyShadowFlags()
+    if ([...changed].some((k) => TINT_KEYS.has(k))) {
+      for (const agent of this.agents) {
+        agent.suit = suitFor(agent.id, agent.harness, this.settings)
+        agent.colorDirty = true
+      }
+    }
     if (changed.has('textureQuality')) {
       this.faceTexture.dispose()
       this.faceTexture = buildFaceAtlas(Math.min(this.settings.textureSize * 2, 1024))
@@ -602,7 +638,8 @@ export class Astronauts {
       walkFaceTime: 0,
       walkFaceHold: 0,
       walkPersonality: (hash(entry.id) >>> 0) / 0x100000000,
-      suit: SUIT_TONES[(hash(entry.id) >>> 3) % SUIT_TONES.length],
+      harness: entry.thread?.harness || '',
+      suit: suitFor(entry.id, entry.thread?.harness, this.settings),
       eye: new THREE.Color(1, 1, 1),
       trim: new THREE.Color(0xffffff),
       hop: 0,
