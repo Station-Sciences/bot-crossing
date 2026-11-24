@@ -1,9 +1,10 @@
 /**
- * Harness adapter: Antigravity CLI (Google).
+ * Harness adapter: Antigravity (Google) — the CLI and the desktop app.
  *
- * Antigravity CLI stores sessions under `~/.gemini/antigravity-cli/brain/<sessionId>/`.
- * Transcripts are JSONL files located at `.system_generated/logs/transcript.jsonl`
- * or `transcript.jsonl` inside the session directory.
+ * Both keep sessions under `<home>/brain/<sessionId>/`, with the transcript at
+ * `.system_generated/logs/transcript.jsonl` or `transcript.jsonl` inside the session directory.
+ * They differ only in the home: `~/.gemini/antigravity-cli` for the CLI, `~/.gemini/antigravity`
+ * for the app. Both are read, so a machine with either — or both — gets every conversation.
  *
  * Read-only, no subprocess, and no modifications to harness files.
  */
@@ -13,10 +14,18 @@ import os from 'node:os'
 import { exists, jsonLines, listDirs, readHead, readTail, findExecutable } from '../lib/fsutil.mjs'
 
 const HOME = os.homedir()
-const ANTIGRAVITY_HOME =
-  process.env.BOT_CROSSING_ANTIGRAVITY_HOME ||
-  process.env.ANTIGRAVITY_HOME ||
-  path.join(HOME, '.gemini', 'antigravity-cli')
+/**
+ * Every home to read. An explicit override is the whole list, which is how the tests fake an
+ * install. `source` is what the thread reports: the app's sessions are `desktop`, the CLI's `cli`.
+ */
+const OVERRIDE = process.env.BOT_CROSSING_ANTIGRAVITY_HOME || process.env.ANTIGRAVITY_HOME
+const HOMES = OVERRIDE
+  ? [{ dir: OVERRIDE, source: 'cli' }]
+  : [
+      { dir: path.join(HOME, '.gemini', 'antigravity-cli'), source: 'cli' },
+      { dir: path.join(HOME, '.gemini', 'antigravity'), source: 'desktop' },
+    ]
+const ANTIGRAVITY_HOME = HOMES[0].dir
 const BRAIN_DIR = path.join(ANTIGRAVITY_HOME, 'brain')
 
 const HEAD_BYTES = 96 * 1024
@@ -64,15 +73,16 @@ function extractCwd(text) {
  *
  * The folder a conversation started in wins. Re-read only when the file changes.
  */
-const HISTORY = path.join(ANTIGRAVITY_HOME, 'history.jsonl')
-let history = { mtime: -1, workspaces: new Map() }
-async function workspaces() {
-  const st = await fsp.stat(HISTORY).catch(() => null)
+const historyCache = new Map()
+async function workspaces(home) {
+  const file = path.join(home, 'history.jsonl')
+  const st = await fsp.stat(file).catch(() => null)
   if (!st) return new Map()
-  if (st.mtimeMs === history.mtime) return history.workspaces
+  const history = historyCache.get(file)
+  if (history && st.mtimeMs === history.mtime) return history.workspaces
   const out = new Map()
   try {
-    for (const r of jsonLines(await fsp.readFile(HISTORY, 'utf8'))) {
+    for (const r of jsonLines(await fsp.readFile(file, 'utf8'))) {
       const id = r?.conversationId
       const dir = r?.workspace
       if (typeof id === 'string' && typeof dir === 'string' && path.isAbsolute(dir) && !out.has(id)) out.set(id, dir)
@@ -80,8 +90,88 @@ async function workspaces() {
   } catch {
     /* mid-write, or gone */
   }
-  history = { mtime: st.mtimeMs, workspaces: out }
+  historyCache.set(file, { mtime: st.mtimeMs, workspaces: out })
   return out
+}
+
+/**
+ * The desktop app's own index, `conversation_summaries.db`: one row per conversation with the
+ * title it shows, the workspace it was opened on, and whether it is running. The app writes no
+ * `history.jsonl`, and its transcripts do not name a folder, so without this every app session
+ * lands in "unknown" under its first prompt instead of where you were working.
+ *
+ * Opened read-only and closed straight away. `node:sqlite` is imported lazily, as in
+ * `opencode.mjs`, so a Node without it loses the titles and folders rather than the harness.
+ * Cached against the database *and* its WAL: the app writes in WAL mode, where a change can sit
+ * in `-wal` for a while without the main file's mtime moving.
+ */
+let sqlitePromise
+const sqliteApi = () => (sqlitePromise ??= import('node:sqlite').catch(() => null))
+const summaryCache = new Map()
+
+function folderOfUris(raw) {
+  try {
+    for (const uri of JSON.parse(raw)) {
+      if (typeof uri !== 'string' || !uri.startsWith('file://')) continue
+      const dir = decodeURIComponent(new URL(uri).pathname)
+      if (path.isAbsolute(dir)) return dir
+    }
+  } catch {
+    /* not the JSON list it usually is */
+  }
+  return ''
+}
+
+const timeOf = (v) => {
+  const t = Date.parse(String(v || '').replace(' ', 'T'))
+  return Number.isNaN(t) ? 0 : t
+}
+
+async function summaries(home) {
+  const file = path.join(home, 'conversation_summaries.db')
+  const [db, wal] = await Promise.all([fsp.stat(file).catch(() => null), fsp.stat(`${file}-wal`).catch(() => null)])
+  if (!db) return new Map()
+  const stamp = `${db.mtimeMs}:${db.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}`
+  const hit = summaryCache.get(file)
+  if (hit?.stamp === stamp) return hit.rows
+
+  const rows = new Map()
+  const sqlite = await sqliteApi()
+  if (sqlite?.DatabaseSync) {
+    let handle
+    try {
+      handle = new sqlite.DatabaseSync(file, { readOnly: true })
+      // Private state that drifts between versions: probe the columns before naming them.
+      const cols = new Set(handle.prepare(`PRAGMA table_info(conversation_summaries)`).all().map((r) => r.name))
+      if (cols.has('conversation_id')) {
+        const want = ['title', 'workspace_uris', 'status', 'killed', 'last_modified_time', 'parent_conversation_id']
+        const pick = want.filter((c) => cols.has(c))
+        const sql = `SELECT conversation_id${pick.map((c) => `, ${c}`).join('')} FROM conversation_summaries`
+        for (const r of handle.prepare(sql).all()) {
+          if (typeof r.conversation_id !== 'string') continue
+          rows.set(r.conversation_id, {
+            title: clean(r.title),
+            cwd: folderOfUris(r.workspace_uris),
+            status: String(r.status || ''),
+            killed: Boolean(Number(r.killed)),
+            updatedAt: timeOf(r.last_modified_time),
+            child: Boolean(r.parent_conversation_id),
+          })
+        }
+      }
+    } catch {
+      /* locked mid-checkpoint, or a shape this does not know: try again next poll */
+      return hit?.rows ?? rows
+    } finally {
+      try {
+        handle?.close()
+      } catch {
+        /* already closed */
+      }
+    }
+  }
+  summaryCache.set(file, { stamp, rows })
+  return rows
 }
 
 async function findTranscriptFile(sessionDir) {
@@ -95,9 +185,9 @@ async function findTranscriptFile(sessionDir) {
   return null
 }
 
-async function scanTranscripts() {
+async function scanTranscripts(home) {
   const out = []
-  for (const sessionDir of await listDirs(BRAIN_DIR)) {
+  for (const sessionDir of await listDirs(path.join(home, 'brain'))) {
     const id = path.basename(sessionDir)
     if (!UUID.test(id)) continue
     const file = await findTranscriptFile(sessionDir)
@@ -155,46 +245,77 @@ async function facts(entry) {
   return value
 }
 
+/**
+ * A summary row's status is the app saying outright whether it is working, which beats guessing
+ * from the transcript's last line. Only the words are trusted, not the full enum: it is private
+ * and has already been renamed once (`CASCADE_RUN_STATUS_*`).
+ */
+const RUNNING_STATUS = /RUNNING|BUSY|ACTIVE|PENDING|WAITING/i
+const ERROR_STATUS = /ERROR|FAIL/i
+
 async function scanThreads() {
-  const [entries, where] = await Promise.all([scanTranscripts(), workspaces()])
   const now = Date.now()
   const threads = []
+  const seen = new Set()
 
-  for (const entry of entries) {
-    const f = await facts(entry)
-    const cwd = f.cwd || where.get(entry.id) || ''
-    const projectPath = cwd
-    const project = cwd ? path.basename(cwd) : 'unknown'
-    const prompt = f.prompt
-
-    threads.push({
-      id: ID(entry.id),
-      title: (prompt || 'Untitled thread').slice(0, 120),
-      preview: prompt.slice(0, 240),
-      project,
-      projectPath,
-      worktree: '',
-      cwd,
-      gitBranch: '',
-      model: 'antigravity',
-      effort: '',
-      createdAt: f.startedAt || entry.born || entry.mtime,
-      lastActivityAt: entry.mtime,
-      lastFocusedAt: 0,
-      unread: false,
-      running: !f.closed && now - entry.mtime < ACTIVE_WINDOW_MS,
-      hasError: f.errored,
-      starred: false,
-      routine: '',
-      prState: '',
-      archived: false,
-      sizeBytes: entry.size,
-      source: 'cli',
-      canOpen: true,
-      ref: { sessionId: entry.id, cwd },
-    })
+  for (const home of HOMES) {
+    const [entries, where, index] = await Promise.all([
+      scanTranscripts(home.dir),
+      workspaces(home.dir),
+      summaries(home.dir),
+    ])
+    for (const entry of entries) {
+      // The same conversation in both homes would be one bot drawn twice; the first home wins.
+      if (seen.has(entry.id)) continue
+      seen.add(entry.id)
+      const summary = index.get(entry.id)
+      // A sub-agent's own conversation is an errand of its parent, not a thread of its own.
+      if (summary?.child) continue
+      threads.push(await threadOf(entry, home, where, summary, now))
+    }
   }
   return threads
+}
+
+async function threadOf(entry, home, where, summary, now) {
+  const f = await facts(entry)
+  const cwd = f.cwd || where.get(entry.id) || summary?.cwd || ''
+  const projectPath = cwd
+  const project = cwd ? path.basename(cwd) : 'unknown'
+  const prompt = f.prompt
+  const title = summary?.title || prompt || 'Untitled thread'
+  const lastActivityAt = Math.max(entry.mtime, summary?.updatedAt || 0)
+  const fresh = now - lastActivityAt < ACTIVE_WINDOW_MS
+  const running = summary?.status
+    ? RUNNING_STATUS.test(summary.status) && !summary.killed && fresh
+    : !f.closed && fresh
+
+  return {
+    id: ID(entry.id),
+    title: title.slice(0, 120),
+    preview: prompt.slice(0, 240),
+    project,
+    projectPath,
+    worktree: '',
+    cwd,
+    gitBranch: '',
+    model: 'antigravity',
+    effort: '',
+    createdAt: f.startedAt || entry.born || entry.mtime,
+    lastActivityAt,
+    lastFocusedAt: 0,
+    unread: false,
+    running,
+    hasError: f.errored || ERROR_STATUS.test(summary?.status || ''),
+    starred: false,
+    routine: '',
+    prState: '',
+    archived: false,
+    sizeBytes: entry.size,
+    source: home.source,
+    canOpen: true,
+    ref: { sessionId: entry.id, cwd },
+  }
 }
 
 async function openThread(ref) {
@@ -224,14 +345,28 @@ async function newSession(dir) {
   return { ok: true, url, command }
 }
 
-const detect = () => exists(BRAIN_DIR)
+async function detect() {
+  for (const home of HOMES) if (await exists(path.join(home.dir, 'brain'))) return true
+  return false
+}
+
+async function diagnostic() {
+  const app = HOMES.find((h) => h.source === 'desktop')
+  if (app && (await exists(path.join(app.dir, 'conversation_summaries.db'))) && !(await sqliteApi())?.DatabaseSync) {
+    return 'Antigravity app sessions need node:sqlite (Node 22.13+) for their titles and folders'
+  }
+  return ''
+}
 
 export default {
+  // The id stays `antigravity` and the thread ids stay `antigravity:<uuid>`: colony.json keys on
+  // both, and a CLI user's saved layout must not move because the app is now read too.
   id: 'antigravity',
-  name: 'Antigravity CLI',
+  name: 'Antigravity',
   detect,
+  diagnostic,
   scanThreads,
   openThread,
   newSession,
-  paths: { ANTIGRAVITY_HOME, BRAIN_DIR },
+  paths: { ANTIGRAVITY_HOME, BRAIN_DIR, HOMES: HOMES.map((h) => h.dir) },
 }
