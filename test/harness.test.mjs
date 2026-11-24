@@ -638,6 +638,27 @@ test('an idle Antigravity app session is not running, whatever its transcript en
   await fsp.rm(home, { recursive: true, force: true })
 })
 
+test('an Antigravity app session stopped on an approval wants you, though the index says running', async () => {
+  const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'read the report' }])
+  await fakeAntigravitySummaries(home, [
+    { id: SESSION_ID, status: 'CASCADE_RUN_STATUS_RUNNING', updated: new Date().toISOString().replace('T', ' ') },
+  ])
+  const { DatabaseSync } = await import('node:sqlite')
+  await fsp.mkdir(path.join(home, 'conversations'), { recursive: true })
+  const db = new DatabaseSync(path.join(home, 'conversations', `${SESSION_ID}.db`))
+  db.exec('CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer, status integer)')
+  // Done, done, waiting on Allow/Deny, then two queued behind it — as the app left a real one.
+  for (const [idx, status] of [[8, 3], [9, 3], [10, 9], [11, 1], [12, 1]]) {
+    db.prepare('INSERT INTO steps VALUES (?, 132, ?)').run(idx, status)
+  }
+  db.close()
+  const h = await antigravityWith(home)
+  const [t] = await h.scanThreads()
+  assert.equal(t.running, false)
+  assert.equal(t.unread, true)
+  await fsp.rm(home, { recursive: true, force: true })
+})
+
 test("an Antigravity sub-agent's own conversation is not a thread of its own", async () => {
   const home = await fakeAntigravity([{ type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'subtask' }])
   await fakeAntigravitySummaries(home, [{ id: SESSION_ID, parent: '11111111-2222-3333-4444-555555555555' }])

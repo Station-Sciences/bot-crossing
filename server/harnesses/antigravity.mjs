@@ -246,6 +246,53 @@ async function facts(entry) {
 }
 
 /**
+ * Whether a conversation is stopped on you: a step waiting for approval, such as reading a file
+ * outside the workspace or running a command. The summary index cannot say — it keeps reporting
+ * `RUNNING` the whole time — and the transcript only has steps that finished. The app's own
+ * per-conversation database, `conversations/<id>.db`, has every step with a numeric status;
+ * finished steps are 3, queued ones 1, and the one sitting on Allow/Deny is 9.
+ *
+ * That 9 is read off a real app session, not a published enum, so only the newest few steps are
+ * looked at and only for conversations that claim to be running. Read-only, closed straight
+ * away, and cached against the database and its WAL.
+ */
+const STEP_AWAITING_USER = 9
+const approvalCache = new Map()
+
+async function awaitingApproval(home, id) {
+  if (!UUID.test(id)) return false
+  const file = path.join(home, 'conversations', `${id}.db`)
+  const [db, wal] = await Promise.all([fsp.stat(file).catch(() => null), fsp.stat(`${file}-wal`).catch(() => null)])
+  if (!db) return false
+  const stamp = `${db.mtimeMs}:${db.size}:${wal?.mtimeMs ?? 0}:${wal?.size ?? 0}`
+  const hit = approvalCache.get(file)
+  if (hit?.stamp === stamp) return hit.waiting
+
+  const sqlite = await sqliteApi()
+  if (!sqlite?.DatabaseSync) return false
+  let handle
+  let waiting = false
+  try {
+    handle = new sqlite.DatabaseSync(file, { readOnly: true })
+    const cols = new Set(handle.prepare(`PRAGMA table_info(steps)`).all().map((r) => r.name))
+    if (cols.has('idx') && cols.has('status')) {
+      const recent = handle.prepare(`SELECT status FROM steps ORDER BY idx DESC LIMIT 20`).all()
+      waiting = recent.some((r) => Number(r.status) === STEP_AWAITING_USER)
+    }
+  } catch {
+    return hit?.waiting ?? false
+  } finally {
+    try {
+      handle?.close()
+    } catch {
+      /* already closed */
+    }
+  }
+  approvalCache.set(file, { stamp, waiting })
+  return waiting
+}
+
+/**
  * A summary row's status is the app saying outright whether it is working, which beats guessing
  * from the transcript's last line. Only the words are trusted, not the full enum: it is private
  * and has already been renamed once (`CASCADE_RUN_STATUS_*`).
@@ -271,13 +318,14 @@ async function scanThreads() {
       const summary = index.get(entry.id)
       // A sub-agent's own conversation is an errand of its parent, not a thread of its own.
       if (summary?.child) continue
-      threads.push(await threadOf(entry, home, where, summary, now))
+      const blocked = RUNNING_STATUS.test(summary?.status || '') && (await awaitingApproval(home.dir, entry.id))
+      threads.push(await threadOf(entry, home, where, summary, now, blocked))
     }
   }
   return threads
 }
 
-async function threadOf(entry, home, where, summary, now) {
+async function threadOf(entry, home, where, summary, now, blocked = false) {
   const f = await facts(entry)
   const cwd = f.cwd || where.get(entry.id) || summary?.cwd || ''
   const projectPath = cwd
@@ -286,9 +334,12 @@ async function threadOf(entry, home, where, summary, now) {
   const title = summary?.title || prompt || 'Untitled thread'
   const lastActivityAt = Math.max(entry.mtime, summary?.updatedAt || 0)
   const fresh = now - lastActivityAt < ACTIVE_WINDOW_MS
-  const running = summary?.status
-    ? RUNNING_STATUS.test(summary.status) && !summary.killed && fresh
-    : !f.closed && fresh
+  // Blocked on an approval is not working, however the index labels it, and it wants you.
+  const running = blocked
+    ? false
+    : summary?.status
+      ? RUNNING_STATUS.test(summary.status) && !summary.killed && fresh
+      : !f.closed && fresh
 
   return {
     id: ID(entry.id),
@@ -304,7 +355,7 @@ async function threadOf(entry, home, where, summary, now) {
     createdAt: f.startedAt || entry.born || entry.mtime,
     lastActivityAt,
     lastFocusedAt: 0,
-    unread: false,
+    unread: blocked,
     running,
     hasError: f.errored || ERROR_STATUS.test(summary?.status || ''),
     starred: false,
